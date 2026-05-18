@@ -589,7 +589,7 @@ def _move_to_home_from_current(env, label="[Place]"):
 
 
 def _is_box_target_region(region_name):
-    return region_name in ("box-inside", "box_inside_fallback")
+    return region_name in ("box-inside", "box_storage")
 
 
 def _is_cupboard_target_region(region_name):
@@ -597,7 +597,6 @@ def _is_cupboard_target_region(region_name):
         "cupboard_boundary",
         "cupboard_boundary_top",
         "cupboard_lower",
-        "cupboard_upper",
     )
 
 
@@ -728,7 +727,6 @@ def _prepare_table_mug_release_pose(env, pr, obj_name, target_obj, target_region
         print(f"[Release] Could not compute stable table pose for '{obj_name}'")
         return None
     target_obj.set_pose(pose_lock)
-    target_obj.set_dynamic(False)
     step_and_record(pr, 8)
     return pose_lock
 
@@ -1709,7 +1707,6 @@ class PDDLPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
                 self.env.set_robot_conf(hold_q)
                 target_obj.set_pose(pose_lock)
                 step_and_record(self.pr, 1)
-            target_obj.set_dynamic(False)
 
         if reverse_descent_place:
             print("[Place] Ascending using reverse lower_traj.")
@@ -1814,7 +1811,6 @@ class PDDLPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
                 self.env.set_robot_conf(hold_q)
                 target_obj.set_pose(pose_lock)
                 step_and_record(self.pr, 1)
-            target_obj.set_dynamic(False)
 
         if reverse_descent_place:
             print("[Place] Ascending using reverse lower_traj.")

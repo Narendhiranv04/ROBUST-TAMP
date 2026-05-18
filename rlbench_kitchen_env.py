@@ -9,7 +9,7 @@ from pyrep.objects.vision_sensor import VisionSensor
 from pyrep.const import ConfigurationPathAlgorithms
 from pyrep.backend import sim
 from llm_pipeline.region_aliases import (
-    BOX_INSIDE_FALLBACK_REGION,
+    
     BOX_LID_TOP_REGION,
     BOX_STORAGE_REGION,
     CUPBOARD_TARGET_REGIONS,
@@ -123,16 +123,12 @@ class RLBenchKitchenEnv:
         self.regions = RegionAliasMap()
         if self.table is not None:
             self.regions['table'] = self.table
-        if self.box_boundary is not None:
-            self.regions[BOX_INSIDE_FALLBACK_REGION] = self.box_boundary
         if self.groceries_boundary is not None:
             self.regions['groceries_boundary'] = self.groceries_boundary
         if self.placement_boundary is not None:
             self.regions['placement_boundary'] = self.placement_boundary
         if self.cupboard_boundary is not None:
             self.regions['cupboard_lower'] = self.cupboard_boundary
-        if self.cupboard_boundary_top is not None:
-            self.regions['cupboard_upper'] = self.cupboard_boundary_top
         if self.box_boundary is not None:
             self.regions[BOX_STORAGE_REGION] = self.box_boundary
         if self.box_lid is not None:
@@ -165,9 +161,7 @@ class RLBenchKitchenEnv:
         _register('box_base', self.box)
         _register(BOX_STORAGE_REGION, self.box_boundary)
         _register(BOX_LID_TOP_REGION, self.box_lid)
-        _register(BOX_INSIDE_FALLBACK_REGION, self.box_boundary)
         _register('cupboard_lower', self.cupboard_boundary)
-        _register('cupboard_upper', self.cupboard_boundary_top)
         # Mug aliases
         _register('mug1', self.mug_table)
         _register('mug2', self.mug_box)
@@ -461,7 +455,7 @@ class RLBenchKitchenEnv:
                 float(np.random.uniform(min_y, max_y)),
             )
 
-        is_box_region = region_name in {BOX_INSIDE_FALLBACK_REGION, BOX_STORAGE_REGION}
+        is_box_region = region_name in { BOX_STORAGE_REGION}
         if is_box_region:
             # In boxes, keep a small padding and bias to free XY to avoid unnecessary planner failures.
             box_padding = float(os.environ.get("BOX_REGION_SAMPLE_PADDING", "0.015"))
@@ -982,7 +976,7 @@ class RLBenchKitchenEnv:
 
             # Check if object is inside the executable box-inside region.
             in_box_region = False
-            box_inside_region = self.regions.get(BOX_INSIDE_FALLBACK_REGION)
+            box_inside_region = self.regions.get(BOX_STORAGE_REGION)
             if box_inside_region is not None:
                 o_pos = obj.get_position()
                 bb_min_x, bb_max_x, bb_min_y, bb_max_y, bb_min_z, bb_max_z = self._get_world_bounding_box(box_inside_region)
@@ -1106,7 +1100,7 @@ class RLBenchKitchenEnv:
             # 1. Determine Strategy based on Region
             region_name = normalize_region_name(region_name)
             is_cupboard = region_name in CUPBOARD_TARGET_REGIONS
-            is_box_region = region_name in {BOX_STORAGE_REGION, BOX_INSIDE_FALLBACK_REGION}
+            is_box_region = region_name in {BOX_STORAGE_REGION}
             
             min_x, max_x, min_y, max_y, min_z, max_z = obj.get_bounding_box()
             top_z_local = max_z
@@ -1724,7 +1718,7 @@ class RLBenchKitchenEnv:
         
         # Z height: Place on table surface if possible
         table = self.regions.get('table')
-        if region_name in ['cupboard_lower', 'cupboard_upper', BOX_STORAGE_REGION]:
+        if region_name in ['cupboard_lower', BOX_STORAGE_REGION]:
              place_z = rz + r_min_z + 0.005
         elif table:
              _, _, _, _, _, table_max_z = table.get_bounding_box()
@@ -1738,7 +1732,7 @@ class RLBenchKitchenEnv:
         # Minimum distance between placed objects
         MIN_PLACEMENT_DIST = 0.06  # 6cm apart
         
-        if region_name in [BOX_STORAGE_REGION, BOX_INSIDE_FALLBACK_REGION, BOX_LID_TOP_REGION]:
+        if region_name in [BOX_STORAGE_REGION,  BOX_LID_TOP_REGION]:
             margin_x = 0.045
             margin_y = 0.045
             num_slots = 3

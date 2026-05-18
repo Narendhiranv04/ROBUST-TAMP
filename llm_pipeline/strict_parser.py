@@ -11,7 +11,7 @@ from llm_pipeline.pipeline_types import DirectAction
 from llm_pipeline.region_aliases import normalize_region_name
 
 
-ACTION_CALL = re.compile(r'^(pick|place|open|close)\(([A-Za-z0-9_-]+)(?:,\s*([A-Za-z0-9_-]+))?\)$')
+ACTION_CALL = re.compile(r'^(pick|place|open|close|move)\(([A-Za-z0-9_-]+)(?:,\s*([A-Za-z0-9_-]+))?\)$')
 
 
 @dataclass
@@ -78,6 +78,18 @@ class StrictActionParser:
             if action_name not in self.valid_actions:
                 raise StrictParseError(f"Unsupported action '{action_name}'", line_number=index)
 
+            if action_name == 'move':
+                if arg1 is not None:
+                    raise StrictParseError('move accepts exactly one target argument', line_number=index)
+                if arg0 not in self.valid_objects and arg0 not in self.valid_regions:
+                    raise StrictParseError(
+                        f"move({arg0}): '{arg0}' is not a known object or region.",
+                        line_number=index,
+                        failure_id='unknown_action_token'
+                    )
+                actions.append(DirectAction('move', (arg0,)))
+                continue
+
             if action_name == 'pick':
                 if arg1 is not None:
                     raise StrictParseError('pick accepts exactly one object argument', line_number=index)
@@ -121,7 +133,9 @@ class StrictActionParser:
                     )
                 if holding != arg0:
                     raise StrictParseError(
-                        f"Cannot place '{arg0}' while holding '{holding}'",
+                        f"Cannot place '{arg0}' while holding '{holding}'. "
+                        f"Did you mean place({holding}, {target_region})? "
+                        f"You must place the object you are currently holding.",
                         line_number=index,
                         failure_id='pick_place_mismatch',
                     )
@@ -169,15 +183,51 @@ class StrictActionParser:
                         failure_id='missing_preceding_move',
                     )
 
+        # Validate: no two consecutive move actions
+        for i, action in enumerate(actions):
+            if action.action_name == 'move' and i + 1 < len(actions):
+                if actions[i + 1].action_name == 'move':
+                    raise StrictParseError(
+                        f"Consecutive move actions at positions {i + 1} and {i + 2}. "
+                        f"Every move must be followed by a pick, place, open, or close action.",
+                        failure_id='consecutive_moves',
+                    )
+
+        # Validate: move target must match the next action's target.
+        for i, action in enumerate(actions):
+            if action.action_name == 'move' and action.args:
+                target = action.args[0]
+                if i + 1 < len(actions):
+                    next_action = actions[i + 1]
+                    if next_action.action_name in ('pick', 'open', 'close'):
+                        expected_target = next_action.args[0] if next_action.args else None
+                        if expected_target and target != expected_target:
+                            raise StrictParseError(
+                                f"move({target}) is followed by {next_action.action_name}({expected_target}), "
+                                f"but the move target must match. Expected move({expected_target}).",
+                                failure_id='invalid_move_target'
+                            )
+                    elif next_action.action_name == 'place':
+                        expected_target = next_action.args[1] if len(next_action.args) > 1 else None
+                        if expected_target and target != expected_target:
+                            raise StrictParseError(
+                                f"move({target}) is followed by {next_action.action_name}({next_action.args[0]}, {expected_target}), "
+                                f"but the move target must match the place region. Expected move({expected_target}).",
+                                failure_id='invalid_move_target'
+                            )
+
         # Annotate each move with context from the next action for display
         annotated: List[DirectAction] = []
         for i, action in enumerate(actions):
             if action.action_name == 'move':
-                if i + 1 < len(actions):
-                    next_name = actions[i + 1].action_name
-                    annotated.append(DirectAction('move', (f'→{next_name}',)))
+                if not action.args:
+                    if i + 1 < len(actions):
+                        next_name = actions[i + 1].action_name
+                        annotated.append(DirectAction('move', (f'→{next_name}',)))
+                    else:
+                        annotated.append(DirectAction('move', ('→home',)))
                 else:
-                    annotated.append(DirectAction('move', ('→home',)))
+                    annotated.append(action)
             else:
                 annotated.append(action)
 

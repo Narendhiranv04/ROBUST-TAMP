@@ -47,7 +47,7 @@ def _snapshot(object_evidence, newly_visible=None, visible_regions=None, object_
         newly_visible_objects=list(newly_visible or []),
         object_evidence=object_evidence,
         gripper_evidence={},
-        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'cupboard_upper', 'box_storage'],
+        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'box_storage'],
         visible_regions=list(visible_regions or []),
         object_region_map=dict(object_region_map or {}),
     )

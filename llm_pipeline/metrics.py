@@ -16,7 +16,7 @@ MUG_OBJECTS = {'mug1', 'mug2', 'mug3', 'mug4'}
 GROCERY_OBJECTS = {'soup', 'mustard', 'spam', 'sugar', 'crackers'}
 BOX_REGIONS = {'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
 PLACEMENT_REGIONS = {'placement_boundary', 'table'}
-CUPBOARD_REGIONS = {'cupboard_lower', 'cupboard_upper', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard', 'groceries_boundary'}
+CUPBOARD_REGIONS = {'cupboard_lower', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard', 'groceries_boundary'}
 
 
 def _normalize_token(token: Optional[str]) -> str:

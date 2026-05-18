@@ -22,7 +22,6 @@ from pddlstream.language.constants import And, PDDLProblem
 
 from llm_pipeline.pipeline_types import DirectAction, FailureEvent, FailureLayer, FailureStage, FailureSource
 from llm_pipeline.region_aliases import (
-    BOX_INSIDE_FALLBACK_REGION,
     BOX_STORAGE_REGION,
     CUPBOARD_TARGET_REGIONS,
     normalize_region_name,
@@ -105,11 +104,7 @@ class KitchenBundlingHandler(AbstractBundlingHandler):
     def create_transfer_executor(self, p_action: DirectAction, pl_action: DirectAction):
         obj_name = p_action.args[0]
         target_region = normalize_region_name(pl_action.args[1])
-        gt_target_region = (
-            BOX_INSIDE_FALLBACK_REGION
-            if target_region == BOX_STORAGE_REGION
-            else target_region
-        )
+        gt_target_region = target_region
         print(f"[KITCHEN-BUNDLE] --- Starting GT Transfer Ritual: {obj_name} -> {target_region} ---")
         self.executor.go_home()
 

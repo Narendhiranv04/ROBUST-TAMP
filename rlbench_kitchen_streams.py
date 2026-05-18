@@ -6,7 +6,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'pddlstream'))
 from pddlstream.language.generator import from_gen_fn
 from pddlstream.utils import INF
 from llm_pipeline.region_aliases import (
-    BOX_INSIDE_FALLBACK_REGION,
+    
     BOX_STORAGE_REGION,
     normalize_region_name,
 )
@@ -27,8 +27,6 @@ def _stable_pose_override_keys(obj_name, region_name):
         region_names.append(canonical_region)
     if canonical_region == BOX_STORAGE_REGION:
         region_names.append("box_boundary")
-    elif canonical_region == BOX_INSIDE_FALLBACK_REGION:
-        region_names.append("box-inside")
 
     keys = []
     for candidate_region in region_names:

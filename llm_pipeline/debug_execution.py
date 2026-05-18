@@ -25,7 +25,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from evaluation.canonical_variants import get_variant_spec
-from llm_pipeline.executable_symbols import build_runtime_symbol_registry
+from llm_pipeline.executable_symbols import (
+    build_runtime_symbol_registry,
+    EXECUTABLE_OBJECTS,
+    EXECUTABLE_REGIONS,
+    GRILL_OBJECT_ORDER,
+    GRILL_REGION_ORDER,
+)
 from llm_pipeline.pipeline_types import (
     DirectAction,
     FailureEvent,
@@ -82,10 +88,7 @@ class MockPlanner:
 
     def plan(self, bundle):
         del bundle
-        raw_output = "\n".join(
-            "move" if action.action_name == "move" else str(action)
-            for action in self.actions
-        )
+        raw_output = "\n".join(str(action) for action in self.actions)
         if self.parser is not None:
             try:
                 parsed_actions = self.parser.parse(raw_output)
@@ -426,7 +429,9 @@ def _sequence_from_block(
 
     if not actions:
         raise ValueError(f"Sequence '{name}' has no actions.")
-    get_variant_spec(variant)
+    spec = get_variant_spec(variant)
+
+
     return DebugSequence(
         name=name,
         variant=variant,

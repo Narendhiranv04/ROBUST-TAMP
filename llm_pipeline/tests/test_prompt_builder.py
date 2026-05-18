@@ -38,7 +38,7 @@ def _snapshot() -> SegmentationSnapshot:
             ),
         },
         gripper_evidence={},
-        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'cupboard_upper', 'box_storage'],
+        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'box_storage'],
         visible_regions=['box_storage'],
         object_region_map={'mug2': 'box_storage'},
         object_region_descriptions={'mug2': 'inside the box storage target'},
@@ -138,12 +138,9 @@ def test_fallback_regions_are_hidden_from_llm_prompt() -> None:
         'table',
         'cupboard_lower',
         'box_storage',
-        'box_inside_fallback',
     ]
-    snapshot.visible_regions = ['box_storage', 'box_inside_fallback']
     snapshot.object_evidence['mug2'].mask_regions = [
         'box_storage',
-        'box_inside_fallback',
     ]
     snapshot.object_region_map = {'mug2': 'box_storage'}
 
@@ -155,4 +152,3 @@ def test_fallback_regions_are_hidden_from_llm_prompt() -> None:
 
     assert 'box_storage' in bundle.user_prompt
     assert 'cupboard_lower' in bundle.user_prompt
-    assert 'box_inside_fallback' not in bundle.user_prompt

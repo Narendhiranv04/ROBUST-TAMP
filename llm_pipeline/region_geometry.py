@@ -7,7 +7,6 @@ from typing import Dict, Iterable, Mapping, Tuple
 import numpy as np
 
 from llm_pipeline.region_aliases import (
-    BOX_INSIDE_FALLBACK_REGION,
     PLANNER_HIDDEN_REGIONS,
     normalize_region_name,
 )
@@ -18,7 +17,6 @@ RegionBounds = Tuple[np.ndarray, np.ndarray]
 NON_REGION_OBJECTS = frozenset({"box_lid", "grill_lid", "lid"})
 
 PRIMARY_REGION_PRIORITY = (
-    "cupboard_upper",
     "cupboard_lower",
     "box_lid_top",
     "box_storage",
@@ -34,14 +32,13 @@ PRIMARY_REGION_PRIORITY = (
 FALLBACK_REGION_PRIORITY = tuple(PLANNER_HIDDEN_REGIONS)
 
 REGION_DESCRIPTIONS = {
-    "cupboard_upper": "on upper cupboard shelf",
     "cupboard_lower": "on lower cupboard shelf",
     "box_lid_top": "on top of the box lid",
     "box_storage": "inside the box storage target",
     "groceries_boundary": "in groceries area",
     "placement_boundary": "in placement area",
     "table": "on table",
-    "box_inside_fallback": "inside broad box fallback",
+    "table": "on table",
     "inside_grill": "inside grill",
     "prep_area": "in prep area",
     "plate-top": "on plate",
@@ -50,14 +47,13 @@ REGION_DESCRIPTIONS = {
 }
 
 REGION_PADDING = {
-    "cupboard_upper": 0.10,
     "cupboard_lower": 0.10,
     "box_lid_top": 0.04,
     "box_storage": 0.05,
     "groceries_boundary": 0.05,
     "placement_boundary": 0.05,
     "table": 0.04,
-    "box_inside_fallback": 0.04,
+    "table": 0.04,
     "inside_grill": 0.08,
     "prep_area": 0.06,
     "plate-top": 0.05,
@@ -66,14 +62,13 @@ REGION_PADDING = {
 }
 
 REGION_Z_MARGIN = {
-    "cupboard_upper": (0.15, 0.20),
     "cupboard_lower": (0.15, 0.20),
     "box_lid_top": (0.05, 0.12),
     "box_storage": (0.15, 0.20),
     "groceries_boundary": (0.15, 0.20),
     "placement_boundary": (0.15, 0.20),
     "table": (0.05, 0.12),
-    "box_inside_fallback": (0.15, 0.20),
+    "table": (0.05, 0.12),
     "inside_grill": (0.08, 0.18),
     "prep_area": (0.05, 0.15),
     "plate-top": (0.05, 0.12),
@@ -127,8 +122,6 @@ def point_matches_region(point: Tuple[float, float, float], region_name: str, bo
     below, above = REGION_Z_MARGIN.get(canonical, (0.10, 0.15))
     z = float(point[2])
 
-    if canonical == BOX_INSIDE_FALLBACK_REGION:
-        return z >= z_min - below and z <= z_max + above
     if (z_max - z_min) < 0.01:
         return z >= z_min - below and z <= z_min + above
     return z >= z_min - below and z <= z_max + above

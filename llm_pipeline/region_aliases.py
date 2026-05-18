@@ -9,10 +9,10 @@ KITCHEN_REGION_ALIASES = {
     "box_boundary": "box_storage",
     "box-top": "box_lid_top",
     "box_top": "box_lid_top",
-    "box-inside": "box_inside_fallback",
-    "box_inside": "box_inside_fallback",
+    "box-inside": "box_storage",
+    "box_inside": "box_storage",
     "cupboard_boundary": "cupboard_lower",
-    "cupboard_boundary_top": "cupboard_upper",
+    "cupboard_boundary_top": "cupboard_lower",
     "shelf-lower": "cupboard_lower",
     "shelf_lower": "cupboard_lower",
 }
@@ -28,11 +28,9 @@ CANONICAL_KITCHEN_REGION_ORDER = (
     "table",
     "placement_boundary",
     "cupboard_lower",
-    "cupboard_upper",
     "box_storage",
     "groceries_boundary",
     "box_lid_top",
-    "box_inside_fallback",
 )
 
 CANONICAL_GRILL_REGION_ORDER = (
@@ -45,16 +43,13 @@ CANONICAL_GRILL_REGION_ORDER = (
 )
 
 BOX_STORAGE_REGION = "box_storage"
-BOX_INSIDE_FALLBACK_REGION = "box_inside_fallback"
 BOX_LID_TOP_REGION = "box_lid_top"
-CUPBOARD_TARGET_REGIONS = ("cupboard_lower", "cupboard_upper")
-PLANNER_HIDDEN_REGIONS = (BOX_INSIDE_FALLBACK_REGION,)
+CUPBOARD_TARGET_REGIONS = ("cupboard_lower",)
+PLANNER_HIDDEN_REGIONS = ()
 CANONICAL_REGION_SCENE_OBJECTS = {
     "box_storage": "box_boundary",
     "box_lid_top": "box_lid",
-    "box_inside_fallback": "box_boundary",
     "cupboard_lower": "cupboard_boundary",
-    "cupboard_upper": "cupboard_boundary_top",
     "inside_grill": "grill_boundary",
     "plate-top": "plate_boundary",
 }
@@ -63,11 +58,9 @@ REGION_SEMANTICS = {
     "table": "broad table surface; use only when no specific table subregion applies",
     "placement_boundary": "specific destination area on the table for placing completed objects",
     "cupboard_lower": "lower shelf inside the cupboard",
-    "cupboard_upper": "upper shelf inside the cupboard",
     "box_storage": "inside-box storage target for putting objects into the box",
     "groceries_boundary": "groceries/source area on the table",
     "box_lid_top": "support surface on top of the box lid for objects resting on the lid",
-    "box_inside_fallback": "inside-box execution target backed by box_boundary",
     "inside_grill": "inside-grill containment area represented by the scene object grill_boundary",
     "prep_area": "preparation area where uncooked meat starts",
     "plate-top": "top surface of the plate for placing cooked meat",
@@ -89,8 +82,6 @@ def regions_match_for_target(observed_region: str | None, target_region: str | N
     if observed == target:
         return True
     if target == "placement_boundary" and observed in {"table", "groceries_boundary"}:
-        return True
-    if target == BOX_STORAGE_REGION and observed == BOX_INSIDE_FALLBACK_REGION:
         return True
     return False
 

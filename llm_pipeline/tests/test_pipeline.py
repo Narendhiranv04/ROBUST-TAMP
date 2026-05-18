@@ -260,8 +260,8 @@ def _snapshot() -> SegmentationSnapshot:
             'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
         },
         gripper_evidence={},
-        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'cupboard_upper', 'box_storage', 'box_lid_top'],
-        visible_regions=['box_storage', 'box_lid_top'],
+        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'box_storage'],
+        visible_regions=['box_storage'],
         object_region_map={'mug2': 'box_storage'},
         object_region_descriptions={'mug2': 'inside the box storage target'},
     )

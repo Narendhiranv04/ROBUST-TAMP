@@ -1,7 +1,7 @@
 import os
 
 from llm_pipeline.region_aliases import (
-    BOX_INSIDE_FALLBACK_REGION,
+    
     BOX_STORAGE_REGION,
     normalize_region_name,
 )
@@ -18,7 +18,7 @@ class RLBenchKitchenEnvConstrained(RLBenchKitchenEnv):
         collision checking.
         """
         canonical_region = normalize_region_name(region_name)
-        is_box_place = canonical_region in {BOX_STORAGE_REGION, BOX_INSIDE_FALLBACK_REGION}
+        is_box_place = canonical_region in {BOX_STORAGE_REGION}
         if not is_box_place:
             return super().compute_place_trajectory(obj, pose, region_name=region_name)
 

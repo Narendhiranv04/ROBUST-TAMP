@@ -36,6 +36,7 @@ LAYER_1_FAILURE_IDS = frozenset({
     'pick_place_mismatch',
     'orphan_place',
     'missing_post_pick_place',
+    'consecutive_moves',
 })
 
 LAYER_2_FAILURE_IDS = frozenset({
