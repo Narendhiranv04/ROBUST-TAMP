@@ -635,23 +635,93 @@ class LLMOnlyReplanningPipeline:
 if __name__ == '__main__':
     """CLI Entry Point for the Replanning Pipeline."""
     import argparse
+    import json
     parser = argparse.ArgumentParser(description="Run the LLM/VLM Replanning Pipeline")
-    parser.add_argument("--goal", type=str, required=True, help="Task goal text")
+    parser.add_argument("--variant", type=str, default="", help="Canonical variant id (K1/K2/K3/G1/G2/G3)")
+    parser.add_argument("--goal", type=str, default="", help="Task goal text. Defaults to the variant goal when --variant is set.")
     parser.add_argument("--model", type=str, default="qwen", help="Model alias")
+    parser.add_argument("--icl-mode", type=str, default=ICLMode.ZERO_SHOT.value, choices=[mode.value for mode in ICLMode], help="Prompt mode")
     parser.add_argument("--vision", action="store_true", help="Enable vision-first reasoning (VLM)")
+    display_group = parser.add_mutually_exclusive_group()
+    display_group.add_argument("--gui", action="store_true", help="Run with simulator GUI (default)")
+    display_group.add_argument("--headless", action="store_true", help="Run without simulator GUI")
+    parser.add_argument("--remote", action="store_true", help="Use the maintained remote LLM planner server")
+    parser.add_argument("--remote-url", default=os.environ.get("LLM_SERVER_URL", os.environ.get("VLM_SERVER_URL", "http://localhost:8000")), help="Remote planner server URL")
+    parser.add_argument("--max-replans", type=int, default=3, help="Maximum replans during execution")
+    parser.add_argument("--replan-mode", choices=["on", "off"], default="on", help="Use full execution+replanning or first-plan-only mode")
+    parser.add_argument("--task-family", choices=["kitchen", "grill"], default="", help="Task family override when --variant is not set")
+    parser.add_argument("--scene-path", default="", help="Scene path override")
+    parser.add_argument("--no-live-masks", action="store_true", help="Disable the separate live segmentation window")
+    parser.add_argument("--scene-state-trace", action="store_true", help="Print scene-state snapshots around execution checks")
+    parser.add_argument("--output", default="", help="Optional JSON output path")
     args = parser.parse_args()
+
+    variant_spec = None
+    if args.variant:
+        from evaluation.canonical_variants import get_variant_spec
+
+        variant_spec = get_variant_spec(args.variant)
+    goal_text = args.goal or (variant_spec.goal_text if variant_spec is not None else "")
+    if not goal_text:
+        parser.error("--goal is required when --variant is not set")
+
+    task_family = args.task_family or (variant_spec.task_family if variant_spec is not None else "kitchen")
+    scene_path = args.scene_path or (variant_spec.scene_path if variant_spec is not None else "")
+    headless = bool(args.headless)
+    env = None
+
+    if variant_spec is not None and task_family == "grill":
+        from llm_pipeline.debug_execution import (
+            DebugSequence,
+            _configure_scene_env,
+            _load_env_for_sequence,
+        )
+
+        sequence = DebugSequence(
+            name=f"{variant_spec.variant_id}_llm_pipeline",
+            variant=variant_spec.variant_id,
+            goal=goal_text,
+            actions=(),
+        )
+        _configure_scene_env(sequence, headless=headless)
+        env = _load_env_for_sequence(sequence)
+    else:
+        os.environ["HEADLESS"] = "True" if headless else "False"
+        os.environ["COPPELIASIM_HEADLESS"] = "1" if headless else "0"
+        if task_family == "grill" and scene_path:
+            os.environ["GRILL_SCENE_FILE"] = scene_path
+        elif scene_path:
+            os.environ["KITCHEN_SCENE_FILE"] = scene_path
 
     config = LLMPipelineConfig(
         model_alias=args.model,
+        icl_mode=args.icl_mode,
+        max_replans=args.max_replans,
+        enable_replanning=args.replan_mode != "off",
+        headless=headless,
         enable_vision=args.vision,
-        context_builder_type='geometric'
+        use_remote_planner=args.remote,
+        remote_planner_url=args.remote_url,
+        task_family=task_family,
+        scene_path=scene_path,
+        live_segmentation_view=not args.no_live_masks and not headless,
+        scene_state_trace=args.scene_state_trace,
+        context_builder_type='geometric',
     )
     pipeline = LLMOnlyReplanningPipeline(config=config)
     
     print(f"[ENTRY] Initializing pipeline in {config.context_builder_type} mode...")
-    if pipeline.initialize():
-        print(f"[ENTRY] Starting loop for goal: {args.goal}")
-        results = pipeline.run(args.goal)
+    if pipeline.initialize(env=env):
+        print(f"[ENTRY] Starting loop for goal: {goal_text}")
+        results = pipeline.run(goal_text)
         print(f"[ENTRY] Loop finished. Success: {results['success']}")
+        if args.output:
+            from pathlib import Path
+
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(results, indent=2))
+        else:
+            print(json.dumps(results, indent=2))
     else:
         print("[ENTRY] Optimization: Initialization failed.")

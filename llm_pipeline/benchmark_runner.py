@@ -79,7 +79,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Run the LLM-only benchmark batch')
     parser.add_argument('--models', default='', help='Comma-separated LLM aliases. Default: all registered LLMs')
     parser.add_argument('--icl-modes', default=','.join(SHARED_ICL_MODES), help='Comma-separated prompt modes')
-    parser.add_argument('--variants', default=','.join(DEFAULT_MODEL_VARIANTS), help='Comma-separated kitchen variants')
+    parser.add_argument('--variants', default=','.join(DEFAULT_MODEL_VARIANTS), help='Comma-separated kitchen/grill variants')
     parser.add_argument('--trials', type=int, default=1, help='Trials per execution variant')
     parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
     parser.add_argument('--goal', default='', help='Optional goal override for all runs')
@@ -97,7 +97,7 @@ def main() -> None:
     variants = [token.upper() for token in _parse_csv(args.variants, list(DEFAULT_MODEL_VARIANTS))]
     for variant_id in variants:
         spec = get_variant_spec(variant_id)
-        if spec.task_family != 'kitchen' or not spec.model_eval_supported:
+        if not spec.model_eval_supported:
             raise RuntimeError(f'Unsupported variant for LLM-only benchmark: {variant_id}')
 
     execution_models = list(requested_models) if args.execute_all_models else [

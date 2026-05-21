@@ -78,11 +78,15 @@ class RemoteTextLLMPlanner:
 
     def plan(self, bundle: Any) -> PlanResult:
         """Unified interface that handles both text and multimodal bundles."""
+        metadata = dict(getattr(bundle, 'metadata', {}) or {})
+        held_object = metadata.get('held_object')
+        if held_object is None and hasattr(bundle, 'state'):
+            held_object = bundle.state.gripper_state.get('holding')
         return self.generate_plan(
             system_prompt=bundle.system_prompt,
             user_prompt=bundle.user_prompt,
             icl_mode=bundle.icl_mode,
-            held_object=bundle.state.gripper_state.get('holding') if hasattr(bundle, 'state') else None,
+            held_object=held_object,
             bundle=bundle # Pass bundle for image extraction
         )
 

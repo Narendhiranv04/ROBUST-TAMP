@@ -305,6 +305,8 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert 'ERROR: place failed after pick' in planner.requests[1]['user_prompt']
     assert '## Object States (Geometric):' in planner.requests[0]['user_prompt']
     assert 'region=box_storage' in planner.requests[0]['user_prompt']
+    assert 'OUTPUT CONTRACT:' in planner.requests[0]['user_prompt']
+    assert 'Every pick, place, open, or close must be immediately preceded by a matching move(target).' in planner.requests[0]['user_prompt']
     assert segmentation_adapter.refresh_calls[:2] == ['initial', 'initial']
     assert segmentation_adapter.action_sequence_calls[0]['actions'] == []
     assert segmentation_adapter.live_updates >= 1

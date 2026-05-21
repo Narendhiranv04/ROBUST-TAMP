@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from llm_pipeline.pipeline_types import (
     BaseContextBuilder, SceneState, PromptBundle, FailureEvent, ICLMode
 )
+from llm_pipeline.executable_symbols import ACTION_SYMBOLS
 from llm_pipeline.geometric_utils import resolve_region
 from llm_pipeline.region_aliases import PLANNER_HIDDEN_REGIONS, normalize_region_name, region_semantics
 
@@ -29,12 +30,13 @@ class GeometricContextBuilder(BaseContextBuilder):
         self.camera_names = camera_names or ['left', 'right', 'overhead', 'wrist', 'front']
         self.layout = layout
         self.env = None
+        self.symbol_registry = None
 
     def set_env(self, env) -> None:
         self.env = env
 
     def set_symbol_registry(self, symbol_registry: Any) -> None:
-        pass # Geometric builder uses standalone resolution for now
+        self.symbol_registry = symbol_registry
 
     def _load_template(self, path: Optional[str]) -> Optional[str]:
         if path and os.path.exists(path):
@@ -143,6 +145,7 @@ class GeometricContextBuilder(BaseContextBuilder):
             user_prompt += "================================\n\n"
         
         user_prompt += f"### Current State\n{observation_text}\n\n### Goal\n{goal_text}"
+        user_prompt += "\n\n" + "\n".join(self._build_action_contract_lines(valid_regions, state.visible_objects))
 
         return PromptBundle(
             goal_text=goal_text,
@@ -153,5 +156,39 @@ class GeometricContextBuilder(BaseContextBuilder):
             icl_mode=icl_mode,
             images=[state.images] if state.images is not None else None,
             previous_actions=tuple(previous_actions) if previous_actions else (),
-            failure_context=failure_event.message if failure_event else None
+            failure_context=failure_event.message if failure_event else None,
+            metadata={'held_object': state.gripper_state.get('holding')},
         )
+
+    def _build_action_contract_lines(self, valid_regions: List[str], visible_objects: List[str]) -> List[str]:
+        actions = tuple(getattr(self.symbol_registry, 'actions', ()) or ACTION_SYMBOLS)
+        lines = ['OUTPUT CONTRACT:']
+        lines.append('available_actions=' + ', '.join(actions))
+        lines.append('visible_objects=' + (', '.join(visible_objects) if visible_objects else '(none)'))
+        lines.append('valid_regions=' + (', '.join(valid_regions) if valid_regions else '(none)'))
+        lines.append('Use only object names shown in Object States and target regions shown in Valid Target Regions.')
+        lines.append('Every pick, place, open, or close must be immediately preceded by a matching move(target).')
+        lines.append('Executable action formats for this run:')
+        for action_name in actions:
+            lines.append(self._action_format_line(action_name))
+        lines.append('Return executable action lines only, with no numbering, prose, markdown, or commentary.')
+        return lines
+
+    def _action_format_line(self, action_name: str) -> str:
+        if action_name == 'move':
+            return 'move(object_or_region_name)'
+        if action_name == 'pick':
+            return 'pick(object_name)'
+        if action_name == 'place':
+            return 'place(object_name, region_name)'
+        if action_name == 'open':
+            if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
+                return 'open(grill_lid)'
+            if self.symbol_registry is not None and 'box_lid' in getattr(self.symbol_registry, 'objects', ()):
+                return 'open(box_lid)'
+            return 'open(lid_object)'
+        if action_name == 'close':
+            if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
+                return 'close(grill_lid)'
+            return 'close(lid_object)'
+        return f'{action_name}(...)'

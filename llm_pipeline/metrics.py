@@ -14,9 +14,15 @@ from llm_pipeline.region_aliases import BOX_STORAGE_REGION, normalize_region_nam
 ACTION_PATTERN = re.compile(r'^\s*([A-Za-z0-9_-]+)\((.*?)\)\s*$')
 MUG_OBJECTS = {'mug1', 'mug2', 'mug3', 'mug4'}
 GROCERY_OBJECTS = {'soup', 'mustard', 'spam', 'sugar', 'crackers'}
+MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
+GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
+PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
-PLACEMENT_REGIONS = {'placement_boundary', 'table'}
+PLACEMENT_REGIONS = {'placement_boundary'}
 CUPBOARD_REGIONS = {'cupboard_lower', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard', 'groceries_boundary'}
+PLATE_REGIONS = {'plate', 'plate-top', 'plate_top', 'plate_boundary', 'plate_boundary_top'}
+GRILL_REGIONS = {'inside_grill', 'grill', 'grill-top', 'grill_top', 'grill_boundary'}
+TABLE_REGIONS = {'table', 'prep_area'}
 
 
 def _normalize_token(token: Optional[str]) -> str:
@@ -31,6 +37,10 @@ def _normalize_action_name(name: str) -> str:
         return 'place'
     if token in {'open', 'open_lid', 'openlid', 'open_box', 'open_box_lid'}:
         return 'open_lid'
+    if token in {'open_grill'}:
+        return 'open_grill'
+    if token in {'close', 'close_lid', 'closelid', 'close_grill', 'close_grill_lid'}:
+        return 'close_lid'
     return token
 
 
@@ -42,6 +52,12 @@ def _normalize_region(region: Optional[str]) -> str:
         return 'placement_boundary'
     if token in CUPBOARD_REGIONS:
         return 'cupboard_lower'
+    if token in PLATE_REGIONS:
+        return 'plate'
+    if token in GRILL_REGIONS:
+        return 'inside_grill'
+    if token in TABLE_REGIONS:
+        return 'table'
     return token
 
 
@@ -63,12 +79,20 @@ def parse_action_string(action: Any) -> Optional[Dict[str, Any]]:
 def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
     obj = _normalize_token(object_name)
     region = _normalize_region(region_name)
-    if obj in MUG_OBJECTS and region == 'placement_boundary':
+    if obj in MUG_OBJECTS and region in {'placement_boundary', 'table'}:
         return 'mug_to_placement'
     if obj in MUG_OBJECTS and region == BOX_STORAGE_REGION:
         return 'mug_to_box'
     if obj in GROCERY_OBJECTS and region == 'cupboard_lower':
         return 'grocery_to_cupboard'
+    if obj in PLATE_OBJECTS and region == 'plate':
+        return 'plate_to_boundary'
+    if obj in MEAT_OBJECTS and region == 'plate':
+        return 'meat_to_plate'
+    if obj in MEAT_OBJECTS and region == 'inside_grill':
+        return 'meat_to_grill'
+    if obj in GRILL_TABLE_OBJECTS and region == 'table':
+        return 'meat_to_table'
     return None
 
 
@@ -84,13 +108,23 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
         if name == 'move':
             idx += 1
             continue
-        if name == 'open_lid':
-            subtasks.append('open_lid')
+        if name in {'open', 'open_lid', 'open_grill'}:
+            target = args[0] if args else ''
+            subtasks.append('open_grill' if name == 'open_grill' or target == 'grill_lid' else 'open_lid')
+            idx += 1
+            continue
+        if name in {'close', 'close_lid', 'close_grill'}:
+            target = args[0] if args else ''
+            if name == 'close_grill' or target == 'grill_lid':
+                subtasks.append('close_grill')
             idx += 1
             continue
         if name == 'pick' and idx + 1 < len(parsed):
-            nxt = parsed[idx + 1]
-            if nxt['action'] == 'place' and len(args) == 1 and len(nxt['args']) >= 2:
+            next_idx = idx + 1
+            while next_idx < len(parsed) and parsed[next_idx]['action'] == 'move':
+                next_idx += 1
+            nxt = parsed[next_idx] if next_idx < len(parsed) else None
+            if nxt and nxt['action'] == 'place' and len(args) == 1 and len(nxt['args']) >= 2:
                 obj = args[0]
                 place_obj = nxt['args'][0]
                 region = nxt['args'][1]
@@ -98,7 +132,7 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
                     bucket = _bucket_for_transfer(obj, region)
                     if bucket:
                         subtasks.append(bucket)
-                        idx += 2
+                        idx = next_idx + 1
                         continue
         idx += 1
     return subtasks

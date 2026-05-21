@@ -1,5 +1,6 @@
 from llm_pipeline import client as client_module
 from llm_pipeline.client import RemoteTextLLMPlanner
+from llm_pipeline.pipeline_types import PromptBundle
 
 
 class _FakeResponse:
@@ -69,11 +70,12 @@ def test_remote_planner_returns_server_actions() -> None:
         plan_payload={
             'success': True,
             'actions': [
-                {'action_name': 'move', 'args': []},
+                {'action_name': 'move', 'args': ['mug2']},
                 {'action_name': 'pick', 'args': ['mug2']},
+                {'action_name': 'move', 'args': ['placement_boundary']},
                 {'action_name': 'place', 'args': ['mug2', 'placement_boundary']},
             ],
-            'raw_output': 'move\npick(mug2)\nplace(mug2, placement_boundary)',
+            'raw_output': 'move(mug2)\npick(mug2)\nmove(placement_boundary)\nplace(mug2, placement_boundary)',
             'inference_time': 0.12,
             'error_message': None,
             'failure_event': None,
@@ -92,8 +94,9 @@ def test_remote_planner_returns_server_actions() -> None:
         )
         assert result.success is True
         assert [str(action) for action in result.actions] == [
-            'move',
+            'move(mug2)',
             'pick(mug2)',
+            'move(placement_boundary)',
             'place(mug2, placement_boundary)',
         ]
         assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/plan'
@@ -109,7 +112,7 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         plan_payload={
             'success': False,
             'actions': [],
-            'raw_output': 'move\npick(mug2)\nplace(mug2, placement_boundary)',
+            'raw_output': 'move(mug2)\npick(mug2)\nmove(placement_boundary)\nplace(mug2, placement_boundary)',
             'inference_time': 0.08,
             'error_message': None,
             'failure_event': None,
@@ -128,10 +131,56 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         )
         assert result.success is True
         assert [str(action) for action in result.actions] == [
-            'move',
+            'move(mug2)',
             'pick(mug2)',
+            'move(placement_boundary)',
             'place(mug2, placement_boundary)',
         ]
+    finally:
+        client_module.requests = old_requests
+        client_module.HAS_REQUESTS = old_has_requests
+
+
+def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
+    fake_requests = _FakeRequests(
+        health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen', 'model_name': 'qwen', 'model_type': 'llm', 'prompt_mode': 'text_visible', 'gpu_available': True},
+        plan_payload={
+            'success': True,
+            'actions': [
+                {'action_name': 'move', 'args': ['placement_boundary']},
+                {'action_name': 'place', 'args': ['mug2', 'placement_boundary']},
+            ],
+            'raw_output': 'move(placement_boundary)\nplace(mug2, placement_boundary)',
+            'inference_time': 0.08,
+            'error_message': None,
+            'failure_event': None,
+        },
+    )
+    old_requests = client_module.requests
+    old_has_requests = client_module.HAS_REQUESTS
+    client_module.requests = fake_requests
+    client_module.HAS_REQUESTS = True
+    try:
+        planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
+        planner.parser.valid_objects.update({'mug2'})
+        planner.parser.valid_regions.update({'placement_boundary'})
+        bundle = PromptBundle(
+            goal_text='Place the held mug.',
+            system_prompt='system',
+            user_prompt='user',
+            visible_objects=['mug2'],
+            valid_regions=['placement_boundary'],
+            icl_mode='zero_shot',
+            metadata={'held_object': 'mug2'},
+        )
+        result = planner.plan(bundle)
+
+        assert result.success is True
+        assert [str(action) for action in result.actions] == [
+            'move(placement_boundary)',
+            'place(mug2, placement_boundary)',
+        ]
+        assert fake_requests.post_calls[0][1]['held_object'] == 'mug2'
     finally:
         client_module.requests = old_requests
         client_module.HAS_REQUESTS = old_has_requests

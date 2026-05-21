@@ -88,6 +88,7 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             icl_mode=icl_mode,
             previous_actions=text_bundle.previous_actions,
             failure_context=text_bundle.failure_context,
+            metadata={'held_object': held_object},
         )
 
     def build_system_prompt(self, bundle: TextPromptBundle) -> str:

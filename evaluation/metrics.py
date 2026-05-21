@@ -17,12 +17,14 @@ MUG_OBJECTS = {
 }
 GROCERY_OBJECTS = {'soup', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
+GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
 PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
-PLACEMENT_REGIONS = {'placement_boundary', 'table'}
+PLACEMENT_REGIONS = {'placement_boundary'}
 CUPBOARD_REGIONS = {'cupboard_boundary', 'cupboard_boundary_top', 'cupboard', 'groceries_boundary'}
-PLATE_REGIONS = {'plate', 'plate_boundary', 'plate_boundary_top'}
-GRILL_REGIONS = {'grill', 'grill_top', 'grill-top'}
+PLATE_REGIONS = {'plate', 'plate-top', 'plate_top', 'plate_boundary', 'plate_boundary_top'}
+GRILL_REGIONS = {'inside_grill', 'grill', 'grill_top', 'grill-top', 'grill_boundary'}
+TABLE_REGIONS = {'table', 'prep_area'}
 GENERIC_TERMINAL_REASONS = {
     'max replans exceeded',
     'replan failed',
@@ -57,9 +59,9 @@ def _normalize_action_name(name: str) -> str:
         return 'pick'
     if token in {'place', 'put', 'put_down', 'putdown'}:
         return 'place'
-    if token in {'open_lid', 'openlid', 'open_box', 'open_box_lid'}:
+    if token in {'open', 'open_lid', 'openlid', 'open_box', 'open_box_lid'}:
         return 'open_lid'
-    if token in {'close_lid', 'closelid', 'close_box', 'close_grill'}:
+    if token in {'close', 'close_lid', 'closelid', 'close_box', 'close_grill'}:
         return 'close_lid'
     if token in {'open_grill'}:
         return 'open_grill'
@@ -80,6 +82,8 @@ def _normalize_region(region: Optional[str]) -> str:
         return 'plate'
     if token in GRILL_REGIONS:
         return 'grill'
+    if token in TABLE_REGIONS:
+        return 'table'
     return token
 
 
@@ -99,7 +103,7 @@ def parse_action_string(action: Any) -> Optional[Dict[str, Any]]:
 def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
     obj = _normalize_token(object_name)
     region = _normalize_region(region_name)
-    if obj in MUG_OBJECTS and region == 'placement_boundary':
+    if obj in MUG_OBJECTS and region in {'placement_boundary', 'table'}:
         return 'mug_to_placement'
     if obj in MUG_OBJECTS and region == 'box_boundary':
         return 'mug_to_box'
@@ -111,6 +115,8 @@ def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
         return 'meat_to_plate'
     if obj in MEAT_OBJECTS and region == 'grill':
         return 'meat_to_grill'
+    if obj in GRILL_TABLE_OBJECTS and region == 'table':
+        return 'meat_to_table'
     return None
 
 
@@ -124,16 +130,22 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
         name = current['action']
         args = current['args']
         if name in {'open_lid', 'open_grill'}:
-            subtasks.append('open_lid' if name == 'open_lid' else 'open_grill')
+            target = args[0] if args else ''
+            subtasks.append('open_grill' if name == 'open_grill' or target == 'grill_lid' else 'open_lid')
             idx += 1
             continue
         if name in {'close_lid', 'close_grill'}:
-            subtasks.append('close_grill')
+            target = args[0] if args else ''
+            if name == 'close_grill' or target == 'grill_lid':
+                subtasks.append('close_grill')
             idx += 1
             continue
         if name == 'pick' and idx + 1 < len(parsed):
-            nxt = parsed[idx + 1]
-            if nxt['action'] == 'place' and len(args) == 1 and len(nxt['args']) >= 2:
+            next_idx = idx + 1
+            while next_idx < len(parsed) and parsed[next_idx]['action'] == 'move':
+                next_idx += 1
+            nxt = parsed[next_idx] if next_idx < len(parsed) else None
+            if nxt and nxt['action'] == 'place' and len(args) == 1 and len(nxt['args']) >= 2:
                 obj = args[0]
                 place_obj = nxt['args'][0]
                 region = nxt['args'][1]
@@ -141,7 +153,7 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
                     bucket = _bucket_for_transfer(obj, region)
                     if bucket:
                         subtasks.append(bucket)
-                        idx += 2
+                        idx = next_idx + 1
                         continue
         idx += 1
     return subtasks

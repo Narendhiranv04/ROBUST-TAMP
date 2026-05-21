@@ -23,3 +23,37 @@ def test_legacy_and_canonical_box_regions_count_as_mug_to_box() -> None:
         'pick(mug3)',
         'place(mug3, box_storage)',
     ]) == ['mug_to_box', 'mug_to_box']
+
+
+def test_grill_actions_count_in_completion_metrics() -> None:
+    actions = [
+        'move(grill_lid)',
+        'open(grill_lid)',
+        'move(spam)',
+        'pick(spam)',
+        'move(table)',
+        'place(spam, table)',
+        'move(chicken)',
+        'pick(chicken)',
+        'move(inside_grill)',
+        'place(chicken, inside_grill)',
+        'move(grill_lid)',
+        'close(grill_lid)',
+        'move(plate)',
+        'pick(plate)',
+        'move(plate_boundary)',
+        'place(plate, plate_boundary)',
+        'move(grill_lid)',
+        'open(grill_lid)',
+        'move(chicken)',
+        'pick(chicken)',
+        'move(plate-top)',
+        'place(chicken, plate-top)',
+    ]
+
+    completion = score_variant_completion('G1', actions)
+
+    assert completion['completed_gt_subtasks'] == 7
+    assert completion['bucket_breakdown']['open_grill']['matched'] == 2
+    assert completion['bucket_breakdown']['close_grill']['matched'] == 1
+    assert completion['bucket_breakdown']['meat_to_table']['matched'] == 1

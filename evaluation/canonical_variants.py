@@ -123,8 +123,7 @@ VARIANTS: Dict[str, VariantSpec] = {
             'meat_to_grill': 1,
             'meat_to_table': 1,
         },
-        model_eval_supported=False,
-        model_eval_reason='No grill VLM/LLM replanning runner exists in the current repo.',
+        model_eval_supported=True,
     ),
     'G2': VariantSpec(
         variant_id='G2',
@@ -141,8 +140,7 @@ VARIANTS: Dict[str, VariantSpec] = {
             'meat_to_plate': 3,
             'meat_to_grill': 2,
         },
-        model_eval_supported=False,
-        model_eval_reason='No grill VLM/LLM replanning runner exists in the current repo.',
+        model_eval_supported=True,
     ),
     'G3': VariantSpec(
         variant_id='G3',
@@ -160,14 +158,13 @@ VARIANTS: Dict[str, VariantSpec] = {
             'meat_to_grill': 2,
             'meat_to_table': 1,
         },
-        model_eval_supported=False,
-        model_eval_reason='No grill VLM/LLM replanning runner exists in the current repo.',
+        model_eval_supported=True,
     ),
 }
 
 
 DEFAULT_GT_VARIANTS = ['K1', 'K2', 'K3', 'G1', 'G2', 'G3']
-DEFAULT_MODEL_VARIANTS = ['K1', 'K2', 'K3']
+DEFAULT_MODEL_VARIANTS = ['K1', 'K2', 'K3', 'G1', 'G2', 'G3']
 DEFAULT_VLM_MODEL_ALIASES = ['qwen-vl', 'gsarch', 'ms-phi4', 'internvl-3.5']
 DEFAULT_LLM_MODEL_ALIASES = ['qwen', 'selene', 'deepseek-r1', 'mistral-nemo']
 
