@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
     torch = None
 
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
-from llm_pipeline.pipeline_types import FailureEvent, FailureSource, FailureStage, PlanResult
+from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, PlanResult
 
 
 class TextLLMPlanner:
@@ -155,6 +155,7 @@ class TextLLMPlanner:
                 "line_number": exc.line_number,
                 "raw_output": raw_output,
             },
+            failure_layer=FailureLayer.LAYER_1,
             should_replan=False,
             message=str(exc),
         )

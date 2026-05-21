@@ -493,7 +493,10 @@ class UnifiedActionBundler:
                     if post_failure is not None:
                         post_failure.evidence.setdefault('bundle', 'transfer')
                         post_failure.evidence.setdefault('legacy_failure_id', legacy_id)
-                        if stage_action.action_name == 'place':
+                        if post_failure.failure_id == 'new_object_discovered' and stage_action.action_name != 'place':
+                            deferred_visibility_failure = post_failure
+                            continue
+                        else:
                             self.executor._trace_bundle_state(
                                 failure_checker,
                                 event=f'failure-bundle-{stage_index + 1}',
@@ -506,8 +509,6 @@ class UnifiedActionBundler:
                                 total_action_count=total_action_count,
                             )
                             return BundleExecutionOutcome(4, False, post_failure.message, post_failure, completed, held_object)
-                        if post_failure.failure_id == 'new_object_discovered':
-                            deferred_visibility_failure = post_failure
 
             print(f'[BUNDLE] Desired final state: {obj_name} -> {target_region}')
             self.executor._trace_bundle_state(

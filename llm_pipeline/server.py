@@ -55,6 +55,7 @@ class ActionResponse(BaseModel):
 
 class FailureEventResponse(BaseModel):
     failure_id: str
+    failure_layer: str = 'layer_1'
     stage: str
     source: str
     action: Optional[str] = None

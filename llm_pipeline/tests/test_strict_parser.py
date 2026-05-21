@@ -79,3 +79,13 @@ def test_rejects_alias_names_and_missing_terminal_place() -> None:
         assert exc.failure_id == 'missing_post_pick_place'
     else:
         raise AssertionError('Expected missing post-pick place to fail strict parsing')
+
+
+def test_rejects_dangling_final_move() -> None:
+    try:
+        parser.parse('move(mug2)')
+    except StrictParseError as exc:
+        assert 'has no following pick, place, open, or close action' in str(exc)
+        assert exc.failure_id == 'dangling_move'
+    else:
+        raise AssertionError('Expected dangling final move to fail strict parsing')

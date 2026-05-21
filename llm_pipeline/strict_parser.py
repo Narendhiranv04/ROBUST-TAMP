@@ -193,6 +193,15 @@ class StrictActionParser:
                         failure_id='consecutive_moves',
                     )
 
+        # Validate: every move must lead into a concrete executable action.
+        for i, action in enumerate(actions):
+            if action.action_name == 'move' and i + 1 >= len(actions):
+                raise StrictParseError(
+                    f"Move action at position {i + 1} has no following pick, place, open, or close action. "
+                    f"Every move must be followed by the action it positions for.",
+                    failure_id='dangling_move',
+                )
+
         # Validate: move target must match the next action's target.
         for i, action in enumerate(actions):
             if action.action_name == 'move' and action.args:

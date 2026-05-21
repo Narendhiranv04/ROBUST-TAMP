@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover
     requests = None
 
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
-from llm_pipeline.pipeline_types import FailureEvent, FailureSource, FailureStage, PlanResult
+from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, PlanResult
 
 
 class RemoteTextLLMPlanner:
@@ -145,6 +145,7 @@ class RemoteTextLLMPlanner:
                         source=FailureSource.VALIDATION,
                         action=None,
                         evidence={'line_number': exc.line_number, 'raw_output': '\n'.join(action_lines)},
+                        failure_layer=FailureLayer.LAYER_1,
                         should_replan=(exc.failure_id == 'missing_preceding_move'),
                         message=str(exc),
                     )
@@ -159,6 +160,7 @@ class RemoteTextLLMPlanner:
                         source=FailureSource.VALIDATION,
                         action=None,
                         evidence={'line_number': exc.line_number, 'raw_output': raw_output},
+                        failure_layer=FailureLayer.LAYER_1,
                         should_replan=(exc.failure_id == 'missing_preceding_move'),
                         message=str(exc),
                     )
@@ -224,6 +226,7 @@ class RemoteTextLLMPlanner:
                 source=FailureSource(payload['source']),
                 action=payload.get('action'),
                 evidence=dict(payload.get('evidence', {})),
+                failure_layer=FailureLayer(payload.get('failure_layer', FailureLayer.LAYER_1.value)),
                 should_replan=bool(payload.get('should_replan', True)),
                 message=payload.get('message', ''),
             )

@@ -18,6 +18,7 @@ from llm_pipeline.region_aliases import normalize_region_name, regions_match_for
 
 LAYER_1_FAILURE_IDS = frozenset({
     'missing_preceding_move',
+    'invalid_move_target',
     'invalid_executor_state',
     'pick_object_missing',
     'lid_missing',
@@ -37,6 +38,7 @@ LAYER_1_FAILURE_IDS = frozenset({
     'orphan_place',
     'missing_post_pick_place',
     'consecutive_moves',
+    'dangling_move',
 })
 
 LAYER_2_FAILURE_IDS = frozenset({
@@ -49,6 +51,7 @@ LAYER_2_FAILURE_IDS = frozenset({
     'lid_not_open_enough',
     'lid_not_closed_enough',
     'new_object_discovered',
+    'grill_lid_closed',
 })
 
 
@@ -141,6 +144,24 @@ class SegmentationFirstFailureChecker:
                     should_replan=False,
                     message=f'Cannot place {object_name} while holding {held_object}',
                 )
+            if target_region == 'inside_grill':
+                lid_name = 'grill_lid'
+                lid_evidence = snapshot.object_evidence.get(lid_name)
+                if lid_evidence is not None and lid_evidence.visible and not self._is_lid_open(snapshot, lid_name):
+                    return FailureEvent(
+                        failure_id='grill_lid_closed',
+                        stage=FailureStage.BEFORE_EXECUTION,
+                        source=FailureSource.SEGMENTATION,
+                        action=str(action),
+                        evidence={
+                            'object_name': object_name,
+                            'target_region': target_region,
+                            'lid_name': lid_name,
+                            'visible_objects': snapshot.visible_objects,
+                        },
+                        failure_layer=FailureLayer.LAYER_2,
+                        message=f'Cannot place {object_name} into inside_grill because grill_lid is closed; open(grill_lid) first',
+                    )
             return None
 
         if held_object is not None:
@@ -276,6 +297,11 @@ class SegmentationFirstFailureChecker:
             layer = FailureLayer.LAYER_2
         elif 'not in target region' in lowered or 'validation failed' in lowered:
             failure_id = 'placement_failed'
+            source = FailureSource.VALIDATION
+            stage = FailureStage.AFTER_EXECUTION
+            layer = FailureLayer.LAYER_2
+        elif 'not closed enough' in lowered or "lid didn't slide closed enough" in lowered:
+            failure_id = 'lid_not_closed_enough'
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
