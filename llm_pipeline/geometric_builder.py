@@ -101,12 +101,12 @@ class GeometricContextBuilder(BaseContextBuilder):
         ]
         if valid_regions:
             obs_lines.append("\n## Valid Target Regions:")
-            obs_lines.append(", ".join(valid_regions))
-            obs_lines.append("\n## Region Meanings:")
             for region in valid_regions:
                 meaning = region_semantics(region)
                 if meaning:
                     obs_lines.append(f"- {region}: {meaning}")
+                else:
+                    obs_lines.append(f"- {region}")
         
         obs_lines.append("\n## Object States (Geometric):")
         for obj_name in state.visible_objects:
@@ -131,7 +131,7 @@ class GeometricContextBuilder(BaseContextBuilder):
         observation_text = "\n".join(obs_lines)
 
         # 3. Assemble Prompts
-        system_prompt = self.system_prompt_template or "Perform the task."
+        system_prompt = self.system_prompt_template or ""
         
         user_prompt = ""
         if failure_event:
@@ -145,7 +145,7 @@ class GeometricContextBuilder(BaseContextBuilder):
             user_prompt += "================================\n\n"
         
         user_prompt += f"### Current State\n{observation_text}\n\n### Goal\n{goal_text}"
-        user_prompt += "\n\n" + "\n".join(self._build_action_contract_lines(valid_regions, state.visible_objects))
+        user_prompt += "\n\n" + "\n".join(self._build_action_contract_lines())
 
         return PromptBundle(
             goal_text=goal_text,
@@ -160,35 +160,33 @@ class GeometricContextBuilder(BaseContextBuilder):
             metadata={'held_object': state.gripper_state.get('holding')},
         )
 
-    def _build_action_contract_lines(self, valid_regions: List[str], visible_objects: List[str]) -> List[str]:
+    def _build_action_contract_lines(self) -> List[str]:
         actions = tuple(getattr(self.symbol_registry, 'actions', ()) or ACTION_SYMBOLS)
-        lines = ['OUTPUT CONTRACT:']
-        lines.append('available_actions=' + ', '.join(actions))
-        lines.append('visible_objects=' + (', '.join(visible_objects) if visible_objects else '(none)'))
-        lines.append('valid_regions=' + (', '.join(valid_regions) if valid_regions else '(none)'))
-        lines.append('Use only object names shown in Object States and target regions shown in Valid Target Regions.')
-        lines.append('Every pick, place, open, or close must be immediately preceded by a matching move(target).')
-        lines.append('Executable action formats for this run:')
+        lines = ['### Output Contract']
+        lines.append('Choose the action order needed to satisfy the goal from the current state.')
+        lines.append('Use only object names and target regions listed above.')
+        lines.append('Return one action per line, with no numbering, prose, markdown, or commentary.')
+        lines.append('')
+        lines.append('### Actions')
         for action_name in actions:
-            lines.append(self._action_format_line(action_name))
-        lines.append('Return executable action lines only, with no numbering, prose, markdown, or commentary.')
+            lines.append(self._action_description_line(action_name))
         return lines
 
-    def _action_format_line(self, action_name: str) -> str:
+    def _action_description_line(self, action_name: str) -> str:
         if action_name == 'move':
-            return 'move(object_or_region_name)'
+            return '- move(target): move the robot to a visible object or listed target region.'
         if action_name == 'pick':
-            return 'pick(object_name)'
+            return '- pick(object): grasp a visible movable object.'
         if action_name == 'place':
-            return 'place(object_name, region_name)'
+            return '- place(object, region): put the held object on or in a listed target region.'
         if action_name == 'open':
             if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
-                return 'open(grill_lid)'
+                return '- open(grill_lid): open the grill lid when access to the grill is needed.'
             if self.symbol_registry is not None and 'box_lid' in getattr(self.symbol_registry, 'objects', ()):
-                return 'open(box_lid)'
-            return 'open(lid_object)'
+                return '- open(box_lid): open the box lid when access to the box is needed.'
+            return '- open(object): open a visible openable object.'
         if action_name == 'close':
             if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
-                return 'close(grill_lid)'
-            return 'close(lid_object)'
-        return f'{action_name}(...)'
+                return '- close(grill_lid): close the grill lid when the goal requires it.'
+            return '- close(object): close a visible closeable object.'
+        return f'- {action_name}(...): use this action only when it directly advances the goal.'

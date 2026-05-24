@@ -303,10 +303,15 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert 'COMPLETED_ACTIONS: move(→pick), pick(mug2)' in planner.requests[1]['user_prompt']
     assert 'pick(mug2)' in planner.requests[1]['user_prompt']
     assert 'ERROR: place failed after pick' in planner.requests[1]['user_prompt']
+    assert planner.requests[0]['system_prompt'] == ''
     assert '## Object States (Geometric):' in planner.requests[0]['user_prompt']
     assert 'region=box_storage' in planner.requests[0]['user_prompt']
-    assert 'OUTPUT CONTRACT:' in planner.requests[0]['user_prompt']
-    assert 'Every pick, place, open, or close must be immediately preceded by a matching move(target).' in planner.requests[0]['user_prompt']
+    assert '### Output Contract' in planner.requests[0]['user_prompt']
+    assert 'Choose the action order needed to satisfy the goal from the current state.' in planner.requests[0]['user_prompt']
+    assert 'Every pick, place, open, or close must be immediately preceded by a matching move(target).' not in planner.requests[0]['user_prompt']
+    assert 'visible_objects=' not in planner.requests[0]['user_prompt']
+    assert 'valid_regions=' not in planner.requests[0]['user_prompt']
+    assert '- move(target): move the robot to a visible object or listed target region.' in planner.requests[0]['user_prompt']
     assert segmentation_adapter.refresh_calls[:2] == ['initial', 'initial']
     assert segmentation_adapter.action_sequence_calls[0]['actions'] == []
     assert segmentation_adapter.live_updates >= 1

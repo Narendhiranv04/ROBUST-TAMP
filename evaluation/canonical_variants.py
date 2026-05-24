@@ -44,17 +44,15 @@ KITCHEN_GOAL_K1 = 'move all the groceries inside the cupboard and all mugs insid
 KITCHEN_GOAL_K2 = 'move all the groceries inside the cupboard and all mugs inside the box'
 KITCHEN_GOAL_K3 = 'move all the groceries inside the cupboard and all mugs inside the box'
 GRILL_GOAL_G1 = (
-    'Open the grill, move the spam from inside the grill onto the table, move the outside meat onto the grill, '
-    'close the grill, place the plate on the plate boundary, reopen the grill, and move the grilled meat onto the plate.'
+    'Cook the meat using the grill, serve the cooked meat on the plate in the serving area, '
+    'and keep the spam on the table.'
 )
 GRILL_GOAL_G2 = (
-    'Open the grill, place the plate on the plate boundary, move the inside meat onto the plate, '
-    'move both outside meats onto the grill one by one, close the grill, reopen it, and move both grilled meats onto the plate.'
+    'Serve all meats on the plate in the serving area, cooking the raw outside meats in the grill first.'
 )
 GRILL_GOAL_G3 = (
-    'Open the grill, move the spam from inside the grill onto the table, place the plate on the plate boundary, '
-    'move the remaining inside meat onto the plate, move both outside meats onto the grill one by one, '
-    'close the grill, reopen it, and move both grilled meats onto the plate.'
+    'Keep the spam on the table, cook the raw outside meats in the grill, '
+    'and serve all non-spam meat on the plate in the serving area.'
 )
 
 
