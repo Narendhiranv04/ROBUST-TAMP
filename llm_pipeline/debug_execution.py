@@ -46,7 +46,7 @@ from llm_pipeline.pipeline_types import (
 from llm_pipeline.strict_parser import StrictParseError
 
 
-ACTION_LINE = re.compile(r"^(move|pick|open|close)\(([^,)]+)\)$|^place\(([^,]+),\s*([^)]+)\)$|^move$")
+ACTION_LINE = re.compile(r"^(pick|open|close)\(([^,)]+)\)$|^place\(([^,]+),\s*([^)]+)\)$")
 SEQUENCE_SEPARATOR = "---"
 DEFAULT_SEQUENCE_DIR = ROOT_DIR / "llm_pipeline" / "debug_sequences"
 PROGRESS_KEYS = {
@@ -106,7 +106,7 @@ class MockPlanner:
                         action=None,
                         evidence={"line_number": exc.line_number, "raw_output": raw_output},
                         failure_layer=FailureLayer.LAYER_1,
-                        should_replan=(exc.failure_id == "missing_preceding_move"),
+                        should_replan=False,
                         message=str(exc),
                     ),
                 )
@@ -198,12 +198,6 @@ class ExecutorOnlySegmentationAdapter:
             elif action.action_name == "place":
                 objects.append(action.args[0])
                 regions.append(action.args[1])
-            elif action.action_name == "move" and action.args:
-                target = action.args[0]
-                if target in valid_objects:
-                    objects.append(target)
-                elif target in valid_regions:
-                    regions.append(target)
 
         visible_objects = _ordered_unique(name for name in objects if name in valid_objects)
         visible_regions = _ordered_unique(name for name in regions if name in valid_regions)
@@ -266,16 +260,13 @@ def _ordered_unique(items: Iterable[str]) -> List[str]:
 
 def _transfer(obj_name: str, target_region: str) -> List[DirectAction]:
     return [
-        DirectAction("move", (obj_name,)),
         DirectAction("pick", (obj_name,)),
-        DirectAction("move", (target_region,)),
         DirectAction("place", (obj_name, target_region)),
     ]
 
 
 def _lid(action_name: str, lid_name: str) -> List[DirectAction]:
     return [
-        DirectAction("move", (lid_name,)),
         DirectAction(action_name, (lid_name,)),
     ]
 
@@ -385,11 +376,9 @@ def _parse_action_line(line: str, line_number: int) -> DirectAction:
     match = ACTION_LINE.fullmatch(line)
     if not match:
         raise ValueError(
-            f"Line {line_number}: expected move, move(target), pick(obj), "
+            f"Line {line_number}: expected pick(obj), "
             "place(obj, region), open(lid), or close(lid)"
         )
-    if line == "move":
-        return DirectAction("move", ())
     if line.startswith("place("):
         return DirectAction("place", (match.group(3).strip(), match.group(4).strip()))
     return DirectAction(match.group(1), (match.group(2).strip(),))

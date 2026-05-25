@@ -77,6 +77,10 @@ def test_prep_area_beats_table_for_raw_meat() -> None:
 
 
 def test_box_fallback_used_only_when_primary_absent() -> None:
+    fallback_only = {
+        'table': _bounds(-1, -1, 0.0, 1, 1, 0.05),
+        'box_storage': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.25),
+    }
     with_primary = {
         **fallback_only,
         'box_lid_top': _bounds(-0.2, -0.2, 0.30, 0.2, 0.2, 0.32),

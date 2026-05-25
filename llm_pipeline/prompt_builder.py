@@ -108,12 +108,8 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             bundle.goal_text,
         ]
         if bundle.previous_actions:
-            # Strip move annotations (move(→pick) → move) so the LLM sees bare actions
-            cleaned = [
-                'move' if str(a).startswith('move(') and '→' in str(a) else str(a)
-                for a in bundle.previous_actions
-            ]
-            parts.extend(['', 'PREVIOUS ACTIONS (already executed, do not repeat):', *cleaned])
+            actions = [str(a) for a in bundle.previous_actions]
+            parts.extend(['', 'PREVIOUS ACTIONS (already executed, do not repeat):', *actions])
         if bundle.failure_context:
             parts.extend(['', 'FAILURE CONTEXT:', bundle.failure_context])
         parts.extend(['', *self._build_action_contract_lines()])
@@ -131,8 +127,7 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         return lines
 
     def _action_format_line(self, action_name: str) -> str:
-        if action_name == 'move':
-            return 'move'
+
         if action_name == 'pick':
             return 'pick(object_name)'
         if action_name == 'place':

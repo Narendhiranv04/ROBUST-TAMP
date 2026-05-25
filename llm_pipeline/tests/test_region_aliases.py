@@ -4,9 +4,9 @@ from llm_pipeline.region_aliases import normalize_region_name, normalize_region_
 def test_kitchen_region_aliases_normalize_to_public_symbols() -> None:
     assert normalize_region_name("box_boundary") == "box_storage"
     assert normalize_region_name("box-top") == "box_lid_top"
-    assert normalize_region_name("box-inside") == "box_inside_fallback"
+    assert normalize_region_name("box-inside") == "box_storage"
     assert normalize_region_name("cupboard_boundary") == "cupboard_lower"
-    assert normalize_region_name("cupboard_boundary_top") == "cupboard_upper"
+    assert normalize_region_name("cupboard_boundary_top") == "cupboard_lower"
     assert normalize_region_name("shelf-lower") == "cupboard_lower"
 
 

@@ -63,8 +63,7 @@ def _normalize_region(region: Optional[str]) -> str:
 
 def parse_action_string(action: Any) -> Optional[Dict[str, Any]]:
     text = str(action).strip()
-    if text == 'move':
-        return {'action': 'move', 'args': [], 'raw': text}
+
     match = ACTION_PATTERN.match(text)
     if not match:
         return None
@@ -105,9 +104,7 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
         current = parsed[idx]
         name = current['action']
         args = current['args']
-        if name == 'move':
-            idx += 1
-            continue
+
         if name in {'open', 'open_lid', 'open_grill'}:
             target = args[0] if args else ''
             subtasks.append('open_grill' if name == 'open_grill' or target == 'grill_lid' else 'open_lid')
@@ -121,8 +118,6 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
             continue
         if name == 'pick' and idx + 1 < len(parsed):
             next_idx = idx + 1
-            while next_idx < len(parsed) and parsed[next_idx]['action'] == 'move':
-                next_idx += 1
             nxt = parsed[next_idx] if next_idx < len(parsed) else None
             if nxt and nxt['action'] == 'place' and len(args) == 1 and len(nxt['args']) >= 2:
                 obj = args[0]

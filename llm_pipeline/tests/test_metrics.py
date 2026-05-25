@@ -3,12 +3,10 @@ from llm_pipeline.metrics import collapse_actions_to_subtasks, parse_action_stri
 
 def test_open_action_counts_in_completion_metrics() -> None:
     actions = [
-        'move',
         'pick(mug2)',
         'place(mug2, placement_boundary)',
         'open(box_lid)',
     ]
-    assert parse_action_string('move') == {'action': 'move', 'args': [], 'raw': 'move'}
     assert collapse_actions_to_subtasks(actions) == ['mug_to_placement', 'open_lid']
 
     completion = score_variant_completion('K1', actions)
@@ -27,27 +25,16 @@ def test_legacy_and_canonical_box_regions_count_as_mug_to_box() -> None:
 
 def test_grill_actions_count_in_completion_metrics() -> None:
     actions = [
-        'move(grill_lid)',
         'open(grill_lid)',
-        'move(spam)',
         'pick(spam)',
-        'move(table)',
         'place(spam, table)',
-        'move(chicken)',
         'pick(chicken)',
-        'move(inside_grill)',
         'place(chicken, inside_grill)',
-        'move(grill_lid)',
         'close(grill_lid)',
-        'move(plate)',
         'pick(plate)',
-        'move(plate_boundary)',
         'place(plate, plate_boundary)',
-        'move(grill_lid)',
         'open(grill_lid)',
-        'move(chicken)',
         'pick(chicken)',
-        'move(plate-top)',
         'place(chicken, plate-top)',
     ]
 

@@ -267,7 +267,8 @@ class LLMOnlyReplanningPipeline:
             self.segmentation_adapter.reset_tracking()
 
     def preflight(self, goal_text: str) -> Dict[str, Any]:
-        plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=None)
+        plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=None, silent=True)
+        self._cached_preflight_plan = (plan_result, prompt_trace)
         debug_snapshot = self.get_debug_snapshot()
         bundle = prompt_trace.get('bundle', {})
         prompt_contract_issues = []
@@ -293,10 +294,30 @@ class LLMOnlyReplanningPipeline:
             'debug_snapshot': debug_snapshot,
         }
 
+    def _print_plan_result(self, result: PlanResult, is_replan: bool, cycle_num: int, failure_event: Optional[FailureEvent] = None):
+        print(f'\n{"=" * 60}')
+        print(f'[LLM] {"REPLAN" if is_replan else "PLAN"} cycle {cycle_num}')
+        if is_replan and failure_event is not None:
+            print(f'[LLM] Failure context: {failure_event.message}')
+        print(f'{"=" * 60}')
+        print(f'[LLM] Raw output:')
+        for line in (result.raw_output or '').strip().splitlines():
+            print(f'   {line}')
+        if result.success and result.actions:
+            print(f'[LLM] Parsed plan ({len(result.actions)} actions):')
+            for i, action in enumerate(result.actions, 1):
+                print(f'   {i:2}. {action}')
+        elif result.failure_event:
+            print(f'[LLM] Parse FAILED: {result.failure_event.message}')
+        elif not result.success:
+            print(f'[LLM] Plan FAILED: {result.error_message}')
+        print(f'{"=" * 60}')
+
     def plan_once(
         self,
         goal_text: str,
         failure_event: Optional[FailureEvent],
+        silent: bool = False,
     ) -> Tuple[PlanResult, Dict[str, Any]]:
         # 1. Capture and resolve scene state
         state = self._build_scene_state()
@@ -316,11 +337,12 @@ class LLMOnlyReplanningPipeline:
 
         is_replan = failure_event is not None
         cycle_num = len(self.cycles) + 1
-        print(f'\n{"=" * 60}')
-        print(f'[LLM] {"REPLAN" if is_replan else "PLAN"} cycle {cycle_num}')
-        if is_replan and failure_event is not None:
-            print(f'[LLM] Failure context: {failure_event.message}')
-        print(f'{"=" * 60}')
+        if not silent:
+            print(f'\n{"=" * 60}')
+            print(f'[LLM] {"REPLAN" if is_replan else "PLAN"} cycle {cycle_num}')
+            if is_replan and failure_event is not None:
+                print(f'[LLM] Failure context: {failure_event.message}')
+            print(f'{"=" * 60}')
 
         # 3. Plan using modular planner
         # We try to use the new .plan() interface, fall back to .generate_plan() for legacy
@@ -336,18 +358,19 @@ class LLMOnlyReplanningPipeline:
                 held_object=getattr(self.executor, 'held_object', None),
             )
 
-        print(f'[LLM] Raw output:')
-        for line in (result.raw_output or '').strip().splitlines():
-            print(f'   {line}')
-        if result.success and result.actions:
-            print(f'[LLM] Parsed plan ({len(result.actions)} actions):')
-            for i, action in enumerate(result.actions, 1):
-                print(f'   {i:2}. {action}')
-        elif result.failure_event:
-            print(f'[LLM] Parse FAILED: {result.failure_event.message}')
-        elif not result.success:
-            print(f'[LLM] Plan FAILED: {result.error_message}')
-        print(f'{"=" * 60}')
+        if not silent:
+            print(f'[LLM] Raw output:')
+            for line in (result.raw_output or '').strip().splitlines():
+                print(f'   {line}')
+            if result.success and result.actions:
+                print(f'[LLM] Parsed plan ({len(result.actions)} actions):')
+                for i, action in enumerate(result.actions, 1):
+                    print(f'   {i:2}. {action}')
+            elif result.failure_event:
+                print(f'[LLM] Parse FAILED: {result.failure_event.message}')
+            elif not result.success:
+                print(f'[LLM] Plan FAILED: {result.error_message}')
+            print(f'{"=" * 60}')
 
         bundle_trace = {
             key: value
@@ -442,7 +465,12 @@ class LLMOnlyReplanningPipeline:
         execution_skipped = not self.config.enable_replanning
 
         if execution_skipped:
-            plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=None)
+            if getattr(self, '_cached_preflight_plan', None):
+                plan_result, prompt_trace = self._cached_preflight_plan
+                self._cached_preflight_plan = None
+                self._print_plan_result(plan_result, False, 1, None)
+            else:
+                plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=None)
             cycle = ExecutionCycleRecord(
                 cycle_number=1,
                 is_replan=False,
@@ -467,7 +495,12 @@ class LLMOnlyReplanningPipeline:
             while len(self.cycles) <= self.config.max_replans:
                 cycle_number = len(self.cycles) + 1
                 is_replan = pending_failure is not None
-                plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=pending_failure)
+                if cycle_number == 1 and not is_replan and getattr(self, '_cached_preflight_plan', None):
+                    plan_result, prompt_trace = self._cached_preflight_plan
+                    self._cached_preflight_plan = None
+                    self._print_plan_result(plan_result, is_replan, cycle_number, pending_failure)
+                else:
+                    plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=pending_failure)
                 cycle = ExecutionCycleRecord(
                     cycle_number=cycle_number,
                     is_replan=is_replan,
@@ -486,7 +519,7 @@ class LLMOnlyReplanningPipeline:
                         last_failure_event = plan_result.failure_event
                     self.cycles.append(cycle)
                     failure_reason = cycle.error_message
-                    # If the planning failure is recoverable (e.g. missing move),
+                    # If the planning failure is recoverable (e.g. parse error),
                     # feed it back as context and let the LLM replan
                     if plan_result.failure_event is not None and plan_result.failure_event.should_replan:
                         # Clear stale remaining_actions — no execution happened this cycle

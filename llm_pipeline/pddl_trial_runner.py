@@ -435,16 +435,13 @@ def _lid_for_direct_action(lid_name: Any) -> str:
 
 def _transfer_actions(obj_name: str, region_name: str) -> List[DirectAction]:
     return [
-        DirectAction("move", (obj_name,)),
         DirectAction("pick", (obj_name,)),
-        DirectAction("move", (region_name,)),
         DirectAction("place", (obj_name, region_name)),
     ]
 
 
 def _lid_actions(action_name: str, lid_name: str) -> List[DirectAction]:
     return [
-        DirectAction("move", (lid_name,)),
         DirectAction(action_name, (lid_name,)),
     ]
 
@@ -747,12 +744,8 @@ def _gt_macro_chunks(variant_id: str) -> List[Dict[str, Any]]:
     index = 0
     while index < len(actions):
         action = actions[index]
-        if (
-            action.action_name == "move"
-            and index + 1 < len(actions)
-            and actions[index + 1].action_name in {"open", "close"}
-        ):
-            lid_action = actions[index + 1]
+        if action.action_name in {"open", "close"}:
+            lid_action = action
             lid_name = _lid_for_direct_action(lid_action.args[0])
             goal_name = "grill-open" if lid_action.action_name == "open" else "grill-closed"
             chunks.append(
@@ -760,23 +753,21 @@ def _gt_macro_chunks(variant_id: str) -> List[Dict[str, Any]]:
                     "index": len(chunks) + 1,
                     "kind": "lid",
                     "label": f"{lid_action.action_name}({lid_name})",
-                    "reference_actions": _direct_action_summary(actions[index:index + 2]),
+                    "reference_actions": _direct_action_summary([action]),
                     "goal_facts": ((goal_name, "lid"),),
                     "direct_goal_hint": lid_action.action_name,
                 }
             )
-            index += 2
+            index += 1
             continue
 
         if (
-            action.action_name == "move"
-            and index + 3 < len(actions)
-            and actions[index + 1].action_name == "pick"
-            and actions[index + 2].action_name == "move"
-            and actions[index + 3].action_name == "place"
+            action.action_name == "pick"
+            and index + 1 < len(actions)
+            and actions[index + 1].action_name == "place"
         ):
-            pick_action = actions[index + 1]
-            place_action = actions[index + 3]
+            pick_action = action
+            place_action = actions[index + 1]
             obj_name = pick_action.args[0]
             direct_region = normalize_region_name(place_action.args[1])
             pddl_region = _region_for_pddl_goal(direct_region)
@@ -785,7 +776,7 @@ def _gt_macro_chunks(variant_id: str) -> List[Dict[str, Any]]:
                     "index": len(chunks) + 1,
                     "kind": "transfer",
                     "label": f"{obj_name} -> {direct_region}",
-                    "reference_actions": _direct_action_summary(actions[index:index + 4]),
+                    "reference_actions": _direct_action_summary(actions[index:index + 2]),
                     "goal_facts": (
                         ("in-region", obj_name, pddl_region),
                         ("hand-empty",),
@@ -793,7 +784,7 @@ def _gt_macro_chunks(variant_id: str) -> List[Dict[str, Any]]:
                     "direct_goal_hint": f"{obj_name}->{direct_region}",
                 }
             )
-            index += 4
+            index += 2
             continue
 
         chunks.append(

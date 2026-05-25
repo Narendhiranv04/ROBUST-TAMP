@@ -159,8 +159,8 @@ def test_segmentation_adapter_refreshes_direct_detector_and_live_view_methods() 
     assert detected == {'mug2', 'box_lid'}
     assert adapter.viewer.updated == 1
 
-    adapter.set_live_action_sequence(['move', 'pick(mug2)'], current_action_index=1, current_action_label='pick(mug2)')
-    assert adapter.viewer.actions[-1] == ('current', 1, 'pick(mug2)')
+    adapter.set_live_action_sequence(['pick(mug2)', 'place(mug2, placement_boundary)'], current_action_index=0, current_action_label='pick(mug2)')
+    assert adapter.viewer.actions[-1] == ('current', 0, 'pick(mug2)')
 
     adapter.shutdown()
     assert adapter.viewer is None or True

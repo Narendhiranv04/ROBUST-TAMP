@@ -12,8 +12,8 @@ from llm_pipeline.region_aliases import (
 )
 
 
-ACTION_SYMBOLS: Tuple[str, ...] = ("move", "pick", "place", "open")
-GRILL_ACTION_SYMBOLS: Tuple[str, ...] = ("move", "pick", "place", "open", "close")
+ACTION_SYMBOLS: Tuple[str, ...] = ("pick", "place", "open")
+GRILL_ACTION_SYMBOLS: Tuple[str, ...] = ("pick", "place", "open", "close")
 DEFAULT_OBJECT_ORDER: Tuple[str, ...] = (
     "mug1",
     "mug2",

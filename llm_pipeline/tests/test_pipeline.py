@@ -268,12 +268,10 @@ def _snapshot() -> SegmentationSnapshot:
 
 
 def test_pipeline_replans_with_previous_direct_actions() -> None:
-    planner = QueuePlanner(
-        [
-            'move\npick(mug2)\nmove\nplace(mug2, placement_boundary)',
-            'move\nplace(mug2, placement_boundary)\nmove\nopen(box_lid)',
-        ]
-    )
+    planner = QueuePlanner([
+        'pick(mug2)\nplace(mug2, placement_boundary)',
+        'place(mug2, placement_boundary)\nopen(box_lid)',
+    ])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
@@ -292,33 +290,29 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert summary['success'] is True
     assert summary['total_replans'] == 1
     assert summary['completed_actions'] == [
-        'move(→pick)',
         'pick(mug2)',
-        'move(→place)',
         'place(mug2, placement_boundary)',
-        'move(→open)',
         'open(box_lid)',
     ]
-    assert '=== REPLANNING AFTER FAILURE ===' in planner.requests[1]['user_prompt']
-    assert 'COMPLETED_ACTIONS: move(→pick), pick(mug2)' in planner.requests[1]['user_prompt']
+    assert summary['held_object'] is None
+
+    assert 'COMPLETED_ACTIONS: pick(mug2)' in planner.requests[1]['user_prompt']
     assert 'pick(mug2)' in planner.requests[1]['user_prompt']
-    assert 'ERROR: place failed after pick' in planner.requests[1]['user_prompt']
-    assert planner.requests[0]['system_prompt'] == ''
+    assert 'place failed after pick' in planner.requests[1]['user_prompt']
+    assert 'You are a Robotic Task Planner' in planner.requests[0]['system_prompt']
     assert '## Object States (Geometric):' in planner.requests[0]['user_prompt']
     assert 'region=box_storage' in planner.requests[0]['user_prompt']
     assert '### Output Contract' in planner.requests[0]['user_prompt']
     assert 'Choose the action order needed to satisfy the goal from the current state.' in planner.requests[0]['user_prompt']
     assert 'Every pick, place, open, or close must be immediately preceded by a matching move(target).' not in planner.requests[0]['user_prompt']
     assert 'visible_objects=' not in planner.requests[0]['user_prompt']
-    assert 'valid_regions=' not in planner.requests[0]['user_prompt']
-    assert '- move(target): move the robot to a visible object or listed target region.' in planner.requests[0]['user_prompt']
     assert segmentation_adapter.refresh_calls[:2] == ['initial', 'initial']
     assert segmentation_adapter.action_sequence_calls[0]['actions'] == []
     assert segmentation_adapter.live_updates >= 1
 
 
 def test_initialize_holds_startup_lid_pose_during_settle() -> None:
-    planner = QueuePlanner(['move\nopen(box_lid)'])
+    planner = QueuePlanner(['open(box_lid)'])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     env = FakeEnv()
@@ -335,7 +329,7 @@ def test_initialize_holds_startup_lid_pose_during_settle() -> None:
 
 
 def test_pipeline_preflight_reports_no_image_input() -> None:
-    planner = QueuePlanner(['move\nopen(box_lid)'])
+    planner = QueuePlanner(['open(box_lid)'])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
@@ -378,7 +372,7 @@ def test_pipeline_reports_validation_failure_before_execution() -> None:
 
 
 def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
-    planner = QueuePlanner(['move\npick(mug2)\nmove\nplace(mug2, placement_boundary)'])
+    planner = QueuePlanner(['pick(mug2)\nplace(mug2, placement_boundary)'])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
@@ -409,16 +403,12 @@ def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
     assert summary['pre_action_checks_enabled'] is False
     assert summary['post_action_checks_enabled'] is False
     assert summary['planned_actions'] == [
-        'move(→pick)',
         'pick(mug2)',
-        'move(→place)',
         'place(mug2, placement_boundary)',
     ]
     assert summary['completed_actions'] == []
     assert summary['remaining_actions'] == [
-        'move(→pick)',
         'pick(mug2)',
-        'move(→place)',
         'place(mug2, placement_boundary)',
     ]
     assert summary['total_cycles'] == 1

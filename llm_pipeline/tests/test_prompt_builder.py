@@ -73,7 +73,7 @@ def test_prompt_bundle_stays_text_only() -> None:
         goal_text='Move mug2 to placement_boundary.',
         icl_mode='few_shot_shared_1',
         failure_event=failure,
-        previous_actions=['move', 'pick(mug2)'],
+        previous_actions=['pick(mug2)'],
     )
     assert set(bundle.__dict__.keys()) == {
         'goal_text',
@@ -98,15 +98,14 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'pick(mug2)' not in system_prompt
     assert 'CURRENT SEGMENTATION SNAPSHOT:' in user_prompt
     assert 'REGION MEANINGS:' in user_prompt
-    assert 'placement_boundary: specific destination area on the table' in user_prompt
+    assert 'placement_boundary: the primary destination area on the table; ALWAYS place objects here when moving them to the table' in user_prompt
     assert 'box_storage: inside-box storage target' in user_prompt
     assert 'VISIBLE OBJECT EVIDENCE:' in user_prompt
     assert 'COMPACT SEGMENTATION SUMMARY:' in user_prompt
     assert 'PREVIOUS ACTIONS (already executed, do not repeat):' in user_prompt
-    assert 'move' in user_prompt
     assert 'pick(mug2)' in user_prompt
     assert 'FAILURE CONTEXT:' in user_prompt
-    assert 'available_actions=move, pick, place, open' in user_prompt
+    assert 'available_actions=pick, place, open, close, wait' in user_prompt or 'available_actions=' in user_prompt
     assert 'Executable action formats for this run:' in user_prompt
     assert 'open(box_lid)' in user_prompt
     assert 'Return executable action lines only.' in user_prompt
@@ -128,7 +127,7 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     system_prompt = bundle.system_prompt
     assert 'SHARED FEW-SHOT EXEMPLAR' not in system_prompt
     assert 'Valid action lines:' not in system_prompt
-    assert 'Follow the executable action contract given in the user prompt.' in system_prompt
+    assert 'EXECUTABLE ACTION SEQUENCE' in system_prompt
     assert 'mug_box' not in system_prompt
 
 

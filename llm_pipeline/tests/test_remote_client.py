@@ -70,12 +70,10 @@ def test_remote_planner_returns_server_actions() -> None:
         plan_payload={
             'success': True,
             'actions': [
-                {'action_name': 'move', 'args': ['mug2']},
                 {'action_name': 'pick', 'args': ['mug2']},
-                {'action_name': 'move', 'args': ['placement_boundary']},
                 {'action_name': 'place', 'args': ['mug2', 'placement_boundary']},
             ],
-            'raw_output': 'move(mug2)\npick(mug2)\nmove(placement_boundary)\nplace(mug2, placement_boundary)',
+            'raw_output': 'pick(mug2)\nplace(mug2, placement_boundary)',
             'inference_time': 0.12,
             'error_message': None,
             'failure_event': None,
@@ -94,9 +92,7 @@ def test_remote_planner_returns_server_actions() -> None:
         )
         assert result.success is True
         assert [str(action) for action in result.actions] == [
-            'move(mug2)',
             'pick(mug2)',
-            'move(placement_boundary)',
             'place(mug2, placement_boundary)',
         ]
         assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/plan'
@@ -112,7 +108,7 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         plan_payload={
             'success': False,
             'actions': [],
-            'raw_output': 'move(mug2)\npick(mug2)\nmove(placement_boundary)\nplace(mug2, placement_boundary)',
+            'raw_output': 'pick(mug2)\nplace(mug2, placement_boundary)',
             'inference_time': 0.08,
             'error_message': None,
             'failure_event': None,
@@ -131,9 +127,7 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         )
         assert result.success is True
         assert [str(action) for action in result.actions] == [
-            'move(mug2)',
             'pick(mug2)',
-            'move(placement_boundary)',
             'place(mug2, placement_boundary)',
         ]
     finally:
@@ -147,10 +141,9 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
         plan_payload={
             'success': True,
             'actions': [
-                {'action_name': 'move', 'args': ['placement_boundary']},
                 {'action_name': 'place', 'args': ['mug2', 'placement_boundary']},
             ],
-            'raw_output': 'move(placement_boundary)\nplace(mug2, placement_boundary)',
+            'raw_output': 'place(mug2, placement_boundary)',
             'inference_time': 0.08,
             'error_message': None,
             'failure_event': None,
@@ -177,7 +170,6 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
 
         assert result.success is True
         assert [str(action) for action in result.actions] == [
-            'move(placement_boundary)',
             'place(mug2, placement_boundary)',
         ]
         assert fake_requests.post_calls[0][1]['held_object'] == 'mug2'

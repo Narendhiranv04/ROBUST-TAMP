@@ -183,8 +183,6 @@ class GeometricContextBuilder(BaseContextBuilder):
         return lines
 
     def _action_description_line(self, action_name: str) -> str:
-        if action_name == 'move':
-            return '- move(target): move the robot to a visible object or listed target region.'
         if action_name == 'pick':
             return '- pick(object): grasp a visible movable object.'
         if action_name == 'place':

@@ -4,42 +4,34 @@ from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 parser = StrictActionParser()
 
 
-def test_parses_direct_ground_truth_actions_with_move() -> None:
+def test_parses_direct_ground_truth_actions() -> None:
     actions = parser.parse(
-        'move\n'
         'pick(mug2)\n'
-        'move\n'
         'place(mug2, placement_boundary)\n'
-        'move\n'
         'open(box_lid)\n'
     )
     assert [str(action) for action in actions] == [
-        'move(→pick)',
         'pick(mug2)',
-        'move(→place)',
         'place(mug2, placement_boundary)',
-        'move(→open)',
         'open(box_lid)',
     ]
 
 
 def test_parses_replan_while_already_holding_object() -> None:
-    actions = parser.parse('move\nplace(mug2, placement_boundary)', held_object='mug2')
-    assert [str(action) for action in actions] == ['move(→place)', 'place(mug2, placement_boundary)']
+    actions = parser.parse('place(mug2, placement_boundary)', held_object='mug2')
+    assert [str(action) for action in actions] == ['place(mug2, placement_boundary)']
 
 
 def test_normalizes_legacy_region_names() -> None:
-    actions = parser.parse('move\npick(mug2)\nmove\nplace(mug2, box_boundary)')
+    actions = parser.parse('pick(mug2)\nplace(mug2, box_boundary)')
     assert [str(action) for action in actions] == [
-        'move(→pick)',
         'pick(mug2)',
-        'move(→place)',
         'place(mug2, box_storage)',
     ]
 
 
 def test_accepts_numbered_output_by_stripping_prefixes() -> None:
-    actions = parser.parse('1. move\n2. pick(mug2)\n3. move\n4. place(mug2, box_boundary)')
+    actions = parser.parse('1. pick(mug2)\n2. place(mug2, box_boundary)')
     assert [str(action) for action in actions][-1] == 'place(mug2, box_storage)'
 
 
@@ -81,11 +73,3 @@ def test_rejects_alias_names_and_missing_terminal_place() -> None:
         raise AssertionError('Expected missing post-pick place to fail strict parsing')
 
 
-def test_rejects_dangling_final_move() -> None:
-    try:
-        parser.parse('move(mug2)')
-    except StrictParseError as exc:
-        assert 'has no following pick, place, open, or close action' in str(exc)
-        assert exc.failure_id == 'dangling_move'
-    else:
-        raise AssertionError('Expected dangling final move to fail strict parsing')

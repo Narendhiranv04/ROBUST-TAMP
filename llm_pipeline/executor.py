@@ -324,15 +324,13 @@ class UnifiedActionBundler:
         """Attempts to find and execute a bundle starting at ``index``."""
         action = actions[index]
         
-        # 1. Pattern: [Move, Pick, Move, Place] -> Transfer
-        if action.action_name == 'move' and (index + 3) < len(actions):
+        # 1. Pattern: [Pick, Place] -> Transfer
+        if action.action_name == 'pick' and (index + 1) < len(actions):
             next1 = actions[index + 1]
-            next2 = actions[index + 2]
-            next3 = actions[index + 3]
-            if next1.action_name == 'pick' and next2.action_name == 'move' and next3.action_name == 'place':
-                if next1.args[0] == next3.args[0]:
+            if next1.action_name == 'place':
+                if action.args[0] == next1.args[0]:
                     return self._execute_transfer_bundle(
-                        actions[index:index + 4],
+                        actions[index:index + 2],
                         start_index=index,
                         total_action_count=len(actions),
                         failure_checker=failure_checker,
@@ -340,18 +338,16 @@ class UnifiedActionBundler:
                         post_action_checks_enabled=post_action_checks_enabled,
                     )
 
-        # 2. Pattern: [Move, Open/Close] -> Lid motion
-        if action.action_name == 'move' and (index + 1) < len(actions):
-            next1 = actions[index + 1]
-            if next1.action_name in ('open', 'close'):
-                return self._execute_lid_bundle(
-                    [action, next1],
-                    start_index=index,
-                    total_action_count=len(actions),
-                    failure_checker=failure_checker,
-                    pre_action_checks_enabled=pre_action_checks_enabled,
-                    post_action_checks_enabled=post_action_checks_enabled,
-                )
+        # 2. Pattern: [Open/Close] -> Lid motion
+        if action.action_name in ('open', 'close'):
+            return self._execute_lid_bundle(
+                [action],
+                start_index=index,
+                total_action_count=len(actions),
+                failure_checker=failure_checker,
+                pre_action_checks_enabled=pre_action_checks_enabled,
+                post_action_checks_enabled=post_action_checks_enabled,
+            )
 
         return BundleExecutionOutcome(consumed=0, success=False)
 
@@ -364,7 +360,7 @@ class UnifiedActionBundler:
         pre_action_checks_enabled: bool = True,
         post_action_checks_enabled: bool = True,
     ) -> BundleExecutionOutcome:
-        move_to_pick, pick_action, move_to_place, place_action = bundle_actions
+        pick_action, place_action = bundle_actions
         obj_name = pick_action.args[0]
         target_region = normalize_region_name(place_action.args[1])
         legacy_id = 'TAMP_EXECUTION_ERROR'
@@ -404,10 +400,7 @@ class UnifiedActionBundler:
 
         try:
             for stage_index, stage_action in enumerate(bundle_actions):
-                action_label = f'{stage_action}'
-                if stage_action.action_name == 'move':
-                    action_label = 'move'
-                print(f'[BUNDLE] ({stage_index + 1}/4) {stage_action}')
+                print(f'[BUNDLE] ({stage_index + 1}/2) {stage_action}')
 
                 if pre_action_checks_enabled and failure_checker is not None:
                     pre_snapshot = self.executor._trace_bundle_state(
@@ -436,36 +429,39 @@ class UnifiedActionBundler:
                             failure_checker,
                             event=f'failure-bundle-{stage_index + 1}',
                             label='final failure event',
-                        desired=f'{obj_name} -> {target_region}',
-                        failure_event=pre_failure,
-                        current_action_index=start_index + stage_index,
-                        current_action_label=str(stage_action),
-                        completed_action_count=start_index + len(completed),
-                        total_action_count=total_action_count,
-                    )
-                        return BundleExecutionOutcome(4, False, pre_failure.message, pre_failure, completed, held_object)
+                            desired=f'{obj_name} -> {target_region}',
+                            failure_event=pre_failure,
+                            current_action_index=start_index + stage_index,
+                            current_action_label=str(stage_action),
+                            completed_action_count=start_index + len(completed),
+                            total_action_count=total_action_count,
+                        )
+                        return BundleExecutionOutcome(2, False, pre_failure.message, pre_failure, completed, held_object)
 
-                ok, msg = gt_executor.execute_next(requested_action=stage_action.action_name)
-                if not ok:
-                    failure = self._runtime_failure(
-                        stage_action,
-                        msg,
-                        legacy_id=legacy_id,
-                        evidence={'object': obj_name, 'target': target_region, 'stage_index': stage_index + 1},
-                        failure_checker=failure_checker,
-                    )
-                    self.executor._trace_bundle_state(
-                        failure_checker,
-                        event=f'failure-bundle-{stage_index + 1}',
-                        label='final failure event',
-                        desired=f'{obj_name} -> {target_region}',
-                        failure_event=failure,
-                        current_action_index=start_index + stage_index,
-                        current_action_label=str(stage_action),
-                        completed_action_count=start_index + len(completed),
-                        total_action_count=total_action_count,
-                    )
-                    return BundleExecutionOutcome(4, False, failure.message, failure, completed, held_object)
+                # Unroll LLM action into two GT stages (move -> act)
+                sub_stages = ['move', stage_action.action_name]
+                for sub_stage in sub_stages:
+                    ok, msg = gt_executor.execute_next(requested_action=sub_stage)
+                    if not ok:
+                        failure = self._runtime_failure(
+                            stage_action,
+                            msg,
+                            legacy_id=legacy_id,
+                            evidence={'object': obj_name, 'target': target_region, 'stage_index': stage_index + 1},
+                            failure_checker=failure_checker,
+                        )
+                        self.executor._trace_bundle_state(
+                            failure_checker,
+                            event=f'failure-bundle-{stage_index + 1}',
+                            label='final failure event',
+                            desired=f'{obj_name} -> {target_region}',
+                            failure_event=failure,
+                            current_action_index=start_index + stage_index,
+                            current_action_label=str(stage_action),
+                            completed_action_count=start_index + len(completed),
+                            total_action_count=total_action_count,
+                        )
+                        return BundleExecutionOutcome(2, False, failure.message, failure, completed, held_object)
 
                 if stage_action.action_name == 'pick':
                     held_object = obj_name
@@ -508,7 +504,7 @@ class UnifiedActionBundler:
                                 completed_action_count=start_index + stage_index + 1,
                                 total_action_count=total_action_count,
                             )
-                            return BundleExecutionOutcome(4, False, post_failure.message, post_failure, completed, held_object)
+                            return BundleExecutionOutcome(2, False, post_failure.message, post_failure, completed, held_object)
 
             print(f'[BUNDLE] Desired final state: {obj_name} -> {target_region}')
             self.executor._trace_bundle_state(
@@ -540,7 +536,7 @@ class UnifiedActionBundler:
                 total_action_count=total_action_count,
             )
             return BundleExecutionOutcome(
-                4,
+                2,
                 False,
                 deferred_visibility_failure.message,
                 deferred_visibility_failure,
@@ -549,7 +545,7 @@ class UnifiedActionBundler:
             )
 
         print(f"[BUNDLE] ✓ Transfer bundle complete: {obj_name} -> {target_region}")
-        return BundleExecutionOutcome(4, True, "", None, completed, held_object)
+        return BundleExecutionOutcome(2, True, "", None, completed, held_object)
 
     def _execute_lid_bundle(
         self,
@@ -560,7 +556,7 @@ class UnifiedActionBundler:
         pre_action_checks_enabled: bool = True,
         post_action_checks_enabled: bool = True,
     ) -> BundleExecutionOutcome:
-        move_action, lid_action = bundle_actions
+        lid_action = bundle_actions[0]
         legacy_id = 'TAMP_OPEN_ERROR' if lid_action.action_name == 'open' else 'TAMP_CLOSE_ERROR'
         completed: List[str] = []
         held_object = self.executor.held_object
@@ -616,30 +612,6 @@ class UnifiedActionBundler:
                     )
                     return BundleExecutionOutcome(2, False, pre_failure.message, pre_failure, completed, held_object)
 
-            if stage_action.action_name == 'move':
-                try:
-                    self.executor.go_home()
-                except Exception:
-                    pass
-                completed.append(str(stage_action))
-                post_snapshot = self.executor._trace_bundle_state(
-                    failure_checker,
-                    event=f'after-lid-bundle-{stage_index + 1}',
-                    label=f'after primitive {stage_index + 1}',
-                    action=stage_action,
-                    desired=desired,
-                    current_action_index=start_index + stage_index,
-                    current_action_label=str(stage_action),
-                    completed_action_count=start_index + stage_index + 1,
-                    total_action_count=total_action_count,
-                )
-                if post_action_checks_enabled and failure_checker is not None and post_snapshot is not None:
-                    post_failure = failure_checker.postcheck(stage_action, held_object, post_snapshot)
-                    if post_failure is not None and post_failure.failure_id == 'new_object_discovered':
-                        post_failure.evidence.setdefault('bundle', 'lid')
-                        post_failure.evidence.setdefault('legacy_failure_id', legacy_id)
-                        deferred_visibility_failure = post_failure
-                continue
 
             if lid_action.action_name == 'open':
                 ok, err = self.handler.execute_open(lid_action)
@@ -665,7 +637,7 @@ class UnifiedActionBundler:
                         completed_action_count=start_index + len(completed),
                         total_action_count=total_action_count,
                     )
-                return BundleExecutionOutcome(2, False, failure.message, failure, completed, held_object)
+                return BundleExecutionOutcome(1, False, failure.message, failure, completed, held_object)
 
             completed.append(str(stage_action))
             if post_action_checks_enabled and failure_checker is not None:
@@ -697,7 +669,7 @@ class UnifiedActionBundler:
                         completed_action_count=start_index + stage_index + 1,
                         total_action_count=total_action_count,
                     )
-                    return BundleExecutionOutcome(2, False, post_failure.message, post_failure, completed, held_object)
+                    return BundleExecutionOutcome(1, False, post_failure.message, post_failure, completed, held_object)
 
         self.executor._trace_bundle_state(
             failure_checker,
@@ -722,7 +694,7 @@ class UnifiedActionBundler:
                 total_action_count=total_action_count,
             )
             return BundleExecutionOutcome(
-                2,
+                1,
                 False,
                 deferred_visibility_failure.message,
                 deferred_visibility_failure,
@@ -730,7 +702,7 @@ class UnifiedActionBundler:
                 held_object,
             )
         print(f"[BUNDLE] ✓ Lid bundle complete: {desired}")
-        return BundleExecutionOutcome(2, True, "", None, completed, held_object)
+        return BundleExecutionOutcome(1, True, "", None, completed, held_object)
 
     def _runtime_failure(
         self,

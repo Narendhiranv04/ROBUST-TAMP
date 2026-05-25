@@ -80,7 +80,7 @@ def test_precheck_flags_missing_pick_object() -> None:
         DirectAction('pick', ('mug4',)),
         held_object=None,
         snapshot=snapshot,
-        last_action_name='move',
+        last_action_name='pick',
     )
     assert failure is not None
     assert failure.failure_id == 'pick_object_missing'
@@ -102,7 +102,7 @@ def test_precheck_blocks_inside_grill_place_when_lid_closed() -> None:
         DirectAction('place', ('chicken', 'inside_grill')),
         held_object='chicken',
         snapshot=snapshot,
-        last_action_name='move',
+        last_action_name='pick',
     )
     assert failure is not None
     assert failure.failure_id == 'grill_lid_closed'
@@ -259,7 +259,7 @@ def test_postcheck_ignores_new_visibility_for_action_object() -> None:
     assert failure is None
 
 
-def test_move_postcheck_can_trigger_new_visibility_replan() -> None:
+def test_fallback_postcheck_can_trigger_new_visibility_replan() -> None:
     snapshot = _snapshot(
         {
             'mustard': SegmentationObjectEvidence(name='mustard', visible=True, mask_regions=['table']),
@@ -267,7 +267,7 @@ def test_move_postcheck_can_trigger_new_visibility_replan() -> None:
         newly_visible=['mustard'],
         visible_regions=['table'],
     )
-    failure = checker.postcheck(DirectAction('move', ()), held_object=None, snapshot=snapshot)
+    failure = checker.postcheck(DirectAction('wait', ()), held_object=None, snapshot=snapshot)
     assert failure is not None
     assert failure.failure_id == 'new_object_discovered'
 

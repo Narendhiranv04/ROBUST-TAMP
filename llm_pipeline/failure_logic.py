@@ -88,20 +88,7 @@ class SegmentationFirstFailureChecker:
         snapshot: SegmentationSnapshot,
         last_action_name: Optional[str] = None,
     ) -> Optional[FailureEvent]:
-        if action.action_name == 'move':
-            return None
 
-        if last_action_name != 'move':
-            return FailureEvent(
-                failure_id='missing_preceding_move',
-                stage=FailureStage.BEFORE_EXECUTION,
-                source=FailureSource.EXECUTOR,
-                action=str(action),
-                evidence={'last_action': last_action_name or '(none)', 'expected': 'move'},
-                failure_layer=FailureLayer.LAYER_1,
-                should_replan=True,
-                message=f'Action {action} requires a preceding move to position the arm, but last action was {last_action_name or "(none)"}',
-            )
 
         if action.action_name == 'pick':
             object_name = action.args[0]
@@ -196,9 +183,6 @@ class SegmentationFirstFailureChecker:
         held_object: Optional[str],
         snapshot: SegmentationSnapshot,
     ) -> Optional[FailureEvent]:
-        if action.action_name == 'move':
-            return self._maybe_new_visibility_failure(action, snapshot)
-
         if action.action_name == 'pick':
             object_name = action.args[0]
             evidence = snapshot.object_evidence.get(object_name)
@@ -353,12 +337,6 @@ class SegmentationFirstFailureChecker:
         completed_actions: Optional[Iterable[str]] = None,
         remaining_actions: Optional[Iterable[str]] = None,
     ) -> str:
-        def _strip_move_annotation(a: str) -> str:
-            """Strip display annotations like move(\u2192pick) → move."""
-            if a.startswith('move(') and '\u2192' in a:
-                return 'move'
-            return a
-
         layer_value = (
             failure_event.failure_layer.value
             if isinstance(failure_event.failure_layer, FailureLayer)
@@ -378,12 +356,12 @@ class SegmentationFirstFailureChecker:
                 lines.append(f'your_previous_output=\n{raw}')
         if completed_actions is not None:
             joined = ', '.join(
-                _strip_move_annotation(str(a)) for a in completed_actions
+                str(a) for a in completed_actions
             ) or '(none)'
             lines.append(f'completed_actions={joined}')
         if remaining_actions is not None:
             joined = ', '.join(
-                _strip_move_annotation(str(a)) for a in remaining_actions
+                str(a) for a in remaining_actions
             ) or '(none)'
             lines.append(f'remaining_actions={joined}')
         return '\n'.join(lines)
@@ -446,7 +424,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
         snapshot: SegmentationSnapshot,
         last_action_name: Optional[str] = None,
     ) -> Optional[FailureEvent]:
-        # Perform base checks first (missing move, etc)
+        # Perform base checks first
         base_failure = super().precheck(action, held_object, snapshot, last_action_name)
         if base_failure:
             return base_failure

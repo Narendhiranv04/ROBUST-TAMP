@@ -40,9 +40,9 @@ class VariantSpec:
         }
 
 
-KITCHEN_GOAL_K1 = 'move all the groceries inside the cupboard and all mugs inside the box'
-KITCHEN_GOAL_K2 = 'move all the groceries inside the cupboard and all mugs inside the box'
-KITCHEN_GOAL_K3 = 'move all the groceries inside the cupboard and all mugs inside the box'
+KITCHEN_GOAL_K1 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
+KITCHEN_GOAL_K2 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
+KITCHEN_GOAL_K3 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
 GRILL_GOAL_G1 = (
     'Cook the meat using the grill, serve the cooked meat on the plate in the serving area, '
     'and keep the spam on the table.'

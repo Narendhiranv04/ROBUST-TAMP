@@ -138,7 +138,7 @@ python -m llm_pipeline.trial_runner \
 
 ## Batch Testing
 
-Run all grill variants against the currently running server:
+### Run all grill variants once
 
 ```sh
 for variant in G1 G2 G3; do
@@ -150,6 +150,28 @@ for variant in G1 G2 G3; do
     --remote-url http://127.0.0.1:8000 \
     --headless \
     --max-replans 1
+done
+```
+
+### Run one variant 10 times (Stability Testing)
+
+This will automatically save each run into its own timestamped directory under `llm_pipeline/results/llm_runs/` (e.g. `...trial_001`, `...trial_002`, etc.)
+
+```sh
+VARIANT="K1"
+MODEL="qwen"
+
+for i in {1..10}; do
+  echo "Running trial $i/10 for $VARIANT with $MODEL"
+  python -m llm_pipeline.trial_runner \
+    --variant "$VARIANT" \
+    --model "$MODEL" \
+    --icl-mode zero_shot \
+    --trial-index "$i" \
+    --max-replans 5 \
+    --remote \
+    --remote-url http://127.0.0.1:8000 \
+    --headless
 done
 ```
 

@@ -55,8 +55,8 @@ CANONICAL_REGION_SCENE_OBJECTS = {
 }
 
 REGION_SEMANTICS = {
-    "table": "broad table surface; use only when no specific table subregion applies",
-    "placement_boundary": "specific destination area on the table for placing completed objects",
+    "table": "broad table surface; DO NOT place objects here (use placement_boundary instead)",
+    "placement_boundary": "the primary destination area on the table; ALWAYS place objects here when moving them to the table",
     "cupboard_lower": "lower shelf inside the cupboard",
     "box_storage": "inside-box storage target for putting objects into the box",
     "groceries_boundary": "groceries/source area on the table",
