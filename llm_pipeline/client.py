@@ -95,7 +95,7 @@ class RemoteTextLLMPlanner:
         system_prompt: str,
         user_prompt: str,
         icl_mode: str,
-        max_new_tokens: int = 512,
+        max_new_tokens: int = 4096,
         temperature: float = 0.0,
         held_object: Optional[str] = None,
         bundle: Optional[Any] = None,
@@ -150,7 +150,7 @@ class RemoteTextLLMPlanner:
                         action=None,
                         evidence={'line_number': exc.line_number, 'raw_output': '\n'.join(action_lines)},
                         failure_layer=FailureLayer.LAYER_1,
-                        should_replan=(exc.failure_id == 'missing_preceding_move'),
+                        should_replan=True,
                         message=str(exc),
                     )
 
@@ -165,7 +165,7 @@ class RemoteTextLLMPlanner:
                         action=None,
                         evidence={'line_number': exc.line_number, 'raw_output': raw_output},
                         failure_layer=FailureLayer.LAYER_1,
-                        should_replan=(exc.failure_id == 'missing_preceding_move'),
+                        should_replan=True,
                         message=str(exc),
                     )
 

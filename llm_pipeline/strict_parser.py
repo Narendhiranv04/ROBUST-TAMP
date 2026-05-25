@@ -43,6 +43,12 @@ class StrictActionParser:
         if text is None:
             raise StrictParseError('Planner output is empty')
 
+        # Strip thought blocks. Some models (DeepSeek-R1) omit the opening <think> tag
+        # but include the closing </think> tag. Strip everything up to the closing tag.
+        text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        # Also catch any lingering <think> blocks if there are multiple or if the regex missed
+        text = re.sub(r'<think>.*?(</think>|$)', '', text, flags=re.DOTALL | re.IGNORECASE)
+
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             raise StrictParseError('Planner output is empty')
@@ -65,10 +71,14 @@ class StrictActionParser:
                 actions.append(DirectAction('move', ()))
                 continue
 
+            # Skip pure prose lines (e.g. conversational output after </think>)
+            if not any(line.startswith(verb) for verb in self.valid_actions):
+                continue
+
             match = ACTION_CALL.fullmatch(line)
             if not match:
                 raise StrictParseError(
-                    'Invalid syntax. Expected move, pick(obj), place(obj, region), open(lid), or close(lid)',
+                    f'Invalid syntax. Expected one of: {", ".join(self.valid_actions)}',
                     line_number=index,
                 )
 

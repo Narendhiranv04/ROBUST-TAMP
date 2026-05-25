@@ -125,7 +125,7 @@ class TextLLMPlanner:
 
         do_sample = temperature >= 0.3
         generate_kwargs = {
-            "max_new_tokens": min(max_new_tokens, 512),
+            "max_new_tokens": max_new_tokens,
             "temperature": temperature,
             "do_sample": do_sample,
             "pad_token_id": self.tokenizer.pad_token_id,

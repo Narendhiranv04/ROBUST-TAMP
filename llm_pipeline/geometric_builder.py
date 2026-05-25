@@ -10,6 +10,7 @@ from llm_pipeline.pipeline_types import (
 from llm_pipeline.executable_symbols import ACTION_SYMBOLS
 from llm_pipeline.geometric_utils import resolve_region
 from llm_pipeline.region_aliases import PLANNER_HIDDEN_REGIONS, normalize_region_name, region_semantics
+from llm_pipeline.prompt_builder import PROMPTS_DIR
 
 
 class GeometricContextBuilder(BaseContextBuilder):
@@ -131,15 +132,24 @@ class GeometricContextBuilder(BaseContextBuilder):
         observation_text = "\n".join(obs_lines)
 
         # 3. Assemble Prompts
-        system_prompt = self.system_prompt_template or ""
+        system_prompt = self.system_prompt_template
+        if not system_prompt:
+            system_prompt = (PROMPTS_DIR / 'system_prompt.txt').read_text(encoding='utf-8').strip()
+
+        if icl_mode == ICLMode.FEW_SHOT_SHARED_1.value:
+            example = (PROMPTS_DIR / 'shared_exemplar.txt').read_text(encoding='utf-8').strip()
+            system_prompt = f"{system_prompt}\n\nSHARED FEW-SHOT EXEMPLAR:\n{example}\n"
         
         user_prompt = ""
         if failure_event:
-            user_prompt += "=== REPLANNING AFTER FAILURE ===\n"
-            user_prompt += f"FAILURE_ID: {failure_event.failure_id}\n"
+            user_prompt += "=== REPLANNING TRIGGERED ===\n"
+            user_prompt += f"EVENT_ID: {failure_event.failure_id}\n"
             user_prompt += f"STAGE: {failure_event.stage.value}\n"
-            user_prompt += f"ACTION_FAILED: {failure_event.action or '(none)'}\n"
-            user_prompt += f"ERROR: {failure_event.message}\n"
+            if failure_event.failure_id == 'new_object_discovered':
+                user_prompt += f"INTERRUPTED_AFTER_SUCCESSFUL_ACTION: {failure_event.action or '(none)'}\n"
+            else:
+                user_prompt += f"ACTION_FAILED: {failure_event.action or '(none)'}\n"
+            user_prompt += f"ERROR/MESSAGE: {failure_event.message}\n"
             if previous_actions:
                 user_prompt += f"COMPLETED_ACTIONS: {', '.join(previous_actions)}\n"
             user_prompt += "================================\n\n"
