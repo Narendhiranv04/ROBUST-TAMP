@@ -189,6 +189,7 @@ class SceneState:
     region_map: Dict[str, Tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)  # region -> (min, max)
     object_region_map: Dict[str, str] = field(default_factory=dict)  # obj -> canonical region
     object_region_descriptions: Dict[str, str] = field(default_factory=dict)  # obj -> human-readable location
+    lid_states: Dict[str, bool] = field(default_factory=dict)  # lid_name -> is_open (True=open, False=closed)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -200,6 +201,7 @@ class SceneState:
             "gripper_state": dict(self.gripper_state),
             "object_region_map": dict(self.object_region_map),
             "object_region_descriptions": dict(self.object_region_descriptions),
+            "lid_states": dict(self.lid_states),
         }
 
 

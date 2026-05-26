@@ -432,6 +432,15 @@ class LLMOnlyReplanningPipeline:
                 lid_open=infer_grill_lid_open(self.env),
             )
 
+        # Resolve lid open/closed states for all lid objects
+        lid_names = [name for name in snapshot.visible_objects if name in {'box_lid', 'grill_lid', 'lid'}]
+        lid_states = {}
+        for lid_name in lid_names:
+            try:
+                lid_states[lid_name] = bool(self.segmentation_adapter.is_lid_open(snapshot, lid_name=lid_name))
+            except Exception:
+                lid_states[lid_name] = False
+
         state = SceneState(
             frame_index=snapshot.frame_index,
             visible_objects=snapshot.visible_objects,
@@ -442,6 +451,7 @@ class LLMOnlyReplanningPipeline:
             region_map=region_map,
             object_region_map=object_region_map,
             object_region_descriptions=object_region_descriptions,
+            lid_states=lid_states,
             gripper_state={'status': 'holding' if getattr(self.executor, 'held_object', None) else 'empty',
                            'holding': getattr(self.executor, 'held_object', None)}
         )

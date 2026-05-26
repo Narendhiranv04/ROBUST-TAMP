@@ -109,8 +109,13 @@ class GeometricContextBuilder(BaseContextBuilder):
                 else:
                     obs_lines.append(f"- {region}")
         
+        lid_objects = set(getattr(state, 'lid_states', {}).keys()) | {'box_lid', 'grill_lid', 'lid'}
+
         obs_lines.append("\n## Object States (Geometric):")
         for obj_name in state.visible_objects:
+            # Lid objects are rendered separately as state, not geometric region
+            if obj_name in lid_objects:
+                continue
             pos = state.pose_map.get(obj_name)
             r_id = object_region_map.get(obj_name)
             r_desc = object_region_descriptions.get(obj_name)
@@ -122,6 +127,13 @@ class GeometricContextBuilder(BaseContextBuilder):
                 obs_lines.append(f"- {obj_name}: region={r_id}, description={r_desc or '(none)'}, pose=unresolved")
             else:
                 obs_lines.append(f"- {obj_name}: visible but pose unresolved")
+
+        # Render lid states as OPEN/CLOSED instead of geometric regions
+        lid_states = getattr(state, 'lid_states', {})
+        if lid_states:
+            obs_lines.append("\n## Lid State:")
+            for lid_name, is_open in lid_states.items():
+                obs_lines.append(f"- {lid_name}: {'OPEN' if is_open else 'CLOSED'}")
         
         # Use the pre-computed pddl_state if available
         if state.pddl_state:
