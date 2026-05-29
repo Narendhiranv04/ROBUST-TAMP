@@ -6,30 +6,35 @@ from typing import Iterable, Mapping, MutableMapping, TypeVar
 
 
 KITCHEN_REGION_ALIASES = {
-    "box_boundary": "box_storage",
+    "box_boundary": "inside_box",
     "box-top": "box_lid_top",
     "box_top": "box_lid_top",
-    "box-inside": "box_storage",
-    "box_inside": "box_storage",
-    "cupboard_boundary": "cupboard_lower",
-    "cupboard_boundary_top": "cupboard_lower",
-    "shelf-lower": "cupboard_lower",
-    "shelf_lower": "cupboard_lower",
+    "box-inside": "inside_box",
+    "box_inside": "inside_box",
+    "box_storage": "inside_box",
+    "cupboard_boundary": "cupboard_shelf",
+    "cupboard_boundary_top": "cupboard_shelf",
+    "cupboard_lower": "cupboard_shelf",
+    "shelf-lower": "cupboard_shelf",
+    "shelf_lower": "cupboard_shelf",
+    "groceries_boundary": "pantry_area",
+    "placement_boundary": "table_target_area",
 }
 
 GRILL_REGION_ALIASES = {
     "grill-top": "inside_grill",
     "grill_top": "inside_grill",
-    "plate-boundary": "plate_boundary",
+    "plate-boundary": "serving_area",
+    "plate_boundary": "serving_area",
     "prep-area": "prep_area",
 }
 
 CANONICAL_KITCHEN_REGION_ORDER = (
     "table",
-    "placement_boundary",
-    "cupboard_lower",
-    "box_storage",
-    "groceries_boundary",
+    "table_target_area",
+    "cupboard_shelf",
+    "inside_box",
+    "pantry_area",
     "box_lid_top",
 )
 
@@ -38,33 +43,36 @@ CANONICAL_GRILL_REGION_ORDER = (
     "prep_area",
     "inside_grill",
     "plate-top",
-    "plate_boundary",
+    "serving_area",
     "dish_rack",
 )
 
-BOX_STORAGE_REGION = "box_storage"
+BOX_STORAGE_REGION = "inside_box"
 BOX_LID_TOP_REGION = "box_lid_top"
-CUPBOARD_TARGET_REGIONS = ("cupboard_lower",)
+CUPBOARD_TARGET_REGIONS = ("cupboard_shelf",)
 PLANNER_HIDDEN_REGIONS = ()
 CANONICAL_REGION_SCENE_OBJECTS = {
-    "box_storage": "box_boundary",
+    "inside_box": "box_boundary",
     "box_lid_top": "box_lid",
-    "cupboard_lower": "cupboard_boundary",
+    "cupboard_shelf": "cupboard_boundary",
+    "pantry_area": "groceries_boundary",
+    "table_target_area": "placement_boundary",
     "inside_grill": "grill_boundary",
     "plate-top": "plate_boundary",
+    "serving_area": "plate_boundary",
 }
 
 REGION_SEMANTICS = {
-    "table": "broad table surface; DO NOT place objects here (use placement_boundary instead)",
-    "placement_boundary": "the primary destination area on the table; ALWAYS place objects here when moving them to the table",
-    "cupboard_lower": "lower shelf inside the cupboard",
-    "box_storage": "inside-box storage target for putting objects into the box",
-    "groceries_boundary": "groceries/source area on the table",
+    "table": "broad table surface; DO NOT place objects here (use table_target_area instead)",
+    "table_target_area": "specific target area on the table for objects that should be moved onto the table",
+    "cupboard_shelf": "shelf inside the cupboard for storing groceries",
+    "inside_box": "interior storage area of the box for objects that should be put inside the box",
+    "pantry_area": "source area on the table where groceries start",
     "box_lid_top": "support surface on top of the box lid for objects resting on the lid",
     "inside_grill": "inside-grill containment area represented by the scene object grill_boundary",
     "prep_area": "preparation area where uncooked meat starts",
     "plate-top": "top surface of the plate for placing cooked meat",
-    "plate_boundary": "target area where the plate should be placed",
+    "serving_area": "serving destination area where the plate should be placed",
     "dish_rack": "rack area where the plate starts",
 }
 
@@ -81,7 +89,7 @@ def regions_match_for_target(observed_region: str | None, target_region: str | N
     target = normalize_region_name(target_region)
     if observed == target:
         return True
-    if target == "placement_boundary" and observed in {"table", "groceries_boundary"}:
+    if target == "table_target_area" and observed in {"table", "pantry_area"}:
         return True
     return False
 
