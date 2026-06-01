@@ -197,7 +197,7 @@ class FakeExecutor:
                 stage=FailureStage.AFTER_EXECUTION,
                 source=FailureSource.SEGMENTATION,
                 action=self.remaining_actions[-1],
-                evidence={'target_region': 'placement_boundary'},
+                evidence={'target_region': 'table_target_area'},
                 message='place failed after pick',
             )
             self.last_failure_event = failure
@@ -256,21 +256,21 @@ def _snapshot() -> SegmentationSnapshot:
         visible_objects=['mug2', 'box_lid'],
         newly_visible_objects=[],
         object_evidence={
-            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['box_storage']),
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['inside_box']),
             'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
         },
         gripper_evidence={},
-        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'box_storage'],
-        visible_regions=['box_storage'],
-        object_region_map={'mug2': 'box_storage'},
+        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        visible_regions=['inside_box'],
+        object_region_map={'mug2': 'inside_box'},
         object_region_descriptions={'mug2': 'inside the box storage target'},
     )
 
 
 def test_pipeline_replans_with_previous_direct_actions() -> None:
     planner = QueuePlanner([
-        'pick(mug2)\nplace(mug2, placement_boundary)',
-        'place(mug2, placement_boundary)\nopen(box_lid)',
+        'pick(mug2)\nplace(mug2, table_target_area)',
+        'place(mug2, table_target_area)\nopen(box_lid)',
     ])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
@@ -285,13 +285,13 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to placement_boundary and then open the lid.')
+    summary = pipeline.run('Move mug2 to table_target_area and then open the lid.')
 
     assert summary['success'] is True
     assert summary['total_replans'] == 1
     assert summary['completed_actions'] == [
         'pick(mug2)',
-        'place(mug2, placement_boundary)',
+        'place(mug2, table_target_area)',
         'open(box_lid)',
     ]
     assert summary['held_object'] is None
@@ -301,7 +301,7 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert 'place failed after pick' in planner.requests[1]['user_prompt']
     assert 'You are a Robotic Task Planner' in planner.requests[0]['system_prompt']
     assert '## Object States (Geometric):' in planner.requests[0]['user_prompt']
-    assert 'region=box_storage' in planner.requests[0]['user_prompt']
+    assert 'region=inside_box' in planner.requests[0]['user_prompt']
     assert '### Output Contract' in planner.requests[0]['user_prompt']
     assert 'Choose the action order needed to satisfy the goal from the current state.' in planner.requests[0]['user_prompt']
     assert 'Every pick, place, open, or close must be immediately preceded by a matching move(target).' not in planner.requests[0]['user_prompt']
@@ -363,7 +363,7 @@ def test_pipeline_reports_validation_failure_before_execution() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to placement_boundary.')
+    summary = pipeline.run('Move mug2 to table_target_area.')
 
     assert summary['success'] is False
     assert summary['last_failure_event']['failure_id'] == 'unknown_action_token'
@@ -372,7 +372,7 @@ def test_pipeline_reports_validation_failure_before_execution() -> None:
 
 
 def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
-    planner = QueuePlanner(['pick(mug2)\nplace(mug2, placement_boundary)'])
+    planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_target_area)'])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
@@ -394,7 +394,7 @@ def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to placement_boundary.')
+    summary = pipeline.run('Move mug2 to table_target_area.')
 
     assert summary['success'] is True
     assert summary['replan_mode'] == 'off'
@@ -404,12 +404,12 @@ def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
     assert summary['post_action_checks_enabled'] is False
     assert summary['planned_actions'] == [
         'pick(mug2)',
-        'place(mug2, placement_boundary)',
+        'place(mug2, table_target_area)',
     ]
     assert summary['completed_actions'] == []
     assert summary['remaining_actions'] == [
         'pick(mug2)',
-        'place(mug2, placement_boundary)',
+        'place(mug2, table_target_area)',
     ]
     assert summary['total_cycles'] == 1
     assert summary['total_replans'] == 0

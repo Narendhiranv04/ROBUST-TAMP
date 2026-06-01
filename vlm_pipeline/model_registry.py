@@ -76,7 +76,7 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
     ),
     "selene": _make_spec(
         "selene",
-        "AItalai/Selene-1-Mini-Llama-3.1-8B",
+        "AtlaAI/Selene-1-Mini-Llama-3.1-8B",
         "llm",
         "Selene Mini for planning validation",
     ),
@@ -109,6 +109,24 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
         "mistralai/Mistral-Nemo-Instruct-2407",
         "llm",
         "Logic-focused instruct model for plan validation",
+    ),
+    "deepseek-r1-qwen-32b": _make_spec(
+        "deepseek-r1-qwen-32b",
+        "bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF",
+        "llm",
+        "DeepSeek Qwen-32B distilled reasoning model",
+    ),
+    "devstral-24b": _make_spec(
+        "devstral-24b",
+        "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
+        "llm",
+        "Devstral Small 2 24B Instruct model",
+    ),
+    "llama-3.3-70b": _make_spec(
+        "llama-3.3-70b",
+        "unsloth/Llama-3.3-70B-Instruct-GGUF",
+        "llm",
+        "Llama 3.3 70B Instruct model",
     ),
 }
 

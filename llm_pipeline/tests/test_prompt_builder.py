@@ -23,7 +23,7 @@ def _snapshot() -> SegmentationSnapshot:
                 camera_pixels={'overhead': 16},
                 bbox={'overhead': (0.4000, 0.3000, 0.6000, 0.5000)},
                 centroid={'overhead': (0.5000, 0.4000)},
-                mask_regions=['box_storage'],
+                mask_regions=['inside_box'],
                 newly_visible=True,
             ),
             'box_lid': SegmentationObjectEvidence(
@@ -38,9 +38,9 @@ def _snapshot() -> SegmentationSnapshot:
             ),
         },
         gripper_evidence={},
-        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'box_storage'],
-        visible_regions=['box_storage'],
-        object_region_map={'mug2': 'box_storage'},
+        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        visible_regions=['inside_box'],
+        object_region_map={'mug2': 'inside_box'},
         object_region_descriptions={'mug2': 'inside the box storage target'},
     )
 
@@ -64,13 +64,13 @@ def test_prompt_bundle_stays_text_only() -> None:
         failure_id='placement_failed',
         stage=FailureStage.AFTER_EXECUTION,
         source=FailureSource.SEGMENTATION,
-        action='place(mug2, placement_boundary)',
+        action='place(mug2, table_target_area)',
         evidence={},
         message='failure_id=placement_failed',
     )
     bundle = builder.build_bundle(
         state=_state(_snapshot(), held_object='mug2'),
-        goal_text='Move mug2 to placement_boundary.',
+        goal_text='Move mug2 to table_target_area.',
         icl_mode='few_shot_shared_1',
         failure_event=failure,
         previous_actions=['pick(mug2)'],
@@ -98,8 +98,8 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'pick(mug2)' not in system_prompt
     assert 'CURRENT SEGMENTATION SNAPSHOT:' in user_prompt
     assert 'REGION MEANINGS:' in user_prompt
-    assert 'placement_boundary: the primary destination area on the table; ALWAYS place objects here when moving them to the table' in user_prompt
-    assert 'box_storage: inside-box storage target' in user_prompt
+    assert 'table_target_area: the primary destination area on the table; ALWAYS place objects here when moving them to the table' in user_prompt
+    assert 'inside_box: inside-box storage target' in user_prompt
     assert 'VISIBLE OBJECT EVIDENCE:' in user_prompt
     assert 'COMPACT SEGMENTATION SUMMARY:' in user_prompt
     assert 'PREVIOUS ACTIONS (already executed, do not repeat):' in user_prompt
@@ -110,9 +110,9 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'open(box_lid)' in user_prompt
     assert 'Return executable action lines only.' in user_prompt
     assert 'state_text' not in user_prompt
-    assert 'region=box_storage' in user_prompt
-    assert 'visual_mask_regions=box_storage' in user_prompt
-    assert 'visible_regions=box_storage' in user_prompt
+    assert 'region=inside_box' in user_prompt
+    assert 'visual_mask_regions=inside_box' in user_prompt
+    assert 'visible_regions=inside_box' in user_prompt
     assert 'box_lid_state' not in user_prompt
     assert 'region_hint=' not in user_prompt
 
@@ -135,19 +135,19 @@ def test_fallback_regions_are_hidden_from_llm_prompt() -> None:
     snapshot = _snapshot()
     snapshot.supported_regions = [
         'table',
-        'cupboard_lower',
-        'box_storage',
+        'cupboard_shelf',
+        'inside_box',
     ]
     snapshot.object_evidence['mug2'].mask_regions = [
-        'box_storage',
+        'inside_box',
     ]
-    snapshot.object_region_map = {'mug2': 'box_storage'}
+    snapshot.object_region_map = {'mug2': 'inside_box'}
 
     bundle = TextOnlyContextBuilder().build_bundle(
         state=_state(snapshot),
-        goal_text='Move mug2 to box_storage.',
+        goal_text='Move mug2 to inside_box.',
         icl_mode='zero_shot',
     )
 
-    assert 'box_storage' in bundle.user_prompt
-    assert 'cupboard_lower' in bundle.user_prompt
+    assert 'inside_box' in bundle.user_prompt
+    assert 'cupboard_shelf' in bundle.user_prompt

@@ -21,7 +21,7 @@ def test_grill_semantic_facts_treat_grill_top_as_inside_grill() -> None:
             "steak": "inside_grill",
             "steak1": "inside_grill",
             "chicken": "table",
-            "spam": "plate-top",
+            "spam": "plate_top",
             "chicken1": "prep_area",
             "plate": "dish_rack",
         },

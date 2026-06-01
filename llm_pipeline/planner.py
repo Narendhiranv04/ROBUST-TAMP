@@ -47,10 +47,29 @@ class TextLLMPlanner:
             return False
 
         dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        
+        gguf_file = None
+        if "GGUF" in self.model_name.upper():
+            try:
+                from huggingface_hub import scan_cache_dir
+                for repo in scan_cache_dir().repos:
+                    if repo.repo_id == self.model_name:
+                        for rev in repo.revisions:
+                            for f in rev.files:
+                                if f.file_name.endswith('.gguf'):
+                                    gguf_file = f.file_name
+                                    break
+            except Exception as e:
+                print(f"Warning scanning cache for GGUF: {e}")
+
         try:
+            tokenizer_kwargs = {"trust_remote_code": True}
+            if gguf_file:
+                tokenizer_kwargs["gguf_file"] = gguf_file
+
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
-                trust_remote_code=True,
+                **tokenizer_kwargs
             )
             if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -60,6 +79,9 @@ class TextLLMPlanner:
                 "low_cpu_mem_usage": True,
                 "torch_dtype": dtype,
             }
+            if gguf_file:
+                model_kwargs["gguf_file"] = gguf_file
+
             if torch.cuda.is_available():
                 model_kwargs["device_map"] = "auto"
 

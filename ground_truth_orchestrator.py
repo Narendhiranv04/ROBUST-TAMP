@@ -1708,6 +1708,18 @@ class PDDLPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
                 target_obj.set_pose(pose_lock)
                 step_and_record(self.pr, 1)
 
+        # ── Anti-Snag Ghost Mode ──
+        if target_obj is not None:
+            try:
+                if hasattr(target_obj, 'set_model_dynamic'):
+                    target_obj.set_model_dynamic(False)
+                    target_obj.set_model_respondable(False)
+                else:
+                    target_obj.set_dynamic(False)
+                    target_obj.set_respondable(False)
+            except Exception:
+                pass
+
         if reverse_descent_place:
             print("[Place] Ascending using reverse lower_traj.")
             execute_trajectory(self.env, descent_traj[::-1])
@@ -1739,6 +1751,18 @@ class PDDLPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
             else:
                 for seg in segments[release_idx + 1:]:
                     execute_trajectory(self.env, seg)
+
+        if target_obj is not None:
+            try:
+                if hasattr(target_obj, 'set_model_respondable'):
+                    target_obj.set_model_respondable(True)
+                    target_obj.set_model_dynamic(True)
+                else:
+                    target_obj.set_respondable(True)
+                    target_obj.set_dynamic(True)
+            except Exception:
+                pass
+
         return True, "place"
 
     def _pick_box(self):
@@ -1812,6 +1836,18 @@ class PDDLPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
                 target_obj.set_pose(pose_lock)
                 step_and_record(self.pr, 1)
 
+        # ── Anti-Snag Ghost Mode ──
+        if target_obj is not None:
+            try:
+                if hasattr(target_obj, 'set_model_dynamic'):
+                    target_obj.set_model_dynamic(False)
+                    target_obj.set_model_respondable(False)
+                else:
+                    target_obj.set_dynamic(False)
+                    target_obj.set_respondable(False)
+            except Exception:
+                pass
+
         if reverse_descent_place:
             print("[Place] Ascending using reverse lower_traj.")
             execute_trajectory(self.env, lower_traj[::-1])
@@ -1841,6 +1877,17 @@ class PDDLPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
                     execute_trajectory(self.env, [current_q] + lift_traj)
             except Exception:
                 execute_trajectory(self.env, [current_q] + lift_traj)
+
+        if target_obj is not None:
+            try:
+                if hasattr(target_obj, 'set_model_respondable'):
+                    target_obj.set_model_respondable(True)
+                    target_obj.set_model_dynamic(True)
+                else:
+                    target_obj.set_respondable(True)
+                    target_obj.set_dynamic(True)
+            except Exception:
+                pass
 
         if (not reverse_descent_place) and home_traj is not None and len(home_traj) > 0:
             execute_trajectory(self.env, home_traj)
@@ -2216,6 +2263,18 @@ class CupboardPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
         )
         if not released_ok:
             return False, f"'{self.object_name}' is still attached after release attempts."
+
+        # ── Anti-Snag Ghost Mode ──
+        if self.mug is not None:
+            try:
+                if hasattr(self.mug, 'set_model_dynamic'):
+                    self.mug.set_model_dynamic(False)
+                    self.mug.set_model_respondable(False)
+                else:
+                    self.mug.set_dynamic(False)
+                    self.mug.set_respondable(False)
+            except Exception:
+                pass
 
         if _uses_reverse_descent_place(self.target_region) and self.place_lower_traj:
             print("[Place] Ascending using reverse lower_traj.")

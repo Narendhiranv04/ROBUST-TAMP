@@ -7,10 +7,10 @@ def _bounds(x0, y0, z0, x1, y1, z1):
     return np.array((x0, y0, z0)), np.array((x1, y1, z1))
 
 
-def test_box_lid_top_beats_box_storage_and_table() -> None:
+def test_box_lid_top_beats_inside_box_and_table() -> None:
     region_map = {
         'table': _bounds(-1, -1, 0.0, 1, 1, 0.05),
-        'box_storage': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.25),
+        'inside_box': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.25),
         'box_lid_top': _bounds(-0.2, -0.2, 0.30, 0.2, 0.2, 0.32),
     }
 
@@ -19,25 +19,25 @@ def test_box_lid_top_beats_box_storage_and_table() -> None:
     assert region == 'box_lid_top'
 
 
-def test_cupboard_lower_handles_nearby_lower_shelf_objects() -> None:
+def test_cupboard_shelf_handles_nearby_lower_shelf_objects() -> None:
     region_map = {
-        'cupboard_lower': _bounds(0.45, -0.15, 0.35, 0.85, 0.15, 0.38),
+        'cupboard_shelf': _bounds(0.45, -0.15, 0.35, 0.85, 0.15, 0.38),
     }
 
     region, _ = resolve_region((0.4, 0.0, 0.45), region_map)
 
-    assert region == 'cupboard_lower'
+    assert region == 'cupboard_shelf'
 
 
-def test_groceries_boundary_beats_table() -> None:
+def test_pantry_area_beats_table() -> None:
     region_map = {
         'table': _bounds(-1, -1, 0.0, 1, 1, 0.05),
-        'groceries_boundary': _bounds(0.2, 0.2, 0.05, 0.6, 0.6, 0.06),
+        'pantry_area': _bounds(0.2, 0.2, 0.05, 0.6, 0.6, 0.06),
     }
 
     region, _ = resolve_region((0.4, 0.4, 0.12), region_map)
 
-    assert region == 'groceries_boundary'
+    assert region == 'pantry_area'
 
 
 def test_inside_grill_beats_table_for_meat() -> None:
@@ -52,15 +52,15 @@ def test_inside_grill_beats_table_for_meat() -> None:
     assert description == 'inside grill'
 
 
-def test_plate_top_beats_plate_boundary_for_meat() -> None:
+def test_plate_top_beats_serving_area_for_meat() -> None:
     region_map = {
-        'plate_boundary': _bounds(-0.2, -0.2, 0.02, 0.2, 0.2, 0.04),
-        'plate-top': _bounds(-0.15, -0.15, 0.05, 0.15, 0.15, 0.06),
+        'serving_area': _bounds(-0.2, -0.2, 0.02, 0.2, 0.2, 0.04),
+        'plate_top': _bounds(-0.15, -0.15, 0.05, 0.15, 0.15, 0.06),
     }
 
     region, description = resolve_region((0.0, 0.0, 0.10), region_map)
 
-    assert region == 'plate-top'
+    assert region == 'plate_top'
     assert description == 'on plate'
 
 
@@ -79,7 +79,7 @@ def test_prep_area_beats_table_for_raw_meat() -> None:
 def test_box_fallback_used_only_when_primary_absent() -> None:
     fallback_only = {
         'table': _bounds(-1, -1, 0.0, 1, 1, 0.05),
-        'box_storage': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.25),
+        'inside_box': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.25),
     }
     with_primary = {
         **fallback_only,
@@ -91,11 +91,11 @@ def test_box_fallback_used_only_when_primary_absent() -> None:
 
 def test_resolve_object_regions_returns_maps() -> None:
     pose_map = {'mug3': (0.6, 0.0, 0.45)}
-    region_map = {'cupboard_lower': _bounds(0.45, -0.15, 0.35, 0.85, 0.15, 0.38)}
+    region_map = {'cupboard_shelf': _bounds(0.45, -0.15, 0.35, 0.85, 0.15, 0.38)}
 
     object_region_map, descriptions = resolve_object_regions(pose_map, region_map)
 
-    assert object_region_map == {'mug3': 'cupboard_lower'}
+    assert object_region_map == {'mug3': 'cupboard_shelf'}
     assert descriptions['mug3'] == 'on lower cupboard shelf'
 
 

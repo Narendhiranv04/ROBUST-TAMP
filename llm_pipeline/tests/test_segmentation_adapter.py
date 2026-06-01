@@ -13,7 +13,7 @@ class FakeDetector:
             3: 'box_lid',
             50: 'panda_leftfinger_visual',
             101: 'box_boundary',
-            102: 'placement_boundary',
+            102: 'table_target_area',
         }
         self.handle_to_task_name = {
             1: 'mug2',
@@ -22,7 +22,7 @@ class FakeDetector:
         }
         self.handle_to_region_name = {
             101: 'box_boundary',
-            102: 'placement_boundary',
+            102: 'table_target_area',
         }
         self.current_visible = set()
         self.newly_detected = set()
@@ -101,8 +101,8 @@ def test_segmentation_adapter_fuses_mask_regions_and_discovery() -> None:
 
     assert first_snapshot.visible_objects == ['mug2']
     assert first_snapshot.newly_visible_objects == ['mug2']
-    assert first_snapshot.visible_regions == ['box_storage']
-    assert first_snapshot.object_evidence['mug2'].mask_regions == ['box_storage']
+    assert first_snapshot.visible_regions == ['inside_box']
+    assert first_snapshot.object_evidence['mug2'].mask_regions == ['inside_box']
     assert first_snapshot.object_evidence['mug2'].camera_hits == ['overhead']
     assert first_snapshot.object_evidence['mug2'].gripper_proximity is not None
 
@@ -111,13 +111,13 @@ def test_segmentation_adapter_fuses_mask_regions_and_discovery() -> None:
     second_mask[3:5, 4:6] = 3
     detector.current_visible = {'box_lid'}
     detector.newly_detected = {'box_lid'}
-    detector.current_regions = {'placement_boundary'}
+    detector.current_regions = {'table_target_area'}
     detector.camera_hits = {'box_lid': ['wrist']}
     detector.pixel_totals = {'box_lid': 4}
-    detector.object_region_membership = {'box_lid': ['placement_boundary']}
+    detector.object_region_membership = {'box_lid': ['table_target_area']}
     second_snapshot = adapter.capture_snapshot({'wrist': second_mask})
 
-    assert second_snapshot.object_evidence['box_lid'].mask_regions == ['placement_boundary']
+    assert second_snapshot.object_evidence['box_lid'].mask_regions == ['table_target_area']
     assert second_snapshot.newly_visible_objects == ['box_lid']
     assert adapter.is_lid_open(second_snapshot) is True
     assert adapter.blocking_objects_for_lid(first_snapshot) == ['mug2']
@@ -153,13 +153,13 @@ def test_segmentation_adapter_refreshes_direct_detector_and_live_view_methods() 
     visibility = adapter.refresh_visibility(event='initial')
     assert visibility['visible_objects'] == ['mug2', 'box_lid']
     assert visibility['newly_visible_objects'] == ['mug2']
-    assert visibility['visible_regions'] == ['box_storage']
+    assert visibility['visible_regions'] == ['inside_box']
 
     detected = adapter.update_live_segmentation_view()
     assert detected == {'mug2', 'box_lid'}
     assert adapter.viewer.updated == 1
 
-    adapter.set_live_action_sequence(['pick(mug2)', 'place(mug2, placement_boundary)'], current_action_index=0, current_action_label='pick(mug2)')
+    adapter.set_live_action_sequence(['pick(mug2)', 'place(mug2, table_target_area)'], current_action_index=0, current_action_label='pick(mug2)')
     assert adapter.viewer.actions[-1] == ('current', 0, 'pick(mug2)')
 
     adapter.shutdown()

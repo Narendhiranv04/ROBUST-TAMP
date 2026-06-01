@@ -13,7 +13,7 @@ from llm_pipeline.pipeline_types import (
     FailureStage,
     SegmentationSnapshot,
 )
-from llm_pipeline.region_aliases import normalize_region_name, regions_match_for_target
+from llm_pipeline.region_aliases import normalize_region_name, regions_match_for_target, scene_object_for_region
 
 
 LAYER_1_FAILURE_IDS = frozenset({
@@ -450,14 +450,15 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
         if action.action_name == 'place':
             obj_name, region_name = action.args
             region_name = normalize_region_name(region_name)
-            region_pose = detector.get_object_pose(region_name)
+            scene_name = scene_object_for_region(region_name)
+            region_pose = detector.get_object_pose(scene_name)
             if not region_pose:
                  return FailureEvent(
                     failure_id='geometric_discovery_fail',
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.GEOMETRY,
                     action=str(action),
-                    evidence={'region_name': region_name},
+                    evidence={'region_name': region_name, 'scene_name': scene_name},
                     failure_layer=FailureLayer.LAYER_1,
                     message=f'Cannot place in {region_name}: Target region pose could not be resolved.'
                 )
@@ -493,10 +494,14 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
             detector = getattr(self.adapter, 'detector', None)
             if detector:
                 obj_pose = detector.get_object_pose(obj_name)
-                region_pose = detector.get_object_pose(region_name)
+                scene_name = scene_object_for_region(region_name)
+                region_pose = detector.get_object_pose(scene_name)
                 
                 if obj_pose and region_pose:
-                    is_contained = self.reasoner.is_contained_3d(obj_pose, region_name, region_pose)
+                    is_contained = self.reasoner.is_contained_3d(
+                        obj_pose, region_name, region_pose,
+                        detector=detector, scene_name=scene_name,
+                    )
                     if not is_contained:
                         return FailureEvent(
                             failure_id='geometric_placement_failed',

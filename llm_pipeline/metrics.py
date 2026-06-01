@@ -17,10 +17,10 @@ GROCERY_OBJECTS = {'soup', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
 GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
 PLATE_OBJECTS = {'plate'}
-BOX_REGIONS = {'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
-PLACEMENT_REGIONS = {'placement_boundary'}
-CUPBOARD_REGIONS = {'cupboard_lower', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard', 'groceries_boundary'}
-PLATE_REGIONS = {'plate', 'plate-top', 'plate_top', 'plate_boundary', 'plate_boundary_top'}
+BOX_REGIONS = {'inside_box', 'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
+PLACEMENT_REGIONS = {'table_target_area', 'placement_boundary'}
+CUPBOARD_REGIONS = {'cupboard_shelf', 'cupboard_lower', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard'}
+PLATE_REGIONS = {'plate', 'plate-top', 'plate_top', 'plate_boundary', 'serving_area'}
 GRILL_REGIONS = {'inside_grill', 'grill', 'grill-top', 'grill_top', 'grill_boundary'}
 TABLE_REGIONS = {'table', 'prep_area'}
 
@@ -49,11 +49,11 @@ def _normalize_region(region: Optional[str]) -> str:
     if token in BOX_REGIONS:
         return BOX_STORAGE_REGION
     if token in PLACEMENT_REGIONS:
-        return 'placement_boundary'
+        return 'table_target_area'
     if token in CUPBOARD_REGIONS:
-        return 'cupboard_lower'
+        return 'cupboard_shelf'
     if token in PLATE_REGIONS:
-        return 'plate'
+        return 'serving_area'
     if token in GRILL_REGIONS:
         return 'inside_grill'
     if token in TABLE_REGIONS:
@@ -78,15 +78,15 @@ def parse_action_string(action: Any) -> Optional[Dict[str, Any]]:
 def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
     obj = _normalize_token(object_name)
     region = _normalize_region(region_name)
-    if obj in MUG_OBJECTS and region in {'placement_boundary', 'table'}:
+    if obj in MUG_OBJECTS and region in {'table_target_area', 'table'}:
         return 'mug_to_placement'
     if obj in MUG_OBJECTS and region == BOX_STORAGE_REGION:
         return 'mug_to_box'
-    if obj in GROCERY_OBJECTS and region == 'cupboard_lower':
+    if obj in GROCERY_OBJECTS and region == 'cupboard_shelf':
         return 'grocery_to_cupboard'
-    if obj in PLATE_OBJECTS and region == 'plate':
+    if obj in PLATE_OBJECTS and region == 'serving_area':
         return 'plate_to_boundary'
-    if obj in MEAT_OBJECTS and region == 'plate':
+    if obj in MEAT_OBJECTS and region == 'serving_area':
         return 'meat_to_plate'
     if obj in MEAT_OBJECTS and region == 'inside_grill':
         return 'meat_to_grill'

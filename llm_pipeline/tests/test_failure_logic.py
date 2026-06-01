@@ -68,7 +68,7 @@ def _snapshot(object_evidence, newly_visible=None, visible_regions=None, object_
         newly_visible_objects=list(newly_visible or []),
         object_evidence=object_evidence,
         gripper_evidence={},
-        supported_regions=['table', 'placement_boundary', 'cupboard_lower', 'box_storage'],
+        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
         visible_regions=list(visible_regions or []),
         object_region_map=dict(object_region_map or {}),
     )
@@ -114,13 +114,13 @@ def test_precheck_blocks_inside_grill_place_when_lid_closed() -> None:
 def test_postcheck_flags_bad_place_region() -> None:
     snapshot = _snapshot(
         {
-            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['cupboard_lower']),
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['cupboard_shelf']),
         },
-        visible_regions=['cupboard_lower'],
-        object_region_map={'mug2': 'cupboard_lower'},
+        visible_regions=['cupboard_shelf'],
+        object_region_map={'mug2': 'cupboard_shelf'},
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug2', 'placement_boundary')),
+        DirectAction('place', ('mug2', 'table_target_area')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -182,7 +182,7 @@ def test_postcheck_flags_object_dropped_when_placed_object_not_visible() -> None
         },
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug2', 'placement_boundary')),
+        DirectAction('place', ('mug2', 'table_target_area')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -199,26 +199,26 @@ def test_postcheck_uses_geometric_region_instead_of_mask_regions() -> None:
             'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['table']),
         },
         visible_regions=['table'],
-        object_region_map={'mug2': 'box_storage'},
+        object_region_map={'mug2': 'inside_box'},
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug2', 'box_storage')),
+        DirectAction('place', ('mug2', 'inside_box')),
         held_object=None,
         snapshot=snapshot,
     )
     assert failure is None
 
 
-def test_postcheck_accepts_gt_table_area_for_placement_boundary() -> None:
+def test_postcheck_accepts_gt_table_area_for_table_target_area() -> None:
     snapshot = _snapshot(
         {
-            'mug3': SegmentationObjectEvidence(name='mug3', visible=True, mask_regions=['groceries_boundary']),
+            'mug3': SegmentationObjectEvidence(name='mug3', visible=True, mask_regions=['pantry_area']),
         },
-        visible_regions=['groceries_boundary'],
-        object_region_map={'mug3': 'groceries_boundary'},
+        visible_regions=['pantry_area'],
+        object_region_map={'mug3': 'pantry_area'},
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug3', 'placement_boundary')),
+        DirectAction('place', ('mug3', 'table_target_area')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -228,11 +228,11 @@ def test_postcheck_accepts_gt_table_area_for_placement_boundary() -> None:
 def test_postcheck_triggers_replan_for_new_visibility() -> None:
     snapshot = _snapshot(
         {
-            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['placement_boundary']),
-            'mug4': SegmentationObjectEvidence(name='mug4', visible=True, mask_regions=['box_storage']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['table_target_area']),
+            'mug4': SegmentationObjectEvidence(name='mug4', visible=True, mask_regions=['inside_box']),
         },
         newly_visible=['mug4'],
-        visible_regions=['placement_boundary', 'box_storage'],
+        visible_regions=['table_target_area', 'inside_box'],
     )
     failure = checker.postcheck(DirectAction('open', ('box_lid',)), held_object=None, snapshot=snapshot)
     assert failure is not None
@@ -291,9 +291,9 @@ def test_postcheck_flags_lid_not_closed_enough() -> None:
     open_lid_checker = SegmentationFirstFailureChecker(adapter=OpenLidAdapter(), env=None)
     snapshot = _snapshot(
         {
-            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['placement_boundary']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['table_target_area']),
         },
-        visible_regions=['placement_boundary'],
+        visible_regions=['table_target_area'],
     )
     failure = open_lid_checker.postcheck(DirectAction('close', ('box_lid',)), held_object=None, snapshot=snapshot)
     assert failure is not None
@@ -314,13 +314,13 @@ def test_geometric_postcheck_trusts_resolved_object_region_map() -> None:
     geometric_checker = GeometricFailureChecker(adapter=FakeGeometricAdapter(), env=None)
     snapshot = _snapshot(
         {
-            'sugar': SegmentationObjectEvidence(name='sugar', visible=True, mask_regions=['cupboard_lower']),
+            'sugar': SegmentationObjectEvidence(name='sugar', visible=True, mask_regions=['cupboard_shelf']),
         },
-        visible_regions=['cupboard_lower'],
-        object_region_map={'sugar': 'cupboard_lower'},
+        visible_regions=['cupboard_shelf'],
+        object_region_map={'sugar': 'cupboard_shelf'},
     )
     failure = geometric_checker.postcheck(
-        DirectAction('place', ('sugar', 'cupboard_lower')),
+        DirectAction('place', ('sugar', 'cupboard_shelf')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -337,7 +337,7 @@ def test_geometric_postcheck_flags_failed_containment() -> None:
         object_region_map={'mug2': 'table'},
     )
     failure = geometric_checker.postcheck(
-        DirectAction('place', ('mug2', 'box_storage')),
+        DirectAction('place', ('mug2', 'inside_box')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -350,8 +350,8 @@ def test_geometric_postcheck_flags_failed_containment() -> None:
 
 def test_runtime_validation_failure_maps_to_layer_2() -> None:
     failure = checker.classify_runtime_error(
-        DirectAction('place', ('mug2', 'placement_boundary')),
-        "Object 'mug2' not in target region 'placement_boundary'",
+        DirectAction('place', ('mug2', 'table_target_area')),
+        "Object 'mug2' not in target region 'table_target_area'",
     )
     assert failure.failure_id == 'placement_failed'
     assert failure.failure_layer == FailureLayer.LAYER_2
@@ -374,7 +374,7 @@ def test_runtime_error_maps_layer_2_validation_failures() -> None:
             message = case
             expected = 'lid_not_open_enough' if 'open' in case else 'lid_not_closed_enough'
         failure = checker.classify_runtime_error(
-            DirectAction('place', ('mug2', 'placement_boundary')),
+            DirectAction('place', ('mug2', 'table_target_area')),
             message,
         )
         assert failure.failure_id == expected

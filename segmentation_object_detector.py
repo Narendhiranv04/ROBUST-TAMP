@@ -395,6 +395,15 @@ class SegmentationObjectDetector:
         obj = self.env.get_object(obj_name)
         if obj:
             return tuple(obj.get_pose())
+        # Fallback: check env.regions (uses RegionAliasMap which handles both
+        # old scene names and new canonical names)
+        regions = getattr(self.env, 'regions', {}) or {}
+        region_obj = regions.get(obj_name)
+        if region_obj is not None:
+            try:
+                return tuple(region_obj.get_pose())
+            except Exception:
+                pass
         return None
 
     def get_bounding_box(self, scene_name):

@@ -41,7 +41,7 @@ def derive_grill_semantic_facts(
         elif object_name == "plate":
             if region_name == "dish_rack":
                 facts.append("plate_at_dish_rack")
-            elif region_name == "plate_boundary":
+            elif region_name == "serving_area":
                 facts.append("plate_at_boundary")
 
     return facts

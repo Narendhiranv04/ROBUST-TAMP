@@ -369,10 +369,12 @@ class RLBenchKitchenEnv:
         
         # Sample x and y within world bounds (with padding)
         padding = 0.05
-        
+        if region_name == "inside_box":
+            padding = 0.12  # 12cm padding for inside_box to prevent wall collisions
+            
         # Ensure padding doesn't invert the range
-        if (w_max_x - w_min_x) < 2*padding: padding = 0
-        if (w_max_y - w_min_y) < 2*padding: padding = 0
+        if (w_max_x - w_min_x) < 2*padding: padding = (w_max_x - w_min_x) / 3.0
+        if (w_max_y - w_min_y) < 2*padding: padding = (w_max_y - w_min_y) / 3.0
         
         current_pose = obj.get_pose()
         try:
@@ -996,11 +998,11 @@ class RLBenchKitchenEnv:
                                           1.0 - 2.0 * (qy * qy + qz * qz))
                      yaw_offsets = [0.0, np.pi/8, -np.pi/8, np.pi/4, -np.pi/4]
                      primary = [obj_yaw + d for d in yaw_offsets]
-                     fallback = list(np.linspace(0, 2*np.pi, 24, endpoint=False))
+                     fallback = list(np.linspace(0, 2*np.pi, 16, endpoint=False))
                      angles = primary + fallback
                  else:
                      # Legacy behavior
-                     angles = np.linspace(0, 2*np.pi, 32)
+                     angles = np.linspace(0, 2*np.pi, 16)
 
             for angle in angles:
                 q = quaternion_from_euler(np.pi, 0, angle)
@@ -1014,8 +1016,6 @@ class RLBenchKitchenEnv:
                     (0.0, 0.0),
                     (0.01, 0.0), (-0.01, 0.0),
                     (0.0, 0.01), (0.0, -0.01),
-                    (0.015, 0.015), (-0.015, 0.015),
-                    (0.015, -0.015), (-0.015, -0.015),
                 ]
             else:
                 xy_offsets = [(0.0, 0.0)]
@@ -1033,17 +1033,17 @@ class RLBenchKitchenEnv:
                 for dx, dy in xy_offsets:
                     if in_box_region:
                         target_pos = [live_pos[0], live_pos[1], target_z]
-                        hover_pos = [live_pos[0], live_pos[1], live_pos[2] + 0.40]
+                        hover_pos = [live_pos[0], live_pos[1], live_pos[2] + 0.15] # Changed from 0.40 to 0.15 to avoid kinematic limits
                     else:
                         target_pos = [base_x + dx, base_y + dy, target_z]
-                        hover_pos = [target_pos[0], target_pos[1], target_pos[2] + 0.25]
+                        hover_pos = [target_pos[0], target_pos[1], target_pos[2] + 0.10] # Changed from 0.25 to 0.10
                     # Keep approach strictly vertical in Cartesian space.
 
                     for i, grasp_rot in enumerate(grasp_quats):
                         try:
                             # A. Solve IK for Grasp Pose
                             path_configs = self.robot.solve_ik_via_sampling(
-                                target_pos, quaternion=grasp_rot, max_configs=20, max_time_ms=300, ignore_collisions=True
+                                target_pos, quaternion=grasp_rot, max_configs=5, max_time_ms=50, ignore_collisions=True
                             )
                             if path_configs is None or len(path_configs) == 0:
                                 continue
@@ -1051,7 +1051,7 @@ class RLBenchKitchenEnv:
 
                             # B. Solve IK for Hover Pose
                             path_configs_hover = self.robot.solve_ik_via_sampling(
-                                hover_pos, quaternion=grasp_rot, max_configs=20, max_time_ms=300, ignore_collisions=True
+                                hover_pos, quaternion=grasp_rot, max_configs=5, max_time_ms=50, ignore_collisions=True
                             )
                             if path_configs_hover is None or len(path_configs_hover) == 0:
                                 continue

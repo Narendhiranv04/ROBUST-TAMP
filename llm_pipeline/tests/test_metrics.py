@@ -4,7 +4,7 @@ from llm_pipeline.metrics import collapse_actions_to_subtasks, parse_action_stri
 def test_open_action_counts_in_completion_metrics() -> None:
     actions = [
         'pick(mug2)',
-        'place(mug2, placement_boundary)',
+        'place(mug2, table_target_area)',
         'open(box_lid)',
     ]
     assert collapse_actions_to_subtasks(actions) == ['mug_to_placement', 'open_lid']
@@ -19,7 +19,7 @@ def test_legacy_and_canonical_box_regions_count_as_mug_to_box() -> None:
         'pick(mug2)',
         'place(mug2, box_boundary)',
         'pick(mug3)',
-        'place(mug3, box_storage)',
+        'place(mug3, inside_box)',
     ]) == ['mug_to_box', 'mug_to_box']
 
 
@@ -32,10 +32,10 @@ def test_grill_actions_count_in_completion_metrics() -> None:
         'place(chicken, inside_grill)',
         'close(grill_lid)',
         'pick(plate)',
-        'place(plate, plate_boundary)',
+        'place(plate, serving_area)',
         'open(grill_lid)',
         'pick(chicken)',
-        'place(chicken, plate-top)',
+        'place(chicken, plate_top)',
     ]
 
     completion = score_variant_completion('G1', actions)

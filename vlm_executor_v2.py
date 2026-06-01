@@ -533,6 +533,10 @@ class VLMExecutorV2:
 
                 target_obj = env.get_object(o)
                 env.gripper.release()
+                try:
+                    target_obj.set_parent(None)
+                except Exception:
+                    pass
                 target_obj.set_dynamic(True)
 
                 hold_q = env.get_robot_conf()
@@ -541,9 +545,72 @@ class VLMExecutorV2:
                     env.set_robot_conf(hold_q)
                     self._step_sim()
 
+                # ── Physical gripper verification ──
+                still_grasped = env.gripper.get_grasped_objects()
+                if still_grasped:
+                    print(f"[ExecutorV2] WARNING: gripper still holding {[str(g.get_name()) for g in still_grasped]} after release — forcing re-release")
+                    env.gripper.release()
+                    env.gripper.actuate(1.0, velocity=0.4)
+                    for _ in range(90):
+                        env.set_robot_conf(hold_q)
+                        self._step_sim()
+                    still_grasped = env.gripper.get_grasped_objects()
+                    if still_grasped:
+                        print(f"[ExecutorV2] ERROR: object stuck in gripper after forced re-release")
+                        return False, f'Place failed: {o} is still stuck in the gripper'
+
+                # Record expected object position from the place pose
+                expected_z = float(p[2]) if hasattr(p, '__getitem__') and len(p) >= 3 else None
+
                 if len(segments) > release_idx + 1:
+                    # ── Anti-Snag Ghost Mode ──
+                    if target_obj is not None:
+                        try:
+                            if hasattr(target_obj, 'set_model_dynamic'):
+                                target_obj.set_model_dynamic(False)
+                                target_obj.set_model_respondable(False)
+                            else:
+                                target_obj.set_dynamic(False)
+                                target_obj.set_respondable(False)
+                        except Exception:
+                            pass
+                            
                     for seg in segments[release_idx + 1:]:
                         self._execute_trajectory(seg)
+                        
+                    if target_obj is not None:
+                        try:
+                            if hasattr(target_obj, 'set_model_respondable'):
+                                target_obj.set_model_respondable(True)
+                                target_obj.set_model_dynamic(True)
+                            else:
+                                target_obj.set_respondable(True)
+                                target_obj.set_dynamic(True)
+                        except Exception:
+                            pass
+
+                # ── Post-retreat snagging check ──
+                if target_obj is not None and expected_z is not None:
+                    try:
+                        actual_pos = target_obj.get_position()
+                        z_drift = float(actual_pos[2]) - expected_z
+                        if z_drift > 0.04:
+                            print(f"[ExecutorV2] WARNING: {o} was dragged upward during retreat "
+                                  f"(z_drift={z_drift:.3f}m) — forcing release and letting it settle")
+                            env.gripper.release()
+                            env.gripper.actuate(1.0, velocity=0.4)
+                            target_obj.set_dynamic(True)
+                            for _ in range(120):
+                                self._step_sim()
+                            
+                            # Check again if it dropped
+                            actual_pos = target_obj.get_position()
+                            final_z_drift = float(actual_pos[2]) - expected_z
+                            if final_z_drift > 0.04:
+                                print(f"[ExecutorV2] ERROR: {o} is completely wedged in the gripper (z_drift={final_z_drift:.3f}m) after forced release.")
+                                return False, f'Place failed: {o} is physically wedged in the gripper and did not drop'
+                    except Exception:
+                        pass
 
         return True, "Success"
     

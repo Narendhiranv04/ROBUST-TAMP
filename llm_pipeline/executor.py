@@ -25,6 +25,7 @@ from llm_pipeline.region_aliases import (
     BOX_STORAGE_REGION,
     CUPBOARD_TARGET_REGIONS,
     normalize_region_name,
+    scene_object_for_region,
 )
 from llm_pipeline.grill_geometry import derive_grill_semantic_facts, infer_grill_lid_open
 from vlm_pipeline.vlm_executor_v2 import (
@@ -104,7 +105,7 @@ class KitchenBundlingHandler(AbstractBundlingHandler):
     def create_transfer_executor(self, p_action: DirectAction, pl_action: DirectAction):
         obj_name = p_action.args[0]
         target_region = normalize_region_name(pl_action.args[1])
-        gt_target_region = target_region
+        gt_target_region = scene_object_for_region(target_region)
         print(f"[KITCHEN-BUNDLE] --- Starting GT Transfer Ritual: {obj_name} -> {target_region} ---")
         self.executor.go_home()
 
@@ -443,6 +444,12 @@ class UnifiedActionBundler:
                 for sub_stage in sub_stages:
                     ok, msg = gt_executor.execute_next(requested_action=sub_stage)
                     if not ok:
+                        # If the GT place primitive fails (e.g., geometric bounds check), 
+                        # the physical object has already been released. We must clear the held_object state.
+                        if stage_action.action_name == 'place' and sub_stage == 'place':
+                            held_object = None
+                            self.executor.held_object = None
+
                         failure = self._runtime_failure(
                             stage_action,
                             msg,
@@ -1051,6 +1058,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                     error_message=(failure.message if failure is not None else error_message),
                 )
 
+            previous_held = self.held_object
             if action.action_name == 'pick':
                 self.held_object = action.args[0]
                 print(f'[EXEC] Holding: {self.held_object}')
@@ -1063,7 +1071,11 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                 post_failure = failure_checker.postcheck(action, self.held_object, post_snapshot)
             if post_failure is not None:
                 if action.action_name == 'pick':
-                    self.held_object = None
+                    # Restore the held state since the pick geometrically failed
+                    self.held_object = previous_held
+                # If a place action fails geometrically, the physical object was still dropped,
+                # so we do NOT restore self.held_object to previous_held.
+
                 print(f'[EXEC] POST-CHECK FAILED: {post_failure.message}')
                 self.last_failure_event = post_failure
                 return PrimitiveExecutionOutcome(
@@ -1318,8 +1330,24 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             for _ in range(10):
                 self._step_sim()
             env.gripper.grasp(target_obj)
+
+            # ── Physical grasp verification ──
+            # Check the gripper actually grabbed the object before lifting.
+            grasped_objs = env.gripper.get_grasped_objects()
+            grasped_names = [str(g.get_name()) for g in grasped_objs] if grasped_objs else []
+            if not grasped_objs:
+                print(f"[Executor] WARNING: gripper.grasp({o}) called but get_grasped_objects() is empty — grasp failed")
+                return False, f'Pick failed: gripper did not physically grasp {o}'
+
             for seg in segments[grasp_idx + 1:]:
                 self._execute_trajectory(seg)
+
+            # ── Post-lift verification ──
+            # The object may have slipped out during the lift trajectory.
+            grasped_after_lift = env.gripper.get_grasped_objects()
+            if not grasped_after_lift:
+                print(f"[Executor] WARNING: {o} slipped out of gripper during lift trajectory")
+                return False, f'Pick failed: {o} fell out of gripper during lift'
                 
             # RETRACT TO HOME (GT Ritual)
             self.go_home()
@@ -1380,15 +1408,89 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                 self._execute_trajectory(seg)
             target_obj = env.get_object(o)
             env.gripper.release()
+            try:
+                target_obj.set_parent(None)
+            except Exception:
+                pass
             target_obj.set_dynamic(True)
             hold_q = env.get_robot_conf()
             env.gripper.actuate(1.0, velocity=0.2)
             for _ in range(60):
                 env.set_robot_conf(hold_q)
                 self._step_sim()
+
+            # ── Physical gripper verification ──
+            # Check that the object actually left the gripper before retreating.
+            still_grasped = env.gripper.get_grasped_objects()
+            if still_grasped:
+                print(f"[Executor] WARNING: gripper still holding {[str(g.get_name()) for g in still_grasped]} after release — forcing re-release")
+                env.gripper.release()
+                env.gripper.actuate(1.0, velocity=0.4)
+                for _ in range(90):
+                    env.set_robot_conf(hold_q)
+                    self._step_sim()
+                still_grasped = env.gripper.get_grasped_objects()
+                if still_grasped:
+                    print(f"[Executor] ERROR: object stuck in gripper after forced re-release")
+                    return False, f'Place failed: {o} is still stuck in the gripper'
+
+            # Record expected object position from the place pose
+            expected_z = float(p[2]) if hasattr(p, '__getitem__') and len(p) >= 3 else None
+
             if len(segments) > release_idx + 1:
+                # ── Anti-Snag Ghost Mode ──
+                # Temporarily freeze the object and disable its collisions so the
+                # retracting gripper passes cleanly through it without snagging.
+                if target_obj is not None:
+                    try:
+                        if hasattr(target_obj, 'set_model_dynamic'):
+                            target_obj.set_model_dynamic(False)
+                            target_obj.set_model_respondable(False)
+                        else:
+                            target_obj.set_dynamic(False)
+                            target_obj.set_respondable(False)
+                    except Exception:
+                        pass
+                
                 for seg in segments[release_idx + 1:]:
                     self._execute_trajectory(seg)
+                    
+                if target_obj is not None:
+                    try:
+                        if hasattr(target_obj, 'set_model_respondable'):
+                            target_obj.set_model_respondable(True)
+                            target_obj.set_model_dynamic(True)
+                        else:
+                            target_obj.set_respondable(True)
+                            target_obj.set_dynamic(True)
+                    except Exception:
+                        pass
+
+            # ── Post-retreat snagging check ──
+            # The retreat trajectory goes straight back up through the mug's
+            # position. Even with gripper "open", friction/contact can drag the
+            # object upward. Detect this by comparing current Z to expected Z.
+            if target_obj is not None and expected_z is not None:
+                try:
+                    actual_pos = target_obj.get_position()
+                    z_drift = float(actual_pos[2]) - expected_z
+                    if z_drift > 0.04:  # object lifted > 4cm from place height
+                        print(f"[Executor] WARNING: {o} was dragged upward during retreat "
+                              f"(z_drift={z_drift:.3f}m) — forcing release and letting it settle")
+                        env.gripper.release()
+                        env.gripper.actuate(1.0, velocity=0.4)
+                        target_obj.set_dynamic(True)
+                        for _ in range(120):
+                            self._step_sim()
+                        
+                        # Check again if it dropped
+                        actual_pos = target_obj.get_position()
+                        final_z_drift = float(actual_pos[2]) - expected_z
+                        if final_z_drift > 0.04:
+                            print(f"[Executor] ERROR: {o} is completely wedged in the gripper (z_drift={final_z_drift:.3f}m) after forced release.")
+                            return False, f'Place failed: {o} is physically wedged in the gripper and did not drop'
+                except Exception:
+                    pass
             
             # RETRACT TO HOME (GT Ritual)
             self.go_home()
