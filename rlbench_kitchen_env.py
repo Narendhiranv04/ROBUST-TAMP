@@ -1728,6 +1728,62 @@ class RLBenchKitchenEnv:
              place_z = rz + r_min_z + 0.005
         
         original_pose = list(obj.get_pose())
+
+        def _collect_region_obstacles():
+            obstacles = []
+            region_pad_xy = float(os.environ.get("PLACEMENT_OBSTACLE_REGION_PAD_XY", "0.06"))
+            region_pad_z = float(os.environ.get("PLACEMENT_OBSTACLE_REGION_PAD_Z", "0.12"))
+            for name, other in getattr(self, "name_to_obj", {}).items():
+                if other is None or other == obj:
+                    continue
+                lname = str(name).lower()
+                if any(tag in lname for tag in ("boundary", "table", "cupboard", "box_base", "box_lid")):
+                    continue
+                try:
+                    omin_x, omax_x, omin_y, omax_y, omin_z, omax_z = self._get_world_bounding_box(other)
+                except Exception:
+                    continue
+                overlaps_region = (
+                    omax_x >= (world_min_x - region_pad_xy)
+                    and omin_x <= (world_max_x + region_pad_xy)
+                    and omax_y >= (world_min_y - region_pad_xy)
+                    and omin_y <= (world_max_y + region_pad_xy)
+                    and omax_z >= (rz + r_min_z - region_pad_z)
+                    and omin_z <= (rz + r_max_z + region_pad_z)
+                )
+                if overlaps_region:
+                    obstacles.append((lname, (omin_x, omax_x, omin_y, omax_y)))
+            return obstacles
+
+        obstacle_boxes = _collect_region_obstacles()
+
+        try:
+            omin_x, omax_x, omin_y, omax_y, _, _ = obj.get_bounding_box()
+            obj_half_x = max(0.01, 0.5 * abs(omax_x - omin_x))
+            obj_half_y = max(0.01, 0.5 * abs(omax_y - omin_y))
+        except Exception:
+            obj_half_x = 0.025
+            obj_half_y = 0.025
+
+        def _violates_obstacle_keepout(sample_x, sample_y):
+            # Keep-out buffers are intentionally conservative to avoid "place in front and shove" failures.
+            keepout_xy = float(os.environ.get("PLACEMENT_OBSTACLE_KEEP_OUT_XY", "0.045"))
+            keepout_xy_cupboard = float(os.environ.get("PLACEMENT_OBSTACLE_KEEP_OUT_XY_CUPBOARD", "0.065"))
+            x_axis_bias_cupboard = float(os.environ.get("PLACEMENT_OBSTACLE_KEEP_OUT_X_BIAS_CUPBOARD", "0.03"))
+            keepout = keepout_xy_cupboard if region_name in CUPBOARD_TARGET_REGIONS else keepout_xy
+            for _lname, (omin_x, omax_x, omin_y, omax_y) in obstacle_boxes:
+                half_x = 0.5 * abs(omax_x - omin_x)
+                half_y = 0.5 * abs(omax_y - omin_y)
+                dx = abs(sample_x - 0.5 * (omin_x + omax_x))
+                dy = abs(sample_y - 0.5 * (omin_y + omax_y))
+                min_dx = obj_half_x + half_x + keepout
+                min_dy = obj_half_y + half_y + keepout
+                if region_name in CUPBOARD_TARGET_REGIONS:
+                    # Cupboard placements slide along +X during insertion; give extra X clearance.
+                    min_dx += x_axis_bias_cupboard
+                if dx < min_dx and dy < min_dy:
+                    return True
+            return False
         
         # Minimum distance between placed objects
         MIN_PLACEMENT_DIST = 0.06  # 6cm apart
@@ -1757,6 +1813,8 @@ class RLBenchKitchenEnv:
             
             # Try each deterministic slot
             for sample_x, sample_y in candidate_positions:
+                if _violates_obstacle_keepout(sample_x, sample_y):
+                    continue
                 too_close = False
                 for placed_pos in self.placed_positions:
                     dist = np.sqrt((sample_x - placed_pos[0])**2 + (sample_y - placed_pos[1])**2)
@@ -1785,6 +1843,8 @@ class RLBenchKitchenEnv:
             for _ in range(count):
                 sample_x = np.random.uniform(search_min_x, search_max_x)
                 sample_y = np.random.uniform(search_min_y, search_max_y)
+                if _violates_obstacle_keepout(sample_x, sample_y):
+                    continue
                 
                 # Check if too close to previously placed objects
                 too_close = False

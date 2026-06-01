@@ -35,6 +35,20 @@ def test_accepts_numbered_output_by_stripping_prefixes() -> None:
     assert [str(action) for action in actions][-1] == 'place(mug2, inside_box)'
 
 
+def test_accepts_no_actions_terminal_token() -> None:
+    actions = parser.parse('NO_ACTIONS')
+    assert actions == []
+
+
+def test_rejects_mixed_no_actions_and_actions() -> None:
+    try:
+        parser.parse('NO_ACTIONS\npick(mug2)')
+    except StrictParseError as exc:
+        assert 'NO_ACTIONS cannot be mixed' in str(exc)
+    else:
+        raise AssertionError('Expected mixed NO_ACTIONS and actions to fail strict parsing')
+
+
 def test_rejects_orphan_place() -> None:
     try:
         parser.parse('place(mug2, table_target_area)')
@@ -71,5 +85,4 @@ def test_rejects_alias_names_and_missing_terminal_place() -> None:
         assert exc.failure_id == 'missing_post_pick_place'
     else:
         raise AssertionError('Expected missing post-pick place to fail strict parsing')
-
 

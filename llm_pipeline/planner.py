@@ -152,12 +152,35 @@ class TextLLMPlanner:
                 inference_time=0.0,
                 reason=reason or "Goal is not complete.",
             )
+
+        # Tolerant parsing: some reasoning models ignore the one-line contract
+        # and put the token after a short explanation or a </think> block.
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for line in lines:
+            cleaned = line.lstrip("-*0123456789. )").strip()
+            upper_line = cleaned.upper()
+            if "GOAL_INCOMPLETE" in upper_line:
+                reason = cleaned.split(":", 1)[1].strip() if ":" in cleaned else "Goal is not complete."
+                return GoalCheckResult(
+                    success=True,
+                    goal_satisfied=False,
+                    raw_output=raw_output,
+                    inference_time=0.0,
+                    reason=reason or "Goal is not complete.",
+                )
+            if "GOAL_COMPLETE" in upper_line:
+                return GoalCheckResult(
+                    success=True,
+                    goal_satisfied=True,
+                    raw_output=raw_output,
+                    inference_time=0.0,
+                )
         return GoalCheckResult(
             success=False,
             goal_satisfied=False,
             raw_output=raw_output,
             inference_time=0.0,
-            error_message="Goal check output must start with GOAL_COMPLETE or GOAL_INCOMPLETE.",
+            error_message="Goal check output must include GOAL_COMPLETE or GOAL_INCOMPLETE.",
         )
 
     def _build_prompt_text(self, system_prompt: str, user_prompt: str) -> str:

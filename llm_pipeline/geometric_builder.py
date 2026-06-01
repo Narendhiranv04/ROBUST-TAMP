@@ -209,6 +209,7 @@ class GeometricContextBuilder(BaseContextBuilder):
         lines.append('Use only object names and target regions listed above.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
         lines.append('Return one action per line, with no numbering, prose, markdown, or commentary.')
+        lines.append('If the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS')
         lines.append('')
         lines.append('### Actions')
         for action_name in actions:

@@ -1,6 +1,6 @@
 from llm_pipeline.executor import PrimitiveExecutionOutcome
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
-from llm_pipeline.planner import MockTextLLMPlanner
+from llm_pipeline.planner import MockTextLLMPlanner, TextLLMPlanner
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import (
     FailureEvent,
@@ -109,6 +109,26 @@ class GoalCheckingQueuePlanner(QueuePlanner):
             raw_output=raw_output,
             inference_time=0.01,
             reason=raw_output.split(':', 1)[1].strip(),
+        )
+
+
+class GoalCheckParseFailurePlanner(QueuePlanner):
+    def check_goal_completion(
+        self,
+        system_prompt,
+        user_prompt,
+        icl_mode,
+        max_new_tokens=64,
+        temperature=0.0,
+        held_object=None,
+    ):
+        del system_prompt, user_prompt, icl_mode, max_new_tokens, temperature, held_object
+        return GoalCheckResult(
+            success=False,
+            goal_satisfied=False,
+            raw_output='I think it is done, but I forgot the required token.',
+            inference_time=0.01,
+            error_message='Goal check output must include GOAL_COMPLETE or GOAL_INCOMPLETE.',
         )
 
 
@@ -309,6 +329,63 @@ def _snapshot() -> SegmentationSnapshot:
     )
 
 
+def _kitchen_snapshot_with_grocery_in_box() -> SegmentationSnapshot:
+    return SegmentationSnapshot(
+        frame_index=1,
+        visible_objects=['mug2', 'mug3', 'can_of_beans', 'spam', 'box_lid'],
+        newly_visible_objects=[],
+        object_evidence={
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['inside_box']),
+            'mug3': SegmentationObjectEvidence(name='mug3', visible=True, mask_regions=['inside_box']),
+            'can_of_beans': SegmentationObjectEvidence(name='can_of_beans', visible=True, mask_regions=['inside_box']),
+            'spam': SegmentationObjectEvidence(name='spam', visible=True, mask_regions=['cupboard_shelf']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
+        },
+        gripper_evidence={},
+        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        visible_regions=['inside_box', 'cupboard_shelf'],
+        object_region_map={
+            'mug2': 'inside_box',
+            'mug3': 'inside_box',
+            'can_of_beans': 'inside_box',
+            'spam': 'cupboard_shelf',
+        },
+        object_region_descriptions={
+            'mug2': 'inside the box',
+            'mug3': 'inside the box',
+            'can_of_beans': 'inside the box',
+            'spam': 'on lower cupboard shelf',
+        },
+    )
+
+
+def _kitchen_snapshot_missing_required_mug() -> SegmentationSnapshot:
+    return SegmentationSnapshot(
+        frame_index=1,
+        visible_objects=['mug2', 'can_of_beans', 'spam', 'box_lid'],
+        newly_visible_objects=[],
+        object_evidence={
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['inside_box']),
+            'can_of_beans': SegmentationObjectEvidence(name='can_of_beans', visible=True, mask_regions=['cupboard_shelf']),
+            'spam': SegmentationObjectEvidence(name='spam', visible=True, mask_regions=['cupboard_shelf']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
+        },
+        gripper_evidence={},
+        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        visible_regions=['inside_box', 'cupboard_shelf'],
+        object_region_map={
+            'mug2': 'inside_box',
+            'can_of_beans': 'cupboard_shelf',
+            'spam': 'cupboard_shelf',
+        },
+        object_region_descriptions={
+            'mug2': 'inside the box',
+            'can_of_beans': 'on lower cupboard shelf',
+            'spam': 'on lower cupboard shelf',
+        },
+    )
+
+
 def test_pipeline_replans_with_previous_direct_actions() -> None:
     planner = QueuePlanner([
         'pick(mug2)\nplace(mug2, table_target_area)',
@@ -389,6 +466,122 @@ def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
     assert summary['cycles'][1]['failure_event']['failure_id'] == 'goal_not_satisfied'
     assert summary['cycles'][1]['goal_check']['reason'] == 'box_lid still needs to be opened'
     assert 'Goal check failed' in planner.requests[2]['user_prompt']
+
+
+def test_pipeline_allows_no_actions_when_goal_already_satisfied() -> None:
+    planner = GoalCheckingQueuePlanner(
+        ['NO_ACTIONS'],
+        ['GOAL_COMPLETE'],
+    )
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=1),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    summary = pipeline.run('Move mug2 to table_target_area and open the lid.')
+
+    assert summary['success'] is True
+    assert summary['completed_actions'] == []
+    assert summary['last_goal_check']['goal_satisfied'] is True
+    assert executor.calls == []
+
+
+def test_pipeline_stops_when_no_actions_follows_goal_check_format_failure() -> None:
+    planner = GoalCheckParseFailurePlanner([
+        'pick(mug2)\nplace(mug2, table_target_area)',
+        'place(mug2, table_target_area)',
+        'NO_ACTIONS',
+    ])
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=3),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    summary = pipeline.run('Move mug2 to table_target_area.')
+
+    assert summary['success'] is True
+    assert summary['failure_reason'] is None
+    assert summary['total_cycles'] == 3
+    assert summary['cycles'][1]['failure_event']['failure_id'] == 'goal_not_satisfied'
+    assert summary['cycles'][2]['planned_actions'] == []
+
+
+def test_no_actions_does_not_succeed_when_scene_state_goal_is_incomplete() -> None:
+    planner = QueuePlanner(['NO_ACTIONS'])
+    snapshot = _kitchen_snapshot_with_grocery_in_box()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=0),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    summary = pipeline.run('move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box')
+
+    assert summary['success'] is False
+    assert summary['last_goal_check']['goal_satisfied'] is False
+    assert 'can_of_beans is in inside_box' in summary['last_goal_check']['reason']
+    assert summary['last_failure_event']['failure_id'] == 'goal_not_satisfied'
+
+
+def test_no_actions_does_not_succeed_when_required_k1_object_is_missing() -> None:
+    planner = QueuePlanner(['NO_ACTIONS'])
+    snapshot = _kitchen_snapshot_missing_required_mug()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-llm',
+            icl_mode='zero_shot',
+            max_replans=0,
+            scene_path='task1_variation1.ttt',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    summary = pipeline.run('move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box')
+
+    assert summary['success'] is False
+    assert summary['last_goal_check']['goal_satisfied'] is False
+    assert 'mug3 is not visible in the scene state' in summary['last_goal_check']['reason']
+
+
+def test_goal_check_parser_accepts_token_after_reasoning() -> None:
+    planner = TextLLMPlanner(model_name='mock-llm', model_alias='mock-llm')
+    result = planner._parse_goal_check_output(
+        'The objects appear to be in the correct regions.\n'
+        '</think>\n\n'
+        'GOAL_COMPLETE'
+    )
+
+    assert result.success is True
+    assert result.goal_satisfied is True
 
 
 def test_initialize_holds_startup_lid_pose_during_settle() -> None:

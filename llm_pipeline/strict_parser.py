@@ -53,6 +53,19 @@ class StrictActionParser:
         if not lines:
             raise StrictParseError('Planner output is empty')
 
+        # Explicit terminal token when the current state already satisfies the goal.
+        terminal_lines = {
+            re.sub(r'^[-*]\s+|^\d+[.)]\s*', '', line).strip().upper()
+            for line in lines
+        }
+        if 'NO_ACTIONS' in terminal_lines:
+            if len(terminal_lines) > 1:
+                raise StrictParseError(
+                    "NO_ACTIONS cannot be mixed with executable actions.",
+                    failure_id='unknown_action_token',
+                )
+            return []
+
         actions: List[DirectAction] = []
         holding: Optional[str] = held_object
 
