@@ -808,7 +808,7 @@ class VLMOrchestrator:
         # Available objects and regions
         self.available_objects = [
             'mug1', 'mug2', 'mug3', 'mug4',
-            'soup', 'mustard', 'spam', 'sugar', 'crackers',
+            'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers',
             'box_lid'
         ]
         self.available_regions = [

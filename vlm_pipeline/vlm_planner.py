@@ -106,12 +106,15 @@ class VLMPlanner:
     # at runtime from the segmentation-derived prompt bundle.
     KNOWN_OBJECTS = {
         'mug1', 'mug2', 'mug3', 'mug4',
-        'soup', 'mustard', 'spam', 'sugar', 'crackers', 'box_lid'
+        'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers', 'box_lid',
+        'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2', 'plate', 'grill_lid'
     }
     
     KNOWN_REGIONS = {
         'table', 'box_boundary', 'placement_boundary',
-        'cupboard_boundary', 'cupboard_boundary_top', 'groceries_boundary'
+        'cupboard_boundary', 'cupboard_boundary_top', 'groceries_boundary',
+        'inside_box', 'table_target_area', 'cupboard_shelf', 'pantry_area',
+        'inside_grill', 'plate_top', 'serving_area', 'prep_area', 'dish_rack'
     }
     
     def __init__(self, 
@@ -891,8 +894,8 @@ class MockVLMPlanner(VLMPlanner):
                     ActionSkeleton('place', ('mug4', 'placement_boundary')),
                     ActionSkeleton('pick', ('mug3',)),
                     ActionSkeleton('place', ('mug3', 'placement_boundary')),
-                    ActionSkeleton('pick', ('soup',)),
-                    ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+                    ActionSkeleton('pick', ('can_of_beans',)),
+                    ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
                     ActionSkeleton('pick', ('mustard',)),
                     ActionSkeleton('place', ('mustard', 'cupboard_boundary')),
                     ActionSkeleton('pick', ('spam',)),
@@ -919,8 +922,8 @@ class MockVLMPlanner(VLMPlanner):
                     ActionSkeleton('open-lid', ('box_lid',)),
                     ActionSkeleton('pick', ('mug4',)),
                     ActionSkeleton('place', ('mug4', 'placement_boundary')),
-                    ActionSkeleton('pick', ('soup',)),
-                    ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+                    ActionSkeleton('pick', ('can_of_beans',)),
+                    ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
                 ]
         
         # =====================================================================
@@ -964,10 +967,10 @@ class MockVLMPlanner(VLMPlanner):
             ]
         
         # Soup to cupboard
-        elif 'soup' in goal_lower and 'cupboard' in goal_lower:
+        elif 'can_of_beans' in goal_lower and 'cupboard' in goal_lower:
             skeleton = [
-                ActionSkeleton('pick', ('soup',)),
-                ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+                ActionSkeleton('pick', ('can_of_beans',)),
+                ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
             ]
         
         # Default - give complete task
@@ -978,8 +981,8 @@ class MockVLMPlanner(VLMPlanner):
                 ActionSkeleton('open-lid', ('box_lid',)),
                 ActionSkeleton('pick', ('mug4',)),
                 ActionSkeleton('place', ('mug4', 'placement_boundary')),
-                ActionSkeleton('pick', ('soup',)),
-                ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+                ActionSkeleton('pick', ('can_of_beans',)),
+                ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
             ]
         
         raw_output = "\n".join([f"{i+1}. {a}" for i, a in enumerate(skeleton)])
@@ -1024,8 +1027,8 @@ def test_parser():
 - open_lid(box_lid)""",
         
         """The robot should:
-pick(soup)
-then place(soup, cupboard_boundary)"""
+pick(can_of_beans)
+then place(can_of_beans, cupboard_boundary)"""
     ]
     
     for text in test_texts:

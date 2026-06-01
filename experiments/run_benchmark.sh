@@ -23,7 +23,7 @@ cd "$SCRIPT_DIR"
 NUM_SEEDS=10
 RUN_EXP1=true
 RUN_EXP2=true
-OBJECT="soup"
+OBJECT="can_of_beans"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do

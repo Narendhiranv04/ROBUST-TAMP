@@ -132,7 +132,7 @@ def main():
         env.pr.step()
     
     # Test object
-    test_obj = 'soup'
+    test_obj = 'can_of_beans'
     
     print("\n" + "-" * 60)
     print(f"Test object: {test_obj}")

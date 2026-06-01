@@ -14,9 +14,10 @@ class _FakeResponse:
 
 
 class _FakeRequests:
-    def __init__(self, health_payload, plan_payload):
+    def __init__(self, health_payload, plan_payload, goal_check_payload=None):
         self.health_payload = health_payload
         self.plan_payload = plan_payload
+        self.goal_check_payload = goal_check_payload or {}
         self.get_calls = []
         self.post_calls = []
 
@@ -32,6 +33,8 @@ class _FakeRequests:
         self.post_calls.append((url, json, timeout))
         if url.endswith('/plan'):
             return _FakeResponse(payload=self.plan_payload)
+        if url.endswith('/check-goal'):
+            return _FakeResponse(payload=self.goal_check_payload)
         return _FakeResponse(status_code=404, text='not found')
 
 
@@ -173,6 +176,42 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
             'place(mug2, table_target_area)',
         ]
         assert fake_requests.post_calls[0][1]['held_object'] == 'mug2'
+    finally:
+        client_module.requests = old_requests
+        client_module.HAS_REQUESTS = old_has_requests
+
+
+def test_remote_planner_checks_goal_completion() -> None:
+    fake_requests = _FakeRequests(
+        health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen', 'model_name': 'qwen', 'model_type': 'llm', 'prompt_mode': 'text_visible', 'gpu_available': True},
+        plan_payload={},
+        goal_check_payload={
+            'success': True,
+            'goal_satisfied': False,
+            'raw_output': 'GOAL_INCOMPLETE: one mug remains outside the box',
+            'inference_time': 0.05,
+            'reason': 'one mug remains outside the box',
+            'error_message': None,
+        },
+    )
+    old_requests = client_module.requests
+    old_has_requests = client_module.HAS_REQUESTS
+    client_module.requests = fake_requests
+    client_module.HAS_REQUESTS = True
+    try:
+        planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
+        result = planner.check_goal_completion(
+            system_prompt='system',
+            user_prompt='user',
+            icl_mode='zero_shot',
+            held_object=None,
+        )
+
+        assert result.success is True
+        assert result.goal_satisfied is False
+        assert result.reason == 'one mug remains outside the box'
+        assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/check-goal'
+        assert fake_requests.post_calls[0][1]['max_new_tokens'] == 64
     finally:
         client_module.requests = old_requests
         client_module.HAS_REQUESTS = old_has_requests

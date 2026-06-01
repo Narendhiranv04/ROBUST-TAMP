@@ -289,7 +289,7 @@ class DemoReplanningPipeline:
         # when mug_cupboard is still inside (check on PICK, not place)
         if action.action_name == 'pick':
             obj = action.args[0]
-            groceries = ['soup', 'mustard', 'spam']  # These go to cupboard_boundary
+            groceries = ['can_of_beans', 'mustard', 'spam']  # These go to cupboard_boundary
             
             if obj in groceries:
                 # Check if mug_cupboard has been moved
@@ -337,7 +337,7 @@ class DemoReplanningPipeline:
         # INITIAL PLAN (deliberately wrong - doesn't account for blockers)
         # ================================================================
         # sugar/crackers go to TOP SHELF first (will succeed)
-        # Then soup to cupboard_boundary (will FAIL - mug_cupboard blocks)
+        # Then can_of_beans to cupboard_boundary (will FAIL - mug_cupboard blocks)
         # Note: mug_inside_box is NOT in this plan (unknown until lid opens)
         
         initial_plan = [
@@ -346,9 +346,9 @@ class DemoReplanningPipeline:
             ActionSkeleton('place', ('sugar', 'cupboard_boundary_top')),
             ActionSkeleton('pick', ('crackers',)),
             ActionSkeleton('place', ('crackers', 'cupboard_boundary_top')),
-            # Then try groceries for cupboard_boundary - WILL FAIL at pick(soup)
-            ActionSkeleton('pick', ('soup',)),
-            ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+            # Then try groceries for cupboard_boundary - WILL FAIL at pick(can_of_beans)
+            ActionSkeleton('pick', ('can_of_beans',)),
+            ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
             ActionSkeleton('pick', ('mustard',)),
             ActionSkeleton('place', ('mustard', 'cupboard_boundary')),
             ActionSkeleton('pick', ('spam',)),
@@ -393,8 +393,8 @@ class DemoReplanningPipeline:
                 ActionSkeleton('place', ('mug_cupboard', 'placement_boundary')),
                 # Then continue with remaining groceries (soup, mustard, spam)
                 # Note: sugar and crackers already done in initial plan
-                ActionSkeleton('pick', ('soup',)),
-                ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+                ActionSkeleton('pick', ('can_of_beans',)),
+                ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
                 ActionSkeleton('pick', ('mustard',)),
                 ActionSkeleton('place', ('mustard', 'cupboard_boundary')),
                 ActionSkeleton('pick', ('spam',)),

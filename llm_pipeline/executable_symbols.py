@@ -19,7 +19,7 @@ DEFAULT_OBJECT_ORDER: Tuple[str, ...] = (
     "mug2",
     "mug3",
     "mug4",
-    "soup",
+    "can_of_beans",
     "mustard",
     "spam",
     "sugar",

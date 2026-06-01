@@ -37,8 +37,8 @@ GROUND_TRUTH_ACTIONS = [
     ('open-lid', 'box_lid'),
     ('pick', 'mug_inside_box'),
     ('place', 'mug_inside_box', 'placement_boundary'),
-    ('pick', 'soup'),
-    ('place', 'soup', 'cupboard_boundary'),
+    ('pick', 'can_of_beans'),
+    ('place', 'can_of_beans', 'cupboard_boundary'),
 ]
 
 GROUND_TRUTH_SEQUENCE = [
@@ -47,8 +47,8 @@ GROUND_TRUTH_SEQUENCE = [
     'open-lid(box_lid)',
     'pick(mug_inside_box)',
     'place(mug_inside_box, placement_boundary)',
-    'pick(soup)',
-    'place(soup, cupboard_boundary)',
+    'pick(can_of_beans)',
+    'place(can_of_beans, cupboard_boundary)',
 ]
 
 
@@ -205,7 +205,7 @@ class Experiment4:
             goal = """Move mug_box to placement_boundary.
 Open the box lid.
 Move mug_inside_box to placement_boundary.
-Move soup to cupboard_boundary."""
+Move can_of_beans to cupboard_boundary."""
             
             # Create prompt bundle
             bundle = aggregator.create_prompt_bundle_offline(goal)
@@ -288,7 +288,7 @@ Move soup to cupboard_boundary."""
             goal = """Move mug_box to placement_boundary.
 Open the box lid.
 Move mug_inside_box to placement_boundary.
-Move soup to cupboard_boundary."""
+Move can_of_beans to cupboard_boundary."""
             
             # Run pipeline
             start_time = time.time()

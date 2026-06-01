@@ -98,15 +98,18 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'pick(mug2)' not in system_prompt
     assert 'CURRENT SEGMENTATION SNAPSHOT:' in user_prompt
     assert 'REGION MEANINGS:' in user_prompt
-    assert 'table_target_area: the primary destination area on the table; ALWAYS place objects here when moving them to the table' in user_prompt
-    assert 'inside_box: inside-box storage target' in user_prompt
+    assert 'table_target_area: specific target area on the table for objects that should be moved onto the table' in user_prompt
+    assert 'inside_box: interior storage area of the box for objects that should be put inside the box' in user_prompt
     assert 'VISIBLE OBJECT EVIDENCE:' in user_prompt
     assert 'COMPACT SEGMENTATION SUMMARY:' in user_prompt
+    assert 'ACCESS CONSTRAINTS:' in user_prompt
+    assert 'inside_box is BLOCKED until open(box_lid) is completed' in user_prompt
     assert 'PREVIOUS ACTIONS (already executed, do not repeat):' in user_prompt
     assert 'pick(mug2)' in user_prompt
     assert 'FAILURE CONTEXT:' in user_prompt
     assert 'available_actions=pick, place, open, close, wait' in user_prompt or 'available_actions=' in user_prompt
     assert 'Executable action formats for this run:' in user_prompt
+    assert 'Respect ACCESS CONSTRAINTS' in user_prompt
     assert 'open(box_lid)' in user_prompt
     assert 'Return executable action lines only.' in user_prompt
     assert 'state_text' not in user_prompt
@@ -127,7 +130,8 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     system_prompt = bundle.system_prompt
     assert 'SHARED FEW-SHOT EXEMPLAR' not in system_prompt
     assert 'Valid action lines:' not in system_prompt
-    assert 'EXECUTABLE ACTION SEQUENCE' in system_prompt
+    assert 'Output raw executable action lines only' in system_prompt
+    assert 'EXECUTABLE ACTION SEQUENCE' not in system_prompt
     assert 'mug_box' not in system_prompt
 
 
@@ -151,3 +155,17 @@ def test_fallback_regions_are_hidden_from_llm_prompt() -> None:
 
     assert 'inside_box' in bundle.user_prompt
     assert 'cupboard_shelf' in bundle.user_prompt
+
+
+def test_prompt_marks_box_lid_obstruction_when_object_is_on_lid() -> None:
+    snapshot = _snapshot()
+    snapshot.object_region_map = {'mug2': 'box_lid_top'}
+    snapshot.object_region_descriptions = {'mug2': 'on top of the box lid'}
+
+    bundle = TextOnlyContextBuilder().build_bundle(
+        state=_state(snapshot),
+        goal_text='Move all mugs inside_box.',
+        icl_mode='zero_shot',
+    )
+
+    assert 'box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area' in bundle.user_prompt

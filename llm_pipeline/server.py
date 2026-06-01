@@ -73,6 +73,24 @@ class PlanResponse(BaseModel):
     failure_event: Optional[FailureEventResponse] = None
 
 
+class GoalCheckRequest(BaseModel):
+    system_prompt: str
+    user_prompt: str
+    icl_mode: str
+    max_new_tokens: int = 64
+    temperature: float = 0.0
+    held_object: Optional[str] = None
+
+
+class GoalCheckResponse(BaseModel):
+    success: bool
+    goal_satisfied: bool
+    raw_output: str
+    inference_time: float
+    reason: str = ''
+    error_message: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
@@ -127,6 +145,20 @@ class LLMServer:
             error_message=result.error_message,
             failure_event=self._encode_failure_event(result.failure_event),
         )
+
+    def check_goal_completion(self, request: GoalCheckRequest) -> GoalCheckResponse:
+        result = self.planner.check_goal_completion(
+            system_prompt=request.system_prompt,
+            user_prompt=request.user_prompt,
+            icl_mode=request.icl_mode,
+            max_new_tokens=request.max_new_tokens,
+            temperature=request.temperature,
+            held_object=request.held_object,
+        )
+        if hasattr(self.planner, 'get_debug_info'):
+            debug = self.planner.get_debug_info()
+            self.last_request_summary = debug.get('last_request', {})
+        return GoalCheckResponse(**result.to_dict())
 
     def _encode_failure_event(self, failure_event: Optional[FailureEvent]) -> Optional[FailureEventResponse]:
         if failure_event is None:
@@ -184,6 +216,12 @@ def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda'
             raise HTTPException(status_code=503, detail='Model not loaded')
         return server.generate_plan(request)
 
+    @app.post('/check-goal', response_model=GoalCheckResponse)
+    async def check_goal_completion(request: GoalCheckRequest):
+        if not server.loaded:
+            raise HTTPException(status_code=503, detail='Model not loaded')
+        return server.check_goal_completion(request)
+
     @app.get('/')
     async def root():
         return {
@@ -194,6 +232,7 @@ def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda'
             'endpoints': {
                 '/health': 'GET - Check server health',
                 '/plan': 'POST - Generate direct LLM action plan',
+                '/check-goal': 'POST - Verify whether the goal is complete',
                 '/debug/last-request': 'GET - Inspect last request',
             },
         }

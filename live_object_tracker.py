@@ -311,7 +311,7 @@ class LiveObjectTracker:
         name_lower = name.lower()
         if 'mug' in name_lower:
             return 'mug'
-        elif any(g in name_lower for g in ['soup', 'mustard', 'spam', 'sugar', 'crackers', 'cereal', 'bottle', 'can', 'tin', 'food']):
+        elif any(g in name_lower for g in ['can_of_beans', 'mustard', 'spam', 'sugar', 'crackers', 'cereal', 'bottle', 'can', 'tin', 'food']):
             return 'grocery'
         elif 'box' in name_lower or 'lid' in name_lower:
             return 'box'

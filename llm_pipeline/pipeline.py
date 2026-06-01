@@ -21,7 +21,8 @@ from llm_pipeline.region_aliases import scene_object_for_region
 from llm_pipeline.region_geometry import resolve_object_regions
 from llm_pipeline.grill_geometry import derive_grill_semantic_facts, infer_grill_lid_open
 from llm_pipeline.pipeline_types import (
-    DirectAction, FailureEvent, PlanResult, ICLMode, SceneState,
+    DirectAction, FailureEvent, FailureLayer, FailureSource, FailureStage,
+    GoalCheckResult, PlanResult, ICLMode, SceneState,
     BasePlanner, BaseContextBuilder
 )
 
@@ -64,6 +65,9 @@ class LLMPipelineConfig:
     task_family: str = 'kitchen'
     scene_path: str = ''
     scene_state_trace: bool = False
+    enable_goal_check: bool = True
+    goal_check_max_new_tokens: int = 128
+    goal_check_temperature: float = 0.0
     
     # NEW Multimodal & Prompting Flags
     enable_vision: bool = False
@@ -90,6 +94,7 @@ class ExecutionCycleRecord:
     success: bool = False
     error_message: Optional[str] = None
     failure_event: Optional[Dict[str, Any]] = None
+    goal_check: Optional[Dict[str, Any]] = None
     prompt_bundle: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -105,6 +110,7 @@ class ExecutionCycleRecord:
             'success': bool(self.success),
             'error_message': self.error_message,
             'failure_event': dict(self.failure_event) if self.failure_event else None,
+            'goal_check': dict(self.goal_check) if self.goal_check else None,
             'prompt_bundle': dict(self.prompt_bundle),
         }
 
@@ -460,6 +466,81 @@ class LLMOnlyReplanningPipeline:
         state._original_snapshot = snapshot
         return state
 
+    def _build_goal_check_prompts(self, goal_text: str) -> Tuple[str, str]:
+        state = self._build_scene_state()
+        bundle = self.context_builder.build_bundle(
+            state=state,
+            goal_text=goal_text,
+            failure_event=None,
+            previous_actions=list(getattr(self.executor, 'completed_primitive_actions', [])),
+            icl_mode=self.config.icl_mode,
+        )
+        current_state_text = bundle.user_prompt
+        for marker in ('### Output Contract', 'OUTPUT CONTRACT:'):
+            if marker in current_state_text:
+                current_state_text = current_state_text.split(marker, 1)[0].strip()
+
+        completed_actions = list(getattr(self.executor, 'completed_primitive_actions', []))
+        completed_text = '\n'.join(completed_actions) if completed_actions else '(none)'
+        system_prompt = (
+            'You are a strict robotic goal-completion verifier.\n'
+            'Decide whether the current scene state satisfies the goal.\n'
+            'Return exactly one line:\n'
+            'GOAL_COMPLETE\n'
+            'or\n'
+            'GOAL_INCOMPLETE: <short reason>\n'
+            'Do not propose actions. Do not include markdown, bullets, or extra text.'
+        )
+        user_prompt = (
+            f'{current_state_text}\n\n'
+            f'COMPLETED ACTIONS:\n{completed_text}\n\n'
+            f'GOAL:\n{goal_text}\n\n'
+            'Is the goal fully complete in the current state?'
+        )
+        return system_prompt, user_prompt
+
+    def _check_goal_completion(self, goal_text: str) -> GoalCheckResult:
+        checker = getattr(self.planner, 'check_goal_completion', None)
+        if not callable(checker):
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=True,
+                raw_output='GOAL_COMPLETE',
+                inference_time=0.0,
+                reason='goal_check_not_supported_by_planner',
+            )
+
+        system_prompt, user_prompt = self._build_goal_check_prompts(goal_text)
+        return checker(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            icl_mode=self.config.icl_mode,
+            max_new_tokens=self.config.goal_check_max_new_tokens,
+            temperature=self.config.goal_check_temperature,
+            held_object=getattr(self.executor, 'held_object', None),
+        )
+
+    def _goal_check_failure_event(self, goal_check: GoalCheckResult) -> FailureEvent:
+        reason = (
+            goal_check.reason
+            or goal_check.error_message
+            or 'The LLM goal-completion check reported that the goal is not complete.'
+        )
+        return FailureEvent(
+            failure_id='goal_not_satisfied',
+            stage=FailureStage.AFTER_EXECUTION,
+            source=FailureSource.GOAL_CHECK,
+            action=None,
+            evidence={
+                'raw_output': goal_check.raw_output,
+                'reason': goal_check.reason,
+                'error_message': goal_check.error_message,
+            },
+            failure_layer=FailureLayer.LAYER_2,
+            should_replan=True,
+            message=f'Goal check failed: {reason}',
+        )
+
     def run(self, goal_text: str) -> Dict[str, Any]:
         if self.env is None:
             raise RuntimeError('Pipeline is not initialized')
@@ -557,6 +638,22 @@ class LLMOnlyReplanningPipeline:
                 self.cycles.append(cycle)
 
                 if execution.success:
+                    if self.config.enable_goal_check:
+                        goal_check = self._check_goal_completion(goal_text)
+                        cycle.goal_check = goal_check.to_dict()
+                        if goal_check.success and goal_check.goal_satisfied:
+                            failure_reason = None
+                            break
+                        goal_failure = self._goal_check_failure_event(goal_check)
+                        cycle.success = False
+                        cycle.failure_event = goal_failure.to_dict()
+                        last_failure_event = goal_failure
+                        pending_failure = goal_failure
+                        failure_reason = goal_failure.message
+                        if len(self.cycles) > self.config.max_replans:
+                            break
+                        continue
+
                     failure_reason = None
                     break
 
@@ -593,10 +690,15 @@ class LLMOnlyReplanningPipeline:
             'remote_planner_url': self.config.remote_planner_url or None,
             'pre_action_checks_enabled': bool(self.config.pre_action_checks_enabled),
             'post_action_checks_enabled': bool(self.config.post_action_checks_enabled),
+            'goal_check_enabled': bool(self.config.enable_goal_check),
             'planned_actions': planned_actions,
             'completed_actions': completed_actions,
             'remaining_actions': remaining_actions,
             'held_object': held_object,
+            'last_goal_check': next(
+                (cycle.goal_check for cycle in reversed(self.cycles) if cycle.goal_check),
+                None,
+            ),
             'last_failure_event': last_failure_event.to_dict() if last_failure_event else None,
             'failure_reason': failure_reason,
             'total_cycles': len(self.cycles),
@@ -696,6 +798,7 @@ if __name__ == '__main__':
     parser.add_argument("--scene-path", default="", help="Scene path override")
     parser.add_argument("--no-live-masks", action="store_true", help="Disable the separate live segmentation window")
     parser.add_argument("--scene-state-trace", action="store_true", help="Print scene-state snapshots around execution checks")
+    parser.add_argument("--no-goal-check", action="store_true", help="Disable LLM goal-completion verification after each completed plan")
     parser.add_argument("--output", default="", help="Optional JSON output path")
     args = parser.parse_args()
 
@@ -749,6 +852,7 @@ if __name__ == '__main__':
         scene_path=scene_path,
         live_segmentation_view=not args.no_live_masks and not headless,
         scene_state_trace=args.scene_state_trace,
+        enable_goal_check=not args.no_goal_check,
         context_builder_type='geometric',
     )
     pipeline = LLMOnlyReplanningPipeline(config=config)

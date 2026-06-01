@@ -144,7 +144,7 @@ class SegmentationOrchestrator:
                 self.update_vision()
             
             # Task 2: Groceries (all visible)
-            groceries = ['soup', 'mustard', 'spam', 'sugar', 'crackers']
+            groceries = ['can_of_beans', 'mustard', 'spam', 'sugar', 'crackers']
             for item in groceries:
                 if item in visible:
                     dest = 'cupboard_boundary_top' if item in ['sugar', 'crackers'] else 'cupboard_boundary'

@@ -134,6 +134,26 @@ class GeometricContextBuilder(BaseContextBuilder):
             obs_lines.append("\n## Lid State:")
             for lid_name, is_open in lid_states.items():
                 obs_lines.append(f"- {lid_name}: {'OPEN' if is_open else 'CLOSED'}")
+            blocked_regions = []
+            box_lid_blockers = sorted(
+                obj_name
+                for obj_name, region_name in object_region_map.items()
+                if normalize_region_name(region_name) == 'box_lid_top'
+            )
+            if lid_states.get('box_lid') is False:
+                blocked_regions.append('inside_box is BLOCKED until open(box_lid) is completed')
+                if box_lid_blockers:
+                    blockers = ', '.join(box_lid_blockers)
+                    blocked_regions.append(
+                        f'box_lid is OBSTRUCTED by {blockers}; before open(box_lid), move '
+                        f'{blockers} to table_target_area'
+                    )
+            if lid_states.get('grill_lid') is False:
+                blocked_regions.append('inside_grill is BLOCKED until open(grill_lid) is completed')
+            if blocked_regions:
+                obs_lines.append("\n## Access Constraints:")
+                for constraint in blocked_regions:
+                    obs_lines.append(f"- {constraint}")
         
         # Use the pre-computed pddl_state if available
         if state.pddl_state:
@@ -187,6 +207,7 @@ class GeometricContextBuilder(BaseContextBuilder):
         lines = ['### Output Contract']
         lines.append('Choose the action order needed to satisfy the goal from the current state.')
         lines.append('Use only object names and target regions listed above.')
+        lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
         lines.append('Return one action per line, with no numbering, prose, markdown, or commentary.')
         lines.append('')
         lines.append('### Actions')

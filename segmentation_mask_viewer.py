@@ -174,7 +174,7 @@ class SegmentationMaskViewer:
         """
         # Keywords that indicate task-relevant objects
         interesting_keywords = [
-            'mug', 'soup', 'mustard', 'spam', 'sugar', 'crackers', 
+            'mug', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers', 
             'box', 'cupboard', 'table', 'bottle', 'can', 'food',
             'grocery', 'lid', 'boundary', 'placement'
         ]

@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover
     requests = None
 
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
-from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, PlanResult
+from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
 
 
 class RemoteTextLLMPlanner:
@@ -181,6 +181,56 @@ class RemoteTextLLMPlanner:
             return PlanResult(
                 success=False,
                 actions=[],
+                raw_output='',
+                inference_time=time.time() - started_at,
+                error_message=str(exc),
+            )
+
+    def check_goal_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 64,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> GoalCheckResult:
+        started_at = time.time()
+        request_data = {
+            'system_prompt': system_prompt,
+            'user_prompt': user_prompt,
+            'icl_mode': icl_mode,
+            'max_new_tokens': int(max_new_tokens),
+            'temperature': float(temperature),
+            'held_object': held_object,
+        }
+        try:
+            response = requests.post(
+                f'{self.server_url}/check-goal',
+                json=request_data,
+                timeout=self.request_timeout_s,
+            )
+            if response.status_code != 200:
+                return GoalCheckResult(
+                    success=False,
+                    goal_satisfied=False,
+                    raw_output='',
+                    inference_time=time.time() - started_at,
+                    error_message=f'Server error: {response.status_code} - {response.text}',
+                )
+            data = response.json()
+            return GoalCheckResult(
+                success=bool(data.get('success', False)),
+                goal_satisfied=bool(data.get('goal_satisfied', False)),
+                raw_output=data.get('raw_output', ''),
+                inference_time=float(data.get('inference_time', time.time() - started_at)),
+                reason=data.get('reason', '') or '',
+                error_message=data.get('error_message'),
+            )
+        except Exception as exc:
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
                 raw_output='',
                 inference_time=time.time() - started_at,
                 error_message=str(exc),

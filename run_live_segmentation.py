@@ -233,7 +233,7 @@ class LiveSegmentationOrchestrator:
             
             # === TASK 2: Groceries ===
             groceries = [
-                ('soup', 'cupboard_boundary'),
+                ('can_of_beans', 'cupboard_boundary'),
                 ('mustard', 'cupboard_boundary'),
                 ('spam', 'cupboard_boundary'),
                 ('sugar', 'cupboard_boundary_top'),

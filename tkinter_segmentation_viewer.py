@@ -61,7 +61,7 @@ class TkinterSegmentationViewer:
 
         self.default_object_order = [
             "mug1", "mug2", "mug3", "mug4",
-            "soup", "mustard", "spam", "sugar", "crackers",
+            "can_of_beans", "mustard", "spam", "sugar", "crackers",
             "box_lid",
             "grill_lid", "plate",
             "steak", "steak1", "steak2", "steak3",

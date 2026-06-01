@@ -20,7 +20,7 @@ for i in $(seq 1 $TOTAL_RUNS); do
     RUN_LOG="baseline_logs/run_${i}.log"
     
     # Run with timeout to prevent hanging
-    timeout 350s python3 baseline_0_just_PDDL.py --runs 1 --object soup > "$RUN_LOG" 2>&1
+    timeout 350s python3 baseline_0_just_PDDL.py --runs 1 --object can_of_beans > "$RUN_LOG" 2>&1
     EXIT_CODE=$?
     
     # Check if "Result Episode 1: SUCCESS" is in the log

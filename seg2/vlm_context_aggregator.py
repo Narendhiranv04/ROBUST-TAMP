@@ -121,7 +121,7 @@ class VLMContextAggregator:
             'mug_inside_box': {'type': 'mug', 'scene_name': 'mug4'},
             'mug_table': {'type': 'mug', 'scene_name': 'mug1'},
             'mug_cupboard': {'type': 'mug', 'scene_name': 'mug3'},
-            'soup': {'type': 'can', 'scene_name': 'soup'},
+            'can_of_beans': {'type': 'can', 'scene_name': 'can_of_beans'},
             'mustard': {'type': 'bottle', 'scene_name': 'mustard'},
             'spam': {'type': 'tin', 'scene_name': 'spam'},
             'sugar': {'type': 'box', 'scene_name': 'sugar'},
@@ -870,7 +870,7 @@ def test_offline():
     
     aggregator = VLMContextAggregator()
     
-    goal = "Move mug_box and mug_inside_box to placement_boundary. Move soup to cupboard_boundary."
+    goal = "Move mug_box and mug_inside_box to placement_boundary. Move can_of_beans to cupboard_boundary."
     
     bundle = aggregator.create_prompt_bundle_offline(goal)
     

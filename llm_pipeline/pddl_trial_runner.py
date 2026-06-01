@@ -58,20 +58,20 @@ VARIANT_OBJECTS = {
 VARIANT_FINAL_REGION_GOALS = {
     "G1": (
         ("in-region", "spam", "table"),
-        ("in-region", "chicken", "plate-top"),
+        ("in-region", "chicken", "plate_top"),
         ("in-region", "plate", "plate_boundary"),
     ),
     "G2": (
-        ("in-region", "steak", "plate-top"),
-        ("in-region", "chicken", "plate-top"),
-        ("in-region", "steak1", "plate-top"),
+        ("in-region", "steak", "plate_top"),
+        ("in-region", "chicken", "plate_top"),
+        ("in-region", "steak1", "plate_top"),
         ("in-region", "plate", "plate_boundary"),
     ),
     "G3": (
         ("in-region", "spam", "table"),
-        ("in-region", "steak", "plate-top"),
-        ("in-region", "chicken", "plate-top"),
-        ("in-region", "steak1", "plate-top"),
+        ("in-region", "steak", "plate_top"),
+        ("in-region", "chicken", "plate_top"),
+        ("in-region", "steak1", "plate_top"),
         ("in-region", "plate", "plate_boundary"),
     ),
 }
@@ -93,7 +93,7 @@ VARIANT_RECIPE_PROXY_GOALS = {
 PLANNER_REGIONS = (
     "table",
     "grill-top",
-    "plate-top",
+    "plate_top",
     "plate_boundary",
     "dish_rack",
     "prep_area",

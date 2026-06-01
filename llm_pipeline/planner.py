@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
     torch = None
 
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
-from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, PlanResult
+from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
 
 
 class TextLLMPlanner:
@@ -110,13 +110,21 @@ class TextLLMPlanner:
             print(f"Error loading LLM '{self.model_name}': {exc}")
             return False
 
-    def _record_request(self, system_prompt: str, user_prompt: str, icl_mode: str, held_object: Optional[str]) -> None:
+    def _record_request(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        held_object: Optional[str],
+        request_type: str = "plan",
+    ) -> None:
         self.last_request_summary = {
             "timestamp": datetime.now().isoformat(),
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": "llm",
             "text_only": True,
+            "request_type": request_type,
             "icl_mode": icl_mode,
             "held_object": held_object,
             "system_prompt": system_prompt,
@@ -124,6 +132,33 @@ class TextLLMPlanner:
             "system_prompt_length": len(system_prompt),
             "user_prompt_length": len(user_prompt),
         }
+
+    def _parse_goal_check_output(self, raw_output: str) -> GoalCheckResult:
+        text = (raw_output or "").strip()
+        normalized = text.upper()
+        if normalized.startswith("GOAL_COMPLETE"):
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=True,
+                raw_output=raw_output,
+                inference_time=0.0,
+            )
+        if normalized.startswith("GOAL_INCOMPLETE"):
+            reason = text.split(":", 1)[1].strip() if ":" in text else "Goal is not complete."
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=False,
+                raw_output=raw_output,
+                inference_time=0.0,
+                reason=reason or "Goal is not complete.",
+            )
+        return GoalCheckResult(
+            success=False,
+            goal_satisfied=False,
+            raw_output=raw_output,
+            inference_time=0.0,
+            error_message="Goal check output must start with GOAL_COMPLETE or GOAL_INCOMPLETE.",
+        )
 
     def _build_prompt_text(self, system_prompt: str, user_prompt: str) -> str:
         if hasattr(self.tokenizer, "apply_chat_template"):
@@ -239,6 +274,41 @@ class TextLLMPlanner:
                 error_message=str(exc),
             )
 
+    def check_goal_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 64,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> GoalCheckResult:
+        if not self.loaded:
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
+                raw_output="",
+                inference_time=0.0,
+                error_message="Model not loaded.",
+            )
+
+        started_at = time.time()
+        self._record_request(system_prompt, user_prompt, icl_mode, held_object, request_type="goal_check")
+        try:
+            prompt_text = self._build_prompt_text(system_prompt, user_prompt)
+            raw_output = self._decode_generation(prompt_text, max_new_tokens=max_new_tokens, temperature=temperature)
+            result = self._parse_goal_check_output(raw_output)
+            result.inference_time = time.time() - started_at
+            return result
+        except Exception as exc:  # pragma: no cover - model/runtime dependent
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
+                raw_output="",
+                inference_time=time.time() - started_at,
+                error_message=str(exc),
+            )
+
     def get_debug_info(self) -> Dict[str, Any]:
         return {
             "model_alias": self.model_alias,
@@ -252,9 +322,10 @@ class TextLLMPlanner:
 class MockTextLLMPlanner(TextLLMPlanner):
     """Scriptable test double for text-only planning."""
 
-    def __init__(self, scripted_output: str = ""):
+    def __init__(self, scripted_output: str = "", goal_check_output: str = "GOAL_COMPLETE"):
         super().__init__(model_name="mock-llm", model_alias="mock-llm")
         self.scripted_output = scripted_output
+        self.goal_check_output = goal_check_output
         self.loaded = True
 
     def load_model(self) -> bool:
@@ -289,3 +360,19 @@ class MockTextLLMPlanner(TextLLMPlanner):
                 error_message=str(exc),
                 failure_event=self._build_parse_failure(exc, self.scripted_output),
             )
+
+    def check_goal_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 64,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> GoalCheckResult:
+        del max_new_tokens, temperature
+        self._record_request(system_prompt, user_prompt, icl_mode, held_object, request_type="goal_check")
+        started_at = time.time()
+        result = self._parse_goal_check_output(self.goal_check_output)
+        result.inference_time = time.time() - started_at
+        return result

@@ -85,7 +85,7 @@ class SegmentationViewer:
         name_lower = name.lower()
         if 'mug' in name_lower:
             return 'mug'
-        elif any(x in name_lower for x in ['soup', 'mustard', 'spam', 'sugar', 'crackers', 
+        elif any(x in name_lower for x in ['can_of_beans', 'mustard', 'spam', 'sugar', 'crackers', 
                                             'bottle', 'can', 'tin', 'food', 'cereal']):
             return 'grocery'
         elif 'box' in name_lower or 'lid' in name_lower:

@@ -49,7 +49,7 @@ VLM_TO_ENV_OBJECT = {
     'mug4': 'mug4',
     
     # Groceries (same names)
-    'soup': 'soup',
+    'can_of_beans': 'can_of_beans',
     'mustard': 'mustard',
     'spam': 'spam',
     'sugar': 'sugar',

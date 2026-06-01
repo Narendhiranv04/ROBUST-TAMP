@@ -24,8 +24,8 @@ GROUND_TRUTH_ACTIONS = [
     ('open-lid', 'box_lid'),
     ('pick', 'mug_inside_box'),
     ('place', 'mug_inside_box', 'placement_boundary'),
-    ('pick', 'soup'),
-    ('place', 'soup', 'cupboard_boundary'),
+    ('pick', 'can_of_beans'),
+    ('place', 'can_of_beans', 'cupboard_boundary'),
 ]
 
 GROUND_TRUTH_SIMPLE = ['pick', 'place', 'open-lid', 'pick', 'place', 'pick', 'place']
@@ -69,7 +69,7 @@ class SceneExtractor:
                     "blocked_by": "box_lid"
                 },
                 {
-                    "name": "soup",
+                    "name": "can_of_beans",
                     "type": "can",
                     "location": "on table",
                     "pickable": True,
@@ -101,7 +101,7 @@ class SceneExtractor:
             "goal": {
                 "mug_box": "placement_boundary",
                 "mug_inside_box": "placement_boundary",
-                "soup": "cupboard_boundary",
+                "can_of_beans": "cupboard_boundary",
                 "box_lid": "opened"
             }
         }
@@ -147,11 +147,11 @@ class SceneExtractor:
             pass
             
         try:
-            soup = env.get_object('soup')
+            can_of_beans = env.get_object('can_of_beans')
             if soup:
                 pos = soup.get_position()
                 scene["objects"].append({
-                    "name": "soup",
+                    "name": "can_of_beans",
                     "type": "can",
                     "position": [round(p, 3) for p in pos],
                     "location": "on table",
@@ -211,7 +211,7 @@ class SceneExtractor:
         scene["goal"] = {
             "mug_box": "placement_boundary",
             "mug_inside_box": "placement_boundary",
-            "soup": "cupboard_boundary",
+            "can_of_beans": "cupboard_boundary",
             "box_lid": "opened"
         }
         
@@ -298,9 +298,9 @@ Solution:
 4. place(block_B, goal_zone)
 
 === YOUR TASK ===
-Problem: Move mug_box, mug_inside_box, and soup to their goals. mug_box is on top of box_lid. box_lid is closed, blocking mug_inside_box inside.
+Problem: Move mug_box, mug_inside_box, and can_of_beans to their goals. mug_box is on top of box_lid. box_lid is closed, blocking mug_inside_box inside.
 Rules: Cannot open box_lid while mug_box is on top. Cannot pick mug_inside_box while box_lid is closed.
-Goals: mug_box to placement_boundary, mug_inside_box to placement_boundary, soup to cupboard_boundary.
+Goals: mug_box to placement_boundary, mug_inside_box to placement_boundary, can_of_beans to cupboard_boundary.
 Solution:
 1."""
         return prompt
@@ -455,7 +455,7 @@ class LLMPlanner:
 class PlanParser:
     """Parse and validate LLM-generated plans."""
     
-    VALID_OBJECTS = {'mug_box', 'mug_inside_box', 'soup', 'box_lid'}
+    VALID_OBJECTS = {'mug_box', 'mug_inside_box', 'can_of_beans', 'box_lid'}
     VALID_REGIONS = {'placement_boundary', 'cupboard_boundary', 'box_top'}
     
     @staticmethod
@@ -530,7 +530,7 @@ class PlanParser:
         object_locations = {
             'mug_box': 'box_top',
             'mug_inside_box': 'box_inside',
-            'soup': 'table'
+            'can_of_beans': 'table'
         }
         
         for i, action in enumerate(actions):
@@ -576,7 +576,7 @@ class PlanParser:
         goal_achieved = (
             object_locations.get('mug_box') == 'placement_boundary' and
             object_locations.get('mug_inside_box') == 'placement_boundary' and
-            object_locations.get('soup') == 'cupboard_boundary' and
+            object_locations.get('can_of_beans') == 'cupboard_boundary' and
             lid_opened
         )
         result['achieves_goal'] = goal_achieved

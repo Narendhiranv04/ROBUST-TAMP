@@ -343,7 +343,7 @@ def run_episode(episode_num, args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--object', type=str, default='soup')
+    parser.add_argument('--object', type=str, default='can_of_beans')
     parser.add_argument('--episode_num', type=int, default=1)
     args = parser.parse_args()
 

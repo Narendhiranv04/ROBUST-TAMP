@@ -22,7 +22,7 @@ PRIMARY_REGION_PRIORITY = (
     "inside_box",
     "inside_grill",
     "prep_area",
-    "plate-top",
+    "plate_top",
     "serving_area",
     "dish_rack",
     "pantry_area",
@@ -32,7 +32,7 @@ PRIMARY_REGION_PRIORITY = (
 FALLBACK_REGION_PRIORITY = tuple(PLANNER_HIDDEN_REGIONS)
 
 REGION_DESCRIPTIONS = {
-    "cupboard_shelf": "on cupboard shelf",
+    "cupboard_shelf": "on lower cupboard shelf",
     "box_lid_top": "on top of the box lid",
     "inside_box": "inside the box",
     "pantry_area": "in pantry area",
@@ -40,7 +40,7 @@ REGION_DESCRIPTIONS = {
     "table": "on table",
     "inside_grill": "inside grill",
     "prep_area": "in prep area",
-    "plate-top": "on plate",
+    "plate_top": "on plate",
     "serving_area": "in serving area",
     "dish_rack": "at dish rack",
 }
@@ -54,7 +54,7 @@ REGION_PADDING = {
     "table": 0.04,
     "inside_grill": 0.08,
     "prep_area": 0.06,
-    "plate-top": 0.05,
+    "plate_top": 0.05,
     "serving_area": 0.05,
     "dish_rack": 0.06,
 }
@@ -68,7 +68,7 @@ REGION_Z_MARGIN = {
     "table": (0.05, 0.12),
     "inside_grill": (0.08, 0.18),
     "prep_area": (0.05, 0.15),
-    "plate-top": (0.05, 0.12),
+    "plate_top": (0.05, 0.12),
     "serving_area": (0.05, 0.12),
     "dish_rack": (0.10, 0.18),
 }

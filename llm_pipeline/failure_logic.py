@@ -52,6 +52,9 @@ LAYER_2_FAILURE_IDS = frozenset({
     'lid_not_closed_enough',
     'new_object_discovered',
     'grill_lid_closed',
+    'box_lid_closed',
+    'box_lid_obstructed',
+    'goal_not_satisfied',
 })
 
 
@@ -131,6 +134,24 @@ class SegmentationFirstFailureChecker:
                     should_replan=False,
                     message=f'Cannot place {object_name} while holding {held_object}',
                 )
+            if target_region == 'inside_box':
+                lid_name = 'box_lid'
+                lid_evidence = snapshot.object_evidence.get(lid_name)
+                if lid_evidence is not None and lid_evidence.visible and not self._is_lid_open(snapshot, lid_name):
+                    return FailureEvent(
+                        failure_id='box_lid_closed',
+                        stage=FailureStage.BEFORE_EXECUTION,
+                        source=FailureSource.SEGMENTATION,
+                        action=str(action),
+                        evidence={
+                            'object_name': object_name,
+                            'target_region': target_region,
+                            'lid_name': lid_name,
+                            'visible_objects': snapshot.visible_objects,
+                        },
+                        failure_layer=FailureLayer.LAYER_2,
+                        message=f'Cannot place {object_name} into inside_box because box_lid is closed; open(box_lid) first',
+                    )
             if target_region == 'inside_grill':
                 lid_name = 'grill_lid'
                 lid_evidence = snapshot.object_evidence.get(lid_name)
@@ -175,6 +196,30 @@ class SegmentationFirstFailureChecker:
                 failure_layer=FailureLayer.LAYER_1,
                 message=f'Cannot {action.action_name} the lid because {lid_name} is not visible in the segmentation snapshot',
             )
+        if action.action_name == 'open' and lid_name == 'box_lid':
+            blockers = [
+                obj_name
+                for obj_name, region_name in (getattr(snapshot, 'object_region_map', {}) or {}).items()
+                if obj_name != 'box_lid' and normalize_region_name(region_name) == 'box_lid_top'
+            ]
+            if blockers:
+                blockers = sorted(blockers)
+                return FailureEvent(
+                    failure_id='box_lid_obstructed',
+                    stage=FailureStage.BEFORE_EXECUTION,
+                    source=FailureSource.SEGMENTATION,
+                    action=str(action),
+                    evidence={
+                        'lid_name': lid_name,
+                        'blocking_objects': blockers,
+                        'object_region_map': dict(getattr(snapshot, 'object_region_map', {}) or {}),
+                    },
+                    failure_layer=FailureLayer.LAYER_2,
+                    message=(
+                        f'Cannot open box_lid because {", ".join(blockers)} is on box_lid_top; '
+                        f'move {", ".join(blockers)} to table_target_area first'
+                    ),
+                )
         return None
 
     def postcheck(

@@ -13,14 +13,15 @@ from llm_pipeline.region_aliases import BOX_STORAGE_REGION, normalize_region_nam
 
 ACTION_PATTERN = re.compile(r'^\s*([A-Za-z0-9_-]+)\((.*?)\)\s*$')
 MUG_OBJECTS = {'mug1', 'mug2', 'mug3', 'mug4'}
-GROCERY_OBJECTS = {'soup', 'mustard', 'spam', 'sugar', 'crackers'}
+GROCERY_OBJECTS = {'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
 GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
 PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'inside_box', 'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
 PLACEMENT_REGIONS = {'table_target_area', 'placement_boundary'}
 CUPBOARD_REGIONS = {'cupboard_shelf', 'cupboard_lower', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard'}
-PLATE_REGIONS = {'plate', 'plate-top', 'plate_top', 'plate_boundary', 'serving_area'}
+PLATE_TOP_REGIONS = {'plate', 'plate-top', 'plate_top'}
+SERVING_REGIONS = {'plate_boundary', 'plate-boundary', 'serving_area'}
 GRILL_REGIONS = {'inside_grill', 'grill', 'grill-top', 'grill_top', 'grill_boundary'}
 TABLE_REGIONS = {'table', 'prep_area'}
 
@@ -52,7 +53,9 @@ def _normalize_region(region: Optional[str]) -> str:
         return 'table_target_area'
     if token in CUPBOARD_REGIONS:
         return 'cupboard_shelf'
-    if token in PLATE_REGIONS:
+    if token in PLATE_TOP_REGIONS:
+        return 'plate_top'
+    if token in SERVING_REGIONS:
         return 'serving_area'
     if token in GRILL_REGIONS:
         return 'inside_grill'
@@ -86,7 +89,7 @@ def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
         return 'grocery_to_cupboard'
     if obj in PLATE_OBJECTS and region == 'serving_area':
         return 'plate_to_boundary'
-    if obj in MEAT_OBJECTS and region == 'serving_area':
+    if obj in MEAT_OBJECTS and region == 'plate_top':
         return 'meat_to_plate'
     if obj in MEAT_OBJECTS and region == 'inside_grill':
         return 'meat_to_grill'

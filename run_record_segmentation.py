@@ -68,7 +68,7 @@ def main():
         gt_orch.step_and_record(pr, 5)
         
         # Task 2: Groceries
-        for item, dest in [('soup', 'cupboard_boundary'), 
+        for item, dest in [('can_of_beans', 'cupboard_boundary'), 
                            ('mustard', 'cupboard_boundary'),
                            ('spam', 'cupboard_boundary'), 
                            ('sugar', 'cupboard_boundary_top'),

@@ -8,7 +8,7 @@ Task: 4-step kitchen manipulation
 1. mug_box → placement_boundary
 2. open box_lid
 3. mug_inside_box → placement_boundary  
-4. soup → cupboard_boundary
+4. can_of_beans → cupboard_boundary
 """
 
 import os
@@ -31,7 +31,7 @@ GROUND_TRUTH_ACTIONS = [
     'pick',      # pick mug_inside_box
     'place',     # place mug_inside_box on placement_boundary
     'pick',      # pick soup
-    'place',     # place soup in cupboard_boundary
+    'place',     # place can_of_beans in cupboard_boundary
 ]
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "results", EXPERIMENT_NAME)
@@ -449,7 +449,7 @@ def run_episode(episode_num, args, logger):
 
 def main():
     parser = argparse.ArgumentParser(description="Experiment 1: Pure PDDLStream Baseline")
-    parser.add_argument('--object', type=str, default='soup', 
+    parser.add_argument('--object', type=str, default='can_of_beans', 
                        help='Object to place in cupboard')
     parser.add_argument('--seed', type=int, default=0,
                        help='Random seed for reproducibility')

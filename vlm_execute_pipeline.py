@@ -52,7 +52,7 @@ VLM_TO_ENV_OBJECT = {
     'mug4': 'mug4',
     
     # Groceries (same names)
-    'soup': 'soup',
+    'can_of_beans': 'can_of_beans',
     'mustard': 'mustard',
     'spam': 'spam',
     'sugar': 'sugar',
@@ -923,8 +923,8 @@ def main():
         vlm_output = """
 1. pick(mug_cupboard)
 2. place(mug_cupboard, placement_boundary)
-3. pick(soup)
-4. place(soup, cupboard_boundary)
+3. pick(can_of_beans)
+4. place(can_of_beans, cupboard_boundary)
 5. pick(mustard)
 6. place(mustard, cupboard_boundary)
 7. pick(spam)

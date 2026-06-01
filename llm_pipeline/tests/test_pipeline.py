@@ -6,6 +6,7 @@ from llm_pipeline.pipeline_types import (
     FailureEvent,
     FailureSource,
     FailureStage,
+    GoalCheckResult,
     PlanResult,
     SegmentationObjectEvidence,
     SegmentationSnapshot,
@@ -68,6 +69,47 @@ class QueuePlanner:
             'loaded': self.loaded,
             'last_request': self.requests[-1] if self.requests else {},
         }
+
+
+class GoalCheckingQueuePlanner(QueuePlanner):
+    def __init__(self, outputs, goal_check_outputs):
+        super().__init__(outputs)
+        self.goal_check_outputs = list(goal_check_outputs)
+        self.goal_check_requests = []
+
+    def check_goal_completion(
+        self,
+        system_prompt,
+        user_prompt,
+        icl_mode,
+        max_new_tokens=64,
+        temperature=0.0,
+        held_object=None,
+    ):
+        del max_new_tokens, temperature
+        self.goal_check_requests.append(
+            {
+                'system_prompt': system_prompt,
+                'user_prompt': user_prompt,
+                'icl_mode': icl_mode,
+                'held_object': held_object,
+            }
+        )
+        raw_output = self.goal_check_outputs.pop(0)
+        if raw_output.startswith('GOAL_COMPLETE'):
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=True,
+                raw_output=raw_output,
+                inference_time=0.01,
+            )
+        return GoalCheckResult(
+            success=True,
+            goal_satisfied=False,
+            raw_output=raw_output,
+            inference_time=0.01,
+            reason=raw_output.split(':', 1)[1].strip(),
+        )
 
 
 class FakeSegmentationAdapter:
@@ -309,6 +351,44 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert segmentation_adapter.refresh_calls[:2] == ['initial', 'initial']
     assert segmentation_adapter.action_sequence_calls[0]['actions'] == []
     assert segmentation_adapter.live_updates >= 1
+
+
+def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
+    planner = GoalCheckingQueuePlanner(
+        [
+            'pick(mug2)\nplace(mug2, table_target_area)',
+            'place(mug2, table_target_area)',
+            'open(box_lid)',
+        ],
+        [
+            'GOAL_INCOMPLETE: box_lid still needs to be opened',
+            'GOAL_COMPLETE',
+        ],
+    )
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=3),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    summary = pipeline.run('Move mug2 to table_target_area and open the lid.')
+
+    assert summary['success'] is True
+    assert summary['goal_check_enabled'] is True
+    assert summary['last_goal_check']['goal_satisfied'] is True
+    assert len(planner.goal_check_requests) == 2
+    assert 'GOAL_COMPLETE' in planner.goal_check_requests[0]['system_prompt']
+    assert 'COMPLETED ACTIONS:' in planner.goal_check_requests[0]['user_prompt']
+    assert summary['cycles'][1]['failure_event']['failure_id'] == 'goal_not_satisfied'
+    assert summary['cycles'][1]['goal_check']['reason'] == 'box_lid still needs to be opened'
+    assert 'Goal check failed' in planner.requests[2]['user_prompt']
 
 
 def test_initialize_holds_startup_lid_pose_during_settle() -> None:

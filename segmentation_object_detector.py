@@ -60,7 +60,7 @@ class SegmentationObjectDetector:
         
         default_kitchen_objects = {
             'mug1', 'mug2', 'mug3', 'mug4',
-            'soup', 'mustard', 'spam', 'sugar', 'crackers',
+            'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers',
             'box_lid'
         }
         default_grill_objects = {
@@ -83,7 +83,7 @@ class SegmentationObjectDetector:
             'mug2': ['mug2', 'mug_box', 'mug_box_shape'],
             'mug3': ['mug3', 'mug_cupboard', 'mug_cupboard_shape'],
             'mug4': ['mug4', 'mug_inside_box', 'mug_inside_box_shape'],
-            'soup': ['soup', 'can'],
+            'can_of_beans': ['can_of_beans', 'soup', 'can'],
             'mustard': ['mustard', 'bottle'],
             'spam': ['spam', 'tin'],
             'sugar': ['sugar', 'food_box'],
@@ -307,7 +307,7 @@ class SegmentationObjectDetector:
             return grill_meat
         if 'lid' in n and 'box' not in n:
             return 'grill_lid'
-        for name in ('soup', 'mustard', 'spam', 'sugar', 'crackers'):
+        for name in ('can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'):
             if name in n:
                 return name
         return None
@@ -498,7 +498,7 @@ class SegmentationObjectDetector:
         
         movable_objects = {
             'mug1', 'mug2', 'mug3', 'mug4',
-            'soup', 'mustard', 'spam', 'sugar', 'crackers'
+            'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'
         }
 
         # Add only VISIBLE objects

@@ -171,7 +171,7 @@ def run_episode(episode_num, args):
         mug_name = 'mug_box'
         lid_name = 'box_lid'
         mug_inside_name = 'mug_inside_box'
-        cupboard_obj_name = args.object # e.g. 'soup'
+        cupboard_obj_name = args.object # e.g. 'can_of_beans'
         
         placement_region = 'placement_boundary'
         cupboard_region = 'cupboard_boundary'
@@ -409,7 +409,7 @@ def run_episode(episode_num, args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--object', type=str, default='soup')
+    parser.add_argument('--object', type=str, default='can_of_beans')
     parser.add_argument('--episode_num', type=int, default=1)
     args = parser.parse_args()
 

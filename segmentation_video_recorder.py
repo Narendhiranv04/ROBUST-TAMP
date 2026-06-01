@@ -33,7 +33,7 @@ class SegmentationVideoRecorder:
             "mug2": (40, 160, 255),
             "mug3": (0, 235, 255),
             "mug4": (255, 80, 230),
-            "soup": (220, 220, 0),
+            "can_of_beans": (220, 220, 0),
             "mustard": (0, 255, 170),
             "spam": (255, 150, 70),
             "sugar": (190, 100, 255),
@@ -46,7 +46,7 @@ class SegmentationVideoRecorder:
             "mug2": ["mug2", "mug_box"],
             "mug3": ["mug3", "mug_cupboard"],
             "mug4": ["mug4", "mug_inside_box"],
-            "soup": ["soup", "can"],
+            "can_of_beans": ["can_of_beans", "can"],
             "mustard": ["mustard", "bottle"],
             "spam": ["spam", "tin"],
             "sugar": ["sugar", "food_box"],
@@ -135,7 +135,7 @@ class SegmentationVideoRecorder:
             return 'box_lid'
         if 'cupboard' in n:
             return 'cupboard'
-        for name in ('soup', 'mustard', 'spam', 'sugar', 'crackers'):
+        for name in ('can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'):
             if name in n:
                 return name
         return None

@@ -136,7 +136,7 @@ class ViewerOrchestrator:
                 raise KeyboardInterrupt("User quit")
             
             # === TASK 2: Groceries to cupboard ===
-            groceries_inside = ['soup', 'mustard', 'spam']
+            groceries_inside = ['can_of_beans', 'mustard', 'spam']
             groceries_top = ['sugar', 'crackers']
             
             task_num = 1

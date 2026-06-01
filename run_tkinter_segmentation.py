@@ -82,7 +82,7 @@ def main():
         go_home(env); step(5)
         
         # Task 2: Groceries
-        for item, dest in [('soup','cupboard_boundary'), ('mustard','cupboard_boundary'), 
+        for item, dest in [('can_of_beans','cupboard_boundary'), ('mustard','cupboard_boundary'), 
                            ('spam','cupboard_boundary'), ('sugar','cupboard_boundary_top'),
                            ('crackers','cupboard_boundary_top')]:
             print(f"\n--- Task 2: {item} ---")

@@ -182,7 +182,7 @@ class TrackedOrchestrator:
             # ============================================
             # TASK 2: Pick 5 groceries from table -> cupboard
             # ============================================
-            groceries_inside = ['soup', 'mustard', 'spam']
+            groceries_inside = ['can_of_beans', 'mustard', 'spam']
             groceries_top = ['sugar', 'crackers']
             
             task_num = 1

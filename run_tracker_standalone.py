@@ -77,7 +77,7 @@ def create_info_panel(visible_objects, box_open, width=250, height=400):
         # Color by category
         if 'mug' in obj.lower():
             color = (255, 100, 100)
-        elif any(g in obj.lower() for g in ['soup', 'mustard', 'spam', 'sugar', 'crackers']):
+        elif any(g in obj.lower() for g in ['can_of_beans', 'mustard', 'spam', 'sugar', 'crackers']):
             color = (100, 255, 100)
         elif 'box' in obj.lower() or 'lid' in obj.lower():
             color = (100, 100, 255)

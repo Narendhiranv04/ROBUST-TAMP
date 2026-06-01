@@ -536,13 +536,13 @@ DEFAULT_GOALS = {
     "full_task": """Move mug2 from box-top to placement_boundary.
 Open the box lid to access mug4.
 Move mug4 to placement_boundary.
-Move soup to cupboard_boundary.""",
+Move can_of_beans to cupboard_boundary.""",
 
     "simple_pick_place": "Move mug2 to placement_boundary.",
     
     "open_and_retrieve": """Open the box lid and move mug4 to placement_boundary.""",
     
-    "soup_to_cupboard": "Move soup to cupboard_boundary."
+    "soup_to_cupboard": "Move can_of_beans to cupboard_boundary."
 }
 
 

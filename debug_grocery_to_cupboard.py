@@ -23,7 +23,7 @@ import numpy as np
 
 ROOT_DIR = os.path.dirname(__file__)
 DEFAULT_OUTPUT_DIR = os.path.join(ROOT_DIR, "outputs", "grocery_to_cupboard")
-GROCERY_CANDIDATES = ("soup", "spam", "mustard", "sugar", "crackers")
+GROCERY_CANDIDATES = ("can_of_beans", "spam", "mustard", "sugar", "crackers")
 KITCHEN_VARIANTS = {
     "K1": os.path.join(ROOT_DIR, "task1_variation1.ttt"),
     "K2": os.path.join(ROOT_DIR, "task1_variation2.ttt"),

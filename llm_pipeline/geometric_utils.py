@@ -28,8 +28,9 @@ class GeometricReasoner:
         back to simplified distance heuristics.
         """
         # ── Volumetric check (preferred) ──
-        if detector is not None and scene_name:
-            bb = detector.get_bounding_box(scene_name)
+        get_bounding_box = getattr(detector, "get_bounding_box", None) if detector is not None else None
+        if callable(get_bounding_box) and scene_name:
+            bb = get_bounding_box(scene_name)
             if bb is not None:
                 (min_x, min_y, min_z), (max_x, max_y, max_z) = bb
                 # Generous margins — box regions are tight so we give more room.

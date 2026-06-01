@@ -2720,10 +2720,10 @@ def main():
 
     # ============================================
     # TASK 2: Pick 5 groceries from table -> cupboard
-    # soup, mustard, spam -> cupboard_boundary (inside)
+    # can_of_beans, mustard, spam -> cupboard_boundary (inside)
     # sugar, crackers -> cupboard_boundary_top (top shelf)
     # ============================================
-    groceries_inside = ['soup', 'mustard', 'spam']
+    groceries_inside = ['can_of_beans', 'mustard', 'spam']
     groceries_top = ['sugar', 'crackers']
     
     task_num = 1

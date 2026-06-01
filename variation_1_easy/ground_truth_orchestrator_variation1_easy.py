@@ -137,7 +137,7 @@ def _select_runtime_table_grocery(env, exclude_names=None):
     Pick the grocery that is currently on table (not already in cupboard),
     excluding any already-used grocery handles.
     """
-    grocery_candidates = ["soup", "spam", "mustard", "sugar", "crackers"]
+    grocery_candidates = ["can_of_beans", "spam", "mustard", "sugar", "crackers"]
     discovered = _discover_unique_objects(env, grocery_candidates)
     excluded = _handles_for_names(env, exclude_names or [])
 
@@ -462,7 +462,7 @@ def _run_table_mug_to_box(env, pr, mug_name, task_idx, slot_pose):
 def _classify_variation_objects(env):
     mug_on_box_candidates = ["mug2", "mug1", "mug4", "mug3"]
     mug_in_cupboard_candidates = ["mug3", "mug1", "mug2", "mug4"]
-    grocery_candidates = ["soup", "spam", "mustard", "sugar", "crackers"]
+    grocery_candidates = ["can_of_beans", "spam", "mustard", "sugar", "crackers"]
 
     mug_on_box = _select_object_by_region(env, mug_on_box_candidates, "box-inside")
     mug_in_cupboard = _select_object_by_region(env, mug_in_cupboard_candidates, "cupboard_boundary")

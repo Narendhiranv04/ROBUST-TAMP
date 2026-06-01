@@ -120,6 +120,7 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         if self.symbol_registry.actions:
             lines.append('available_actions=' + ', '.join(self.symbol_registry.actions))
         lines.append('Use only object and region names that appear in the observation above.')
+        lines.append('Respect ACCESS CONSTRAINTS: do not place into a blocked container region until its lid has been opened.')
         lines.append('Executable action formats for this run:')
         for action_name in self.symbol_registry.actions:
             lines.append(self._action_format_line(action_name))
@@ -165,6 +166,10 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         if snapshot is not None:
             gripper_visible = bool(snapshot.gripper_evidence.get('visible'))
             lines.append(f'- gripper_mask_visible: {str(gripper_visible).lower()}')
+        access_constraints = self._build_access_constraints(snapshot)
+        if access_constraints:
+            lines.extend(['', 'ACCESS CONSTRAINTS:'])
+            lines.extend(f'- {constraint}' for constraint in access_constraints)
 
         lines.extend(['', 'VISIBLE OBJECT EVIDENCE:'])
         if not visible_objects:
@@ -233,6 +238,32 @@ class TextOnlyContextBuilder(BaseContextBuilder):
                 facts.append(f'gripper_proximity={evidence.gripper_proximity:.4f}')
             lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
         return '\n'.join(lines)
+
+    def _build_access_constraints(self, snapshot: Optional[SegmentationSnapshot]) -> List[str]:
+        if snapshot is None:
+            return []
+        constraints = []
+        object_region_map = getattr(snapshot, 'object_region_map', {}) or {}
+        if 'box_lid' in snapshot.visible_objects:
+            evidence = snapshot.object_evidence.get('box_lid')
+            if evidence is not None and 'box_lid_top' in set(evidence.mask_regions):
+                constraints.append('inside_box is BLOCKED until open(box_lid) is completed')
+                blockers = sorted(
+                    obj_name
+                    for obj_name, region_name in object_region_map.items()
+                    if normalize_region_name(region_name) == 'box_lid_top'
+                )
+                if blockers:
+                    joined = ', '.join(blockers)
+                    constraints.append(
+                        f'box_lid is OBSTRUCTED by {joined}; before open(box_lid), move '
+                        f'{joined} to table_target_area'
+                    )
+        if 'grill_lid' in snapshot.visible_objects:
+            evidence = snapshot.object_evidence.get('grill_lid')
+            if evidence is not None and 'inside_grill' in set(evidence.mask_regions):
+                constraints.append('inside_grill is BLOCKED until open(grill_lid) is completed')
+        return constraints
 
     @staticmethod
     def _planner_visible_regions(regions: Iterable[str]) -> List[str]:

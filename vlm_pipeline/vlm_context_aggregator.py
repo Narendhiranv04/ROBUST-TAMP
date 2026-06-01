@@ -162,7 +162,7 @@ class VLMContextAggregator:
         lowered = (name or '').lower()
         if lowered.startswith('mug'):
             return 'mug'
-        if lowered == 'soup':
+        if lowered == 'can_of_beans':
             return 'can'
         if lowered == 'mustard':
             return 'bottle'
@@ -200,7 +200,7 @@ class VLMContextAggregator:
                 object_names.append(scene_name)
 
         ordered_object_names = []
-        for name in ('mug1', 'mug2', 'mug3', 'mug4', 'soup', 'mustard', 'spam', 'sugar', 'crackers', 'box_lid'):
+        for name in ('mug1', 'mug2', 'mug3', 'mug4', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers', 'box_lid'):
             if name in object_names and name not in ordered_object_names:
                 ordered_object_names.append(name)
         for name in sorted(object_names):
@@ -997,7 +997,7 @@ def test_offline():
     
     aggregator = VLMContextAggregator()
     
-    goal = "Move mug2 and mug4 to placement_boundary. Move soup to cupboard_boundary."
+    goal = "Move mug2 and mug4 to placement_boundary. Move can_of_beans to cupboard_boundary."
     
     bundle = aggregator.create_prompt_bundle_offline(goal)
     

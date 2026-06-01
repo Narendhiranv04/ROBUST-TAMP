@@ -15,14 +15,15 @@ MUG_OBJECTS = {
     'mug_box', 'mug_inside_box', 'mug_table', 'mug_cupboard',
     'mug1', 'mug2', 'mug3', 'mug4',
 }
-GROCERY_OBJECTS = {'soup', 'mustard', 'spam', 'sugar', 'crackers'}
+GROCERY_OBJECTS = {'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
 GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
 PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
 PLACEMENT_REGIONS = {'placement_boundary'}
 CUPBOARD_REGIONS = {'cupboard_boundary', 'cupboard_boundary_top', 'cupboard', 'groceries_boundary'}
-PLATE_REGIONS = {'plate', 'plate-top', 'plate_top', 'plate_boundary', 'plate_boundary_top'}
+PLATE_TOP_REGIONS = {'plate', 'plate-top', 'plate_top'}
+SERVING_REGIONS = {'plate_boundary', 'plate-boundary', 'plate_boundary_top', 'serving_area'}
 GRILL_REGIONS = {'inside_grill', 'grill', 'grill_top', 'grill-top', 'grill_boundary'}
 TABLE_REGIONS = {'table', 'prep_area'}
 GENERIC_TERMINAL_REASONS = {
@@ -78,8 +79,10 @@ def _normalize_region(region: Optional[str]) -> str:
         return 'placement_boundary'
     if token in CUPBOARD_REGIONS:
         return 'cupboard_boundary'
-    if token in PLATE_REGIONS:
-        return 'plate'
+    if token in PLATE_TOP_REGIONS:
+        return 'plate_top'
+    if token in SERVING_REGIONS:
+        return 'serving_area'
     if token in GRILL_REGIONS:
         return 'grill'
     if token in TABLE_REGIONS:
@@ -109,9 +112,9 @@ def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
         return 'mug_to_box'
     if obj in GROCERY_OBJECTS and region == 'cupboard_boundary':
         return 'grocery_to_cupboard'
-    if obj in PLATE_OBJECTS and region == 'plate':
+    if obj in PLATE_OBJECTS and region == 'serving_area':
         return 'plate_to_boundary'
-    if obj in MEAT_OBJECTS and region == 'plate':
+    if obj in MEAT_OBJECTS and region == 'plate_top':
         return 'meat_to_plate'
     if obj in MEAT_OBJECTS and region == 'grill':
         return 'meat_to_grill'

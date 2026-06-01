@@ -34,7 +34,7 @@ def derive_grill_semantic_facts(
                 facts.append(f"inside_grill({object_name})")
             elif region_name == "prep_area":
                 facts.append(f"in_prep_area({object_name})")
-            elif region_name == "plate-top":
+            elif region_name == "plate_top":
                 facts.append(f"on_plate({object_name})")
             elif region_name == "table":
                 facts.append(f"on_table({object_name})")

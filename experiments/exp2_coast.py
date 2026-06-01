@@ -27,7 +27,7 @@ GROUND_TRUTH_ACTIONS = [
     'pick',      # pick mug_inside_box
     'place',     # place mug_inside_box on placement_boundary
     'pick',      # pick soup
-    'place',     # place soup in cupboard_boundary
+    'place',     # place can_of_beans in cupboard_boundary
 ]
 
 
@@ -703,7 +703,7 @@ def run_episode_with_coast(episode_num, args, logger, constraint_manager):
 
 def main():
     parser = argparse.ArgumentParser(description="Experiment 2: COAST")
-    parser.add_argument('--object', type=str, default='soup')
+    parser.add_argument('--object', type=str, default='can_of_beans')
     parser.add_argument('--seed', type=int, default=0,
                        help='Random seed for reproducibility')
     parser.add_argument('--episodes', type=int, default=1)

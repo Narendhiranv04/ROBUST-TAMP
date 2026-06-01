@@ -226,6 +226,7 @@ def run_trial(
     goal_override: Optional[str] = None,
     live_masks: bool = True,
     scene_state_trace: bool = False,
+    goal_check: bool = True,
 ) -> Dict[str, Any]:
     variant_spec = get_variant_spec(variant_id)
     if not variant_spec.model_eval_supported:
@@ -256,6 +257,7 @@ def run_trial(
         scene_path=variant_spec.scene_path,
         live_segmentation_view=bool(live_masks and not headless),
         scene_state_trace=bool(scene_state_trace),
+        enable_goal_check=bool(goal_check),
     )
     pipeline = LLMOnlyReplanningPipeline(config=config)
 
@@ -303,6 +305,7 @@ def run_trial(
                 'post_action_checks_enabled': replanning_enabled,
                 'live_segmentation_view': bool(live_masks and not headless),
                 'scene_state_trace': bool(scene_state_trace),
+                'goal_check_enabled': bool(goal_check),
                 'preflight_success': bool(preflight['preflight_success']),
                 'preflight': preflight,
             }
@@ -343,6 +346,8 @@ def run_trial(
                 'post_action_checks_enabled': bool(summary.get('post_action_checks_enabled', replanning_enabled)),
                 'live_segmentation_view': bool(live_masks and not headless),
                 'scene_state_trace': bool(scene_state_trace),
+                'goal_check_enabled': bool(summary.get('goal_check_enabled', goal_check)),
+                'last_goal_check': summary.get('last_goal_check'),
                 'episode_success': episode_success,
                 'raw_episode_success': None if execution_skipped else bool(summary.get('success')),
                 'total_cycles': int(summary.get('total_cycles', 0)),
@@ -385,6 +390,7 @@ def main() -> None:
     display_group.add_argument('--headless', action='store_true', help='Run without simulator GUI')
     parser.add_argument('--no-live-masks', action='store_true', help='Disable the separate live segmentation window')
     parser.add_argument('--scene-state-trace', action='store_true', help='Print scene-state snapshots around execution checks')
+    parser.add_argument('--no-goal-check', action='store_true', help='Disable LLM goal-completion verification after each completed plan')
     parser.add_argument('--remote', action='store_true', help='Use the maintained remote LLM planner server')
     parser.add_argument('--remote-url', default=os.environ.get('LLM_SERVER_URL', os.environ.get('VLM_SERVER_URL', 'http://localhost:8000')), help='Remote planner server URL')
     parser.add_argument('--replan-mode', choices=['on', 'off'], default='on', help='Use full execution+replanning (on) or first-plan-only mode with no failure checks (off)')
@@ -411,6 +417,7 @@ def main() -> None:
         goal_override=args.goal or None,
         live_masks=not args.no_live_masks,
         scene_state_trace=args.scene_state_trace,
+        goal_check=not args.no_goal_check,
     )
     print(json.dumps(record, indent=2))
 

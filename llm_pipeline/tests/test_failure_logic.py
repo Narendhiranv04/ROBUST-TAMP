@@ -111,6 +111,52 @@ def test_precheck_blocks_inside_grill_place_when_lid_closed() -> None:
     assert failure.source == FailureSource.SEGMENTATION
 
 
+def test_precheck_blocks_inside_box_place_when_lid_closed() -> None:
+    snapshot = _snapshot(
+        {
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['table_target_area']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
+        },
+        visible_regions=['table_target_area', 'box_lid_top'],
+    )
+    failure = checker.precheck(
+        DirectAction('place', ('mug2', 'inside_box')),
+        held_object='mug2',
+        snapshot=snapshot,
+        last_action_name='pick',
+    )
+    assert failure is not None
+    assert failure.failure_id == 'box_lid_closed'
+    assert failure.failure_layer == FailureLayer.LAYER_2
+    assert failure.stage == FailureStage.BEFORE_EXECUTION
+    assert failure.source == FailureSource.SEGMENTATION
+    assert 'open(box_lid) first' in failure.message
+
+
+def test_precheck_blocks_open_box_lid_when_object_on_lid() -> None:
+    snapshot = _snapshot(
+        {
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['box_lid_top']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
+        },
+        visible_regions=['box_lid_top'],
+        object_region_map={'mug2': 'box_lid_top'},
+    )
+    failure = checker.precheck(
+        DirectAction('open', ('box_lid',)),
+        held_object=None,
+        snapshot=snapshot,
+        last_action_name='place',
+    )
+    assert failure is not None
+    assert failure.failure_id == 'box_lid_obstructed'
+    assert failure.failure_layer == FailureLayer.LAYER_2
+    assert failure.stage == FailureStage.BEFORE_EXECUTION
+    assert failure.source == FailureSource.SEGMENTATION
+    assert failure.evidence['blocking_objects'] == ['mug2']
+    assert 'move mug2 to table_target_area first' in failure.message
+
+
 def test_postcheck_flags_bad_place_region() -> None:
     snapshot = _snapshot(
         {

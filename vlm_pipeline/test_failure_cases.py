@@ -92,7 +92,7 @@ TEST_CASES = [
         description="Pick one object, place claims different object",
         skeleton=[
             ActionSkeleton('pick', ('mug_box',)),
-            ActionSkeleton('place', ('soup', 'placement_boundary')),  # Wrong object!
+            ActionSkeleton('place', ('can_of_beans', 'placement_boundary')),  # Wrong object!
         ],
         expected_failure="pick_mismatch"
     ),

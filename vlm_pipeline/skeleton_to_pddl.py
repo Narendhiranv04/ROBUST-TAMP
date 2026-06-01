@@ -55,7 +55,7 @@ class SkeletonToPDDL:
         'mug_inside_box': 'mug_inside_box',
         'mug_table': 'mug_table',
         'mug_cupboard': 'mug_cupboard',
-        'soup': 'soup',
+        'can_of_beans': 'can_of_beans',
         'mustard': 'mustard',
         'spam': 'spam',
         'sugar': 'sugar',
@@ -148,7 +148,7 @@ class SkeletonToPDDL:
         init.append(('hand-empty',))
         
         # Objects - all movable
-        movable_objects = ['mug_box', 'mug_inside_box', 'soup', 'mug_table', 
+        movable_objects = ['mug_box', 'mug_inside_box', 'can_of_beans', 'mug_table', 
                           'mug_cupboard', 'mustard', 'spam', 'sugar', 'crackers']
         for obj in movable_objects:
             init.append(('movable', obj))
@@ -171,7 +171,7 @@ class SkeletonToPDDL:
         init.append(('inside', 'mug_inside_box', 'box_lid'))
         
         # Other objects on table
-        init.append(('in-region', 'soup', 'table'))
+        init.append(('in-region', 'can_of_beans', 'table'))
         
         # Robot at home configuration
         # Note: The actual configuration will be sampled by streams
@@ -399,8 +399,8 @@ def test_translation():
         ActionSkeleton('open-lid', ('box_lid',)),
         ActionSkeleton('pick', ('mug_inside_box',)),
         ActionSkeleton('place', ('mug_inside_box', 'placement_boundary')),
-        ActionSkeleton('pick', ('soup',)),
-        ActionSkeleton('place', ('soup', 'cupboard_boundary')),
+        ActionSkeleton('pick', ('can_of_beans',)),
+        ActionSkeleton('place', ('can_of_beans', 'cupboard_boundary')),
     ]
     
     # Test goal generation
@@ -440,7 +440,7 @@ def test_invalid_skeleton():
     invalid_skeleton = [
         ActionSkeleton('grab', ('mug_box',)),  # Invalid action
         ActionSkeleton('place', ('unknown_obj', 'table')),  # Unknown object
-        ActionSkeleton('place', ('soup', 'moon')),  # Unknown region
+        ActionSkeleton('place', ('can_of_beans', 'moon')),  # Unknown region
     ]
     
     is_valid, errors = translator.validate_skeleton_against_domain(invalid_skeleton)

@@ -25,6 +25,7 @@ class FailureSource(str, Enum):
     EXECUTOR = "executor"
     VALIDATION = "validation"
     PARSER = "parser"
+    GOAL_CHECK = "goal_check"
 
 
 class FailureLayer(str, Enum):
@@ -53,6 +54,26 @@ class PlanResult:
     inference_time: float
     error_message: Optional[str] = None
     failure_event: Optional['FailureEvent'] = None
+
+
+@dataclass
+class GoalCheckResult:
+    success: bool
+    goal_satisfied: bool
+    raw_output: str
+    inference_time: float
+    reason: str = ""
+    error_message: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "success": bool(self.success),
+            "goal_satisfied": bool(self.goal_satisfied),
+            "raw_output": self.raw_output,
+            "inference_time": float(self.inference_time),
+            "reason": self.reason,
+            "error_message": self.error_message,
+        }
 
 
 @dataclass(frozen=True)

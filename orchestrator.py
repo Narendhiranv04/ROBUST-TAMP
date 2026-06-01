@@ -154,7 +154,7 @@ def main():
     
     # --- STAGE 3: Soup to Cupboard ---
     print("\n=== STAGE 3: Soup -> Cupboard ===")
-    run_pick_place('soup', 'cupboard_boundary', close_on_finish=False)
+    run_pick_place('can_of_beans', 'cupboard_boundary', close_on_finish=False)
     
     go_home(env)
 

@@ -118,7 +118,7 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
     ),
     "devstral-24b": _make_spec(
         "devstral-24b",
-        "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
+        "mistralai/Devstral-Small-2-24B-Instruct-2512",
         "llm",
         "Devstral Small 2 24B Instruct model",
     ),
