@@ -112,7 +112,7 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
     ),
     "deepseek-r1-qwen-32b": _make_spec(
         "deepseek-r1-qwen-32b",
-        "bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF",
+        "casperhansen/deepseek-r1-distill-qwen-32b-awq",
         "llm",
         "DeepSeek Qwen-32B distilled reasoning model",
     ),

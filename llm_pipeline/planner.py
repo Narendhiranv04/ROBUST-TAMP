@@ -63,7 +63,7 @@ class TextLLMPlanner:
                 print(f"Warning scanning cache for GGUF: {e}")
 
         try:
-            tokenizer_kwargs = {"trust_remote_code": True}
+            tokenizer_kwargs = {"trust_remote_code": True, "fix_mistral_regex": True}
             if gguf_file:
                 tokenizer_kwargs["gguf_file"] = gguf_file
 
@@ -95,7 +95,15 @@ class TextLLMPlanner:
                     bnb_4bit_use_double_quant=True,
                 )
 
-            self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+            except ValueError as e:
+                if "Unrecognized configuration class" in str(e) and "AutoModelForCausalLM" in str(e):
+                    print("DEBUG: AutoModelForCausalLM failed. Attempting direct import of Mistral3ForConditionalGeneration...")
+                    from transformers.models.mistral3.modeling_mistral3 import Mistral3ForConditionalGeneration
+                    self.model = Mistral3ForConditionalGeneration.from_pretrained(self.model_name, **model_kwargs)
+                else:
+                    raise e
             self.loaded = True
             return True
         except Exception as exc:  # pragma: no cover - depends on model install/runtime
