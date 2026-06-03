@@ -617,6 +617,19 @@ class LLMOnlyReplanningPipeline:
             message=f'Goal check failed: {reason}',
         )
 
+    def _final_scene_state_summary(self) -> Dict[str, Any]:
+        try:
+            state = self._build_scene_state()
+        except Exception as exc:
+            return {'error': str(exc)}
+        return {
+            'visible_objects': list(getattr(state, 'visible_objects', []) or []),
+            'valid_regions': list(getattr(state, 'valid_regions', []) or []),
+            'object_region_map': dict(getattr(state, 'object_region_map', {}) or {}),
+            'object_region_descriptions': dict(getattr(state, 'object_region_descriptions', {}) or {}),
+            'lid_states': dict(getattr(state, 'lid_states', {}) or {}),
+        }
+
     def run(self, goal_text: str) -> Dict[str, Any]:
         if self.env is None:
             raise RuntimeError('Pipeline is not initialized')
@@ -796,6 +809,7 @@ class LLMOnlyReplanningPipeline:
             completed_actions = []
             remaining_actions = list(planned_actions) if success else []
             held_object = None
+        final_scene_state = self._final_scene_state_summary()
         return {
             'success': success,
             'goal_text': goal_text,
@@ -818,6 +832,9 @@ class LLMOnlyReplanningPipeline:
             'completed_actions': completed_actions,
             'remaining_actions': remaining_actions,
             'held_object': held_object,
+            'final_scene_state': final_scene_state,
+            'final_object_region_map': dict(final_scene_state.get('object_region_map', {}) or {}),
+            'final_lid_states': dict(final_scene_state.get('lid_states', {}) or {}),
             'last_goal_check': next(
                 (cycle.goal_check for cycle in reversed(self.cycles) if cycle.goal_check),
                 None,

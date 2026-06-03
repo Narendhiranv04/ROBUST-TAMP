@@ -25,6 +25,44 @@ SERVING_REGIONS = {'plate_boundary', 'plate-boundary', 'serving_area'}
 GRILL_REGIONS = {'inside_grill', 'grill', 'grill-top', 'grill_top', 'grill_boundary'}
 TABLE_REGIONS = {'table', 'prep_area'}
 
+KITCHEN_FINAL_GOALS = {
+    'K1': {
+        'inside_box': ('mug2', 'mug3'),
+        'cupboard_shelf': ('soup', 'spam'),
+    },
+    'K2': {
+        'inside_box': ('mug2', 'mug3'),
+        'cupboard_shelf': ('sugar', 'soup'),
+    },
+    'K3': {
+        'inside_box': ('mug1', 'mug2', 'mug3'),
+        'cupboard_shelf': ('sugar', 'soup'),
+    },
+}
+
+GRILL_FINAL_GOALS = {
+    'G1': {
+        'plate_top': ('chicken',),
+        'serving_area': ('plate',),
+        'table': ('spam',),
+    },
+    'G2': {
+        'plate_top': ('steak', 'chicken', 'steak1'),
+        'serving_area': ('plate',),
+    },
+    'G3': {
+        'plate_top': ('steak', 'chicken', 'steak1'),
+        'serving_area': ('plate',),
+        'table': ('spam',),
+    },
+}
+
+GRILL_OUTSIDE_COOKED_MEATS = {
+    'G1': ('chicken',),
+    'G2': ('chicken', 'steak1'),
+    'G3': ('chicken', 'steak1'),
+}
+
 
 def _normalize_token(token: Optional[str]) -> str:
     return (token or '').strip().lower().replace(' ', '_')
@@ -172,10 +210,213 @@ def score_variant_completion(variant_id: str, completed_actions: Sequence[Any]) 
     }
 
 
+def _normalized_object_region_map(object_region_map: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    return {
+        _normalize_token(obj_name): _normalize_region(str(region_name))
+        for obj_name, region_name in (object_region_map or {}).items()
+        if str(obj_name).strip()
+    }
+
+
+def _validator_result(
+    variant_id: str,
+    validator: str,
+    missing: List[str],
+    satisfied: List[str],
+    details: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        'success': not missing,
+        'variant_id': variant_id,
+        'validator': validator,
+        'missing': missing,
+        'satisfied': satisfied,
+        'details': details,
+    }
+
+
+def validate_kitchen_goal_from_scene(
+    variant_id: str,
+    object_region_map: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    variant = str(variant_id or '').strip().upper()
+    goals = KITCHEN_FINAL_GOALS.get(variant)
+    if goals is None:
+        return _validator_result(
+            variant,
+            'kitchen_scene_state',
+            [f'No kitchen validator configured for variant {variant or "(none)"}'],
+            [],
+            {'object_region_map': dict(object_region_map or {})},
+        )
+
+    normalized = _normalized_object_region_map(object_region_map)
+    missing: List[str] = []
+    satisfied: List[str] = []
+    for expected_region, objects in goals.items():
+        target_region = _normalize_region(expected_region)
+        for obj_name in objects:
+            obj = _normalize_token(obj_name)
+            observed_region = normalized.get(obj)
+            check = f'{obj} in {target_region}'
+            if observed_region == target_region:
+                satisfied.append(check)
+            else:
+                missing.append(f'{obj} is in {observed_region or "unknown"}, expected {target_region}')
+
+    return _validator_result(
+        variant,
+        'kitchen_scene_state',
+        missing,
+        satisfied,
+        {
+            'object_region_map': normalized,
+            'expected_regions': goals,
+        },
+    )
+
+
+def _action_after(actions: Sequence[Dict[str, Any]], start_index: int, action_name: str, arg0: Optional[str] = None) -> Optional[int]:
+    for index in range(max(0, int(start_index)), len(actions)):
+        action = actions[index]
+        if action.get('action') != action_name:
+            continue
+        args = action.get('args') or []
+        if arg0 is not None and (not args or args[0] != arg0):
+            continue
+        return index
+    return None
+
+
+def _place_to_region_after(
+    actions: Sequence[Dict[str, Any]],
+    start_index: int,
+    object_name: str,
+    region_name: str,
+) -> Optional[int]:
+    obj = _normalize_token(object_name)
+    target_region = _normalize_region(region_name)
+    for index in range(max(0, int(start_index)), len(actions)):
+        action = actions[index]
+        if action.get('action') != 'place':
+            continue
+        args = action.get('args') or []
+        if len(args) < 2:
+            continue
+        if args[0] == obj and _normalize_region(args[1]) == target_region:
+            return index
+    return None
+
+
+def _has_cooking_sequence(actions: Sequence[Dict[str, Any]], meat_name: str) -> bool:
+    inside_index = _place_to_region_after(actions, 0, meat_name, 'inside_grill')
+    if inside_index is None:
+        return False
+    close_index = _action_after(actions, inside_index + 1, 'close_lid', 'grill_lid')
+    if close_index is None:
+        return False
+    open_index = _action_after(actions, close_index + 1, 'open_lid', 'grill_lid')
+    if open_index is None:
+        return False
+    plate_index = _place_to_region_after(actions, open_index + 1, meat_name, 'plate_top')
+    return plate_index is not None
+
+
+def validate_grill_goal_from_scene_and_history(
+    variant_id: str,
+    object_region_map: Optional[Dict[str, Any]],
+    completed_actions: Sequence[Any],
+) -> Dict[str, Any]:
+    variant = str(variant_id or '').strip().upper()
+    final_goals = GRILL_FINAL_GOALS.get(variant)
+    cooked_meats = GRILL_OUTSIDE_COOKED_MEATS.get(variant)
+    if final_goals is None or cooked_meats is None:
+        return _validator_result(
+            variant,
+            'grill_scene_state_temporal',
+            [f'No grill validator configured for variant {variant or "(none)"}'],
+            [],
+            {
+                'object_region_map': dict(object_region_map or {}),
+                'completed_actions': [str(action) for action in completed_actions],
+            },
+        )
+
+    normalized = _normalized_object_region_map(object_region_map)
+    parsed_actions = [parse_action_string(action) for action in completed_actions]
+    parsed_actions = [action for action in parsed_actions if action is not None]
+
+    missing: List[str] = []
+    satisfied: List[str] = []
+    for expected_region, objects in final_goals.items():
+        target_region = _normalize_region(expected_region)
+        for obj_name in objects:
+            obj = _normalize_token(obj_name)
+            observed_region = normalized.get(obj)
+            check = f'{obj} in {target_region}'
+            if observed_region == target_region:
+                satisfied.append(check)
+            else:
+                missing.append(f'{obj} is in {observed_region or "unknown"}, expected {target_region}')
+
+    cooking_details: Dict[str, bool] = {}
+    for meat_name in cooked_meats:
+        meat = _normalize_token(meat_name)
+        cooked = _has_cooking_sequence(parsed_actions, meat)
+        cooking_details[meat] = cooked
+        check = f'{meat} cooked before plating'
+        if cooked:
+            satisfied.append(check)
+        else:
+            missing.append(
+                f'{meat} missing ordered cooking sequence: '
+                'place inside_grill -> close grill_lid -> open grill_lid -> place plate_top'
+            )
+
+    return _validator_result(
+        variant,
+        'grill_scene_state_temporal',
+        missing,
+        satisfied,
+        {
+            'object_region_map': normalized,
+            'expected_regions': final_goals,
+            'outside_cooked_meats': tuple(cooked_meats),
+            'cooking_sequences': cooking_details,
+            'parsed_actions': parsed_actions,
+        },
+    )
+
+
+def validate_variant_success(
+    variant_id: str,
+    object_region_map: Optional[Dict[str, Any]],
+    completed_actions: Sequence[Any],
+) -> Dict[str, Any]:
+    variant = str(variant_id or '').strip().upper()
+    if variant.startswith('K'):
+        return validate_kitchen_goal_from_scene(variant, object_region_map)
+    if variant.startswith('G'):
+        return validate_grill_goal_from_scene_and_history(variant, object_region_map, completed_actions)
+    return _validator_result(
+        variant,
+        'unknown_variant',
+        [f'No validator configured for variant {variant or "(none)"}'],
+        [],
+        {
+            'object_region_map': dict(object_region_map or {}),
+            'completed_actions': [str(action) for action in completed_actions],
+        },
+    )
+
+
 __all__ = [
     'aggregate_model_records',
     'collect_failure_occurrences',
     'collapse_actions_to_subtasks',
     'parse_action_string',
     'score_variant_completion',
+    'validate_grill_goal_from_scene_and_history',
+    'validate_kitchen_goal_from_scene',
+    'validate_variant_success',
 ]

@@ -1,4 +1,10 @@
-from llm_pipeline.metrics import collapse_actions_to_subtasks, parse_action_string, score_variant_completion
+from llm_pipeline.metrics import (
+    collapse_actions_to_subtasks,
+    parse_action_string,
+    score_variant_completion,
+    validate_grill_goal_from_scene_and_history,
+    validate_kitchen_goal_from_scene,
+)
 
 
 def test_open_action_counts_in_completion_metrics() -> None:
@@ -72,3 +78,192 @@ def test_k3_partial_grocery_completion_stays_incomplete() -> None:
         'observed': 1,
         'matched': 1,
     }
+
+
+def test_kitchen_validator_uses_scene_object_names() -> None:
+    result = validate_kitchen_goal_from_scene(
+        'K1',
+        {
+            'mug2': 'inside_box',
+            'mug3': 'box_boundary',
+            'soup': 'cupboard_shelf',
+            'spam': 'cupboard_boundary',
+            'can_of_beans': 'table',
+        },
+    )
+
+    assert result['success'] is True
+    assert 'soup in cupboard_shelf' in result['satisfied']
+
+
+def test_kitchen_validator_reports_missing_scene_object() -> None:
+    result = validate_kitchen_goal_from_scene(
+        'K2',
+        {
+            'mug2': 'inside_box',
+            'mug3': 'inside_box',
+            'sugar': 'cupboard_shelf',
+            'can_of_beans': 'cupboard_shelf',
+        },
+    )
+
+    assert result['success'] is False
+    assert 'soup is in unknown, expected cupboard_shelf' in result['missing']
+
+
+def test_grill_g1_validator_requires_final_state_and_cooking_sequence() -> None:
+    actions = [
+        'open(grill_lid)',
+        'pick(spam)',
+        'place(spam, table)',
+        'pick(chicken)',
+        'place(chicken, inside_grill)',
+        'close(grill_lid)',
+        'pick(plate)',
+        'place(plate, serving_area)',
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, plate_top)',
+    ]
+    result = validate_grill_goal_from_scene_and_history(
+        'G1',
+        {
+            'spam': 'table',
+            'plate': 'serving_area',
+            'chicken': 'plate_top',
+        },
+        actions,
+    )
+
+    assert result['success'] is True
+    assert result['details']['cooking_sequences']['chicken'] is True
+
+
+def test_grill_validator_rejects_plating_without_cooking_sequence() -> None:
+    actions = [
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, plate_top)',
+    ]
+    result = validate_grill_goal_from_scene_and_history(
+        'G1',
+        {
+            'spam': 'table',
+            'plate': 'serving_area',
+            'chicken': 'plate_top',
+        },
+        actions,
+    )
+
+    assert result['success'] is False
+    assert result['details']['cooking_sequences']['chicken'] is False
+
+
+def test_grill_validator_rejects_close_before_meat_enters_grill() -> None:
+    actions = [
+        'close(grill_lid)',
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, inside_grill)',
+        'pick(chicken)',
+        'place(chicken, plate_top)',
+    ]
+    result = validate_grill_goal_from_scene_and_history(
+        'G1',
+        {
+            'spam': 'table',
+            'plate': 'serving_area',
+            'chicken': 'plate_top',
+        },
+        actions,
+    )
+
+    assert result['success'] is False
+    assert result['details']['cooking_sequences']['chicken'] is False
+
+
+def test_grill_g2_validator_treats_initial_inside_steak_as_final_only() -> None:
+    actions = [
+        'open(grill_lid)',
+        'pick(plate)',
+        'place(plate, serving_area)',
+        'pick(steak)',
+        'place(steak, plate_top)',
+        'pick(chicken)',
+        'place(chicken, inside_grill)',
+        'pick(steak1)',
+        'place(steak1, inside_grill)',
+        'close(grill_lid)',
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, plate_top)',
+        'pick(steak1)',
+        'place(steak1, plate_top)',
+    ]
+    result = validate_grill_goal_from_scene_and_history(
+        'G2',
+        {
+            'plate': 'serving_area',
+            'steak': 'plate_top',
+            'chicken': 'plate_top',
+            'steak1': 'plate_top',
+        },
+        actions,
+    )
+
+    assert result['success'] is True
+    assert 'steak cooked before plating' not in result['satisfied']
+    assert result['details']['cooking_sequences'] == {'chicken': True, 'steak1': True}
+
+
+def test_grill_g3_validator_requires_spam_on_table() -> None:
+    actions = [
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, inside_grill)',
+        'pick(steak1)',
+        'place(steak1, inside_grill)',
+        'close(grill_lid)',
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, plate_top)',
+        'pick(steak1)',
+        'place(steak1, plate_top)',
+    ]
+    result = validate_grill_goal_from_scene_and_history(
+        'G3',
+        {
+            'plate': 'serving_area',
+            'steak': 'plate_top',
+            'chicken': 'plate_top',
+            'steak1': 'plate_top',
+            'spam': 'inside_grill',
+        },
+        actions,
+    )
+
+    assert result['success'] is False
+    assert 'spam is in inside_grill, expected table' in result['missing']
+
+
+def test_grill_validator_requires_plate_in_serving_area() -> None:
+    actions = [
+        'pick(chicken)',
+        'place(chicken, inside_grill)',
+        'close(grill_lid)',
+        'open(grill_lid)',
+        'pick(chicken)',
+        'place(chicken, plate_top)',
+    ]
+    result = validate_grill_goal_from_scene_and_history(
+        'G1',
+        {
+            'spam': 'table',
+            'plate': 'dish_rack',
+            'chicken': 'plate_top',
+        },
+        actions,
+    )
+
+    assert result['success'] is False
+    assert 'plate is in dish_rack, expected serving_area' in result['missing']

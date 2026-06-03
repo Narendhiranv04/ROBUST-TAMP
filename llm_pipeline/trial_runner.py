@@ -15,7 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from evaluation.canonical_variants import get_variant_spec
-from llm_pipeline.metrics import collect_failure_occurrences, score_variant_completion
+from llm_pipeline.metrics import collect_failure_occurrences, score_variant_completion, validate_variant_success
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
 
 
@@ -226,7 +226,7 @@ def run_trial(
     goal_override: Optional[str] = None,
     live_masks: bool = True,
     scene_state_trace: bool = False,
-    goal_check: bool = True,
+    goal_check: bool = False,
 ) -> Dict[str, Any]:
     variant_spec = get_variant_spec(variant_id)
     if not variant_spec.model_eval_supported:
@@ -312,11 +312,14 @@ def run_trial(
         else:
             summary = pipeline.run(goal_text)
             completion = score_variant_completion(variant_spec.variant_id, summary.get('completed_actions', []))
+            success_validation = validate_variant_success(
+                variant_spec.variant_id,
+                summary.get('final_object_region_map', {}),
+                summary.get('completed_actions', []),
+            )
             failure_occurrences = collect_failure_occurrences(summary.get('cycles', []), summary.get('failure_reason'))
             execution_skipped = bool(summary.get('execution_skipped', False))
-            episode_success = None if execution_skipped else bool(summary.get('success')) and (
-                completion['completed_gt_subtasks'] >= completion['gt_total_subtasks']
-            )
+            episode_success = None if execution_skipped else bool(success_validation.get('success', False))
             record = {
                 'variant_id': variant_spec.variant_id,
                 'task_family': variant_spec.task_family,
@@ -330,6 +333,7 @@ def run_trial(
                 'bucket_breakdown': completion['bucket_breakdown'],
                 'observed_subtasks': completion['observed_subtasks'],
                 'extra_observed_subtasks': completion['extra_observed_subtasks'],
+                'success_validation': success_validation,
                 'model_alias': summary.get('model_alias', model_alias),
                 'model_type': 'llm',
                 'icl_mode': icl_mode,
@@ -355,6 +359,8 @@ def run_trial(
                 'planned_actions': list(summary.get('planned_actions', [])),
                 'completed_actions': list(summary.get('completed_actions', [])),
                 'remaining_actions': list(summary.get('remaining_actions', [])),
+                'final_object_region_map': dict(summary.get('final_object_region_map', {}) or {}),
+                'final_lid_states': dict(summary.get('final_lid_states', {}) or {}),
                 'failure_reason': summary.get('failure_reason'),
                 'failure_occurrences': failure_occurrences,
                 'episode_time_s': summary.get('episode_time_s'),
@@ -390,7 +396,9 @@ def main() -> None:
     display_group.add_argument('--headless', action='store_true', help='Run without simulator GUI')
     parser.add_argument('--no-live-masks', action='store_true', help='Disable the separate live segmentation window')
     parser.add_argument('--scene-state-trace', action='store_true', help='Print scene-state snapshots around execution checks')
-    parser.add_argument('--no-goal-check', action='store_true', help='Disable LLM goal-completion verification after each completed plan')
+    goal_check_group = parser.add_mutually_exclusive_group()
+    goal_check_group.add_argument('--goal-check', action='store_true', help='Enable LLM goal-completion verification during execution')
+    goal_check_group.add_argument('--no-goal-check', action='store_true', help='Keep LLM goal-completion verification disabled during execution')
     parser.add_argument('--remote', action='store_true', help='Use the maintained remote LLM planner server')
     parser.add_argument('--remote-url', default=os.environ.get('LLM_SERVER_URL', os.environ.get('VLM_SERVER_URL', 'http://localhost:8000')), help='Remote planner server URL')
     parser.add_argument('--replan-mode', choices=['on', 'off'], default='on', help='Use full execution+replanning (on) or first-plan-only mode with no failure checks (off)')
@@ -417,7 +425,7 @@ def main() -> None:
         goal_override=args.goal or None,
         live_masks=not args.no_live_masks,
         scene_state_trace=args.scene_state_trace,
-        goal_check=not args.no_goal_check,
+        goal_check=bool(args.goal_check and not args.no_goal_check),
     )
     print(json.dumps(record, indent=2))
 
