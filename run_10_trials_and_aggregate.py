@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run repeated planner trials and aggregate benchmark metrics."""
 
+"The details of metrics can be read from metric_information.md"
+
 from __future__ import annotations
 
 import argparse
