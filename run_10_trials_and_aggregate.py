@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run repeated planner trials and aggregate benchmark metrics."""
 
-"The details of metrics can be read from metric_information.md"
+# The details of metrics can be read from metric_information.md.
+# VLM command: `python3 run_10_trials_and_aggregate.py --pipeline vlm --model <model>` sends a stitched left/right/overhead/wrist/front composite encoded as base64 to the maintained planner server.
 
 from __future__ import annotations
 
@@ -20,43 +21,33 @@ def _record_path(output_dir: Path, trial_index: int) -> Path:
 
 
 def _trial_command(args: argparse.Namespace, trial_index: int, trial_dir: Path) -> List[str]:
-    if args.pipeline == "llm":
-        command = [
-            sys.executable,
-            "-m",
-            "llm_pipeline.trial_runner",
-            "--variant",
-            args.variant,
-            "--model",
-            args.model,
-            "--icl-mode",
-            args.icl_mode,
-            "--max-replans",
-            str(args.max_replans),
-            "--output-dir",
-            str(trial_dir),
-        ]
-    else:
-        command = [
-            sys.executable,
-            "run_model_trial.py",
-            "--variant",
-            args.variant,
-            "--model",
-            args.model,
-            "--max-replans",
-            str(args.max_replans),
-            "--trial-index",
-            str(trial_index),
-            "--output",
-            str(trial_dir / "record.json"),
-        ]
-        if args.model_type:
-            command.extend(["--model-type", args.model_type])
+    command = [
+        sys.executable,
+        "-m",
+        "llm_pipeline.trial_runner",
+        "--variant",
+        args.variant,
+        "--model",
+        args.model,
+        "--icl-mode",
+        args.icl_mode,
+        "--max-replans",
+        str(args.max_replans),
+        "--trial-index",
+        str(trial_index),
+        "--output-dir",
+        str(trial_dir),
+    ]
+    if args.pipeline == "vlm":
+        command.append("--vision")
+    if args.model_type:
+        command.extend(["--model-type", args.model_type])
 
     if args.remote:
         command.extend(["--remote", "--remote-url", args.remote_url])
-    if args.pipeline == "llm" and not args.goal_check:
+    if args.goal_check:
+        command.append("--goal-check")
+    else:
         command.append("--no-goal-check")
     command.append("--headless" if args.headless else "--gui")
     return command
@@ -182,7 +173,7 @@ def parse_args() -> argparse.Namespace:
     display.add_argument("--gui", action="store_false", dest="headless")
     parser.add_argument("--aggregate-only", action="store_true", help="Skip running trials and aggregate existing records.")
     parser.add_argument("--no-goal-check", dest="goal_check", action="store_false", help="Disable LLM goal-completion verification.")
-    parser.set_defaults(goal_check=True)
+    parser.set_defaults(goal_check=False)
     return parser.parse_args()
 
 

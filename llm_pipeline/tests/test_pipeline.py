@@ -1,3 +1,5 @@
+import numpy as np
+
 from llm_pipeline.executor import PrimitiveExecutionOutcome
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
 from llm_pipeline.planner import MockTextLLMPlanner, TextLLMPlanner
@@ -6,6 +8,7 @@ from llm_pipeline.pipeline_types import (
     FailureEvent,
     FailureSource,
     FailureStage,
+    DirectAction,
     GoalCheckResult,
     PlanResult,
     SegmentationObjectEvidence,
@@ -130,6 +133,45 @@ class GoalCheckParseFailurePlanner(QueuePlanner):
             inference_time=0.01,
             error_message='Goal check output must include GOAL_COMPLETE or GOAL_INCOMPLETE.',
         )
+
+
+class BundleCapturingPlanner:
+    def __init__(self, action_batches=None):
+        self.model_alias = 'mock-vlm'
+        self.model_name = 'mock-vlm'
+        self.loaded = True
+        self.parser = StrictActionParser()
+        self.bundles = []
+        self.action_batches = list(action_batches or [[DirectAction('open', ('box_lid',))]])
+
+    def load_model(self):
+        self.loaded = True
+        return True
+
+    def plan(self, bundle):
+        self.bundles.append(bundle)
+        actions = self.action_batches.pop(0) if self.action_batches else []
+        return PlanResult(
+            success=True,
+            actions=actions,
+            raw_output='\n'.join(str(action) for action in actions) or 'NO_ACTIONS',
+            inference_time=0.01,
+        )
+
+    def get_debug_info(self):
+        bundle = self.bundles[-1] if self.bundles else None
+        images = getattr(bundle, 'images', None) or []
+        return {
+            'model_alias': self.model_alias,
+            'model_name': self.model_name,
+            'model_type': 'vlm',
+            'loaded': self.loaded,
+            'last_request': {
+                'use_vision': True,
+                'image_present': bool(images),
+                'text_only': False,
+            },
+        }
 
 
 class FakeSegmentationAdapter:
@@ -310,6 +352,31 @@ class FakeEnv:
     def hold_startup_lid_pose(self):
         self.startup_lid_hold_calls += 1
         return True
+
+
+class FakeCamera:
+    def __init__(self, value):
+        self.value = value
+        self.capture_calls = 0
+
+    def handle_explicitly(self):
+        return None
+
+    def capture_rgb(self):
+        self.capture_calls += 1
+        return np.full((4, 5, 3), self.value + self.capture_calls, dtype=np.uint8)
+
+
+class FakeVisionEnv(FakeEnv):
+    def __init__(self):
+        super().__init__()
+        self.cams = {
+            'left': FakeCamera(10),
+            'right': FakeCamera(20),
+            'overhead': FakeCamera(30),
+            'wrist': FakeCamera(40),
+            'front': FakeCamera(50),
+        }
 
 
 def _snapshot() -> SegmentationSnapshot:
@@ -621,6 +688,97 @@ def test_pipeline_preflight_reports_no_image_input() -> None:
     assert preflight['prompt_contract_ok'] is True
     assert preflight['dry_run_failure_event'] is None
     assert 'image' not in ''.join(preflight['prompt_trace']['bundle'].keys())
+
+
+def test_vlm_preflight_uses_state_text_plus_redacted_composite_image() -> None:
+    planner = BundleCapturingPlanner()
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            model_type='vlm',
+            enable_vision=True,
+            text_only=False,
+            icl_mode='zero_shot',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=FakeFailureChecker(segmentation_adapter, snapshot),
+        executor=FakeExecutor(),
+    )
+
+    env = FakeVisionEnv()
+    assert pipeline.initialize(env=env) is True
+    preflight = pipeline.preflight('Open the lid.')
+
+    assert preflight['model_type'] == 'vlm'
+    assert preflight['text_only'] is False
+    assert preflight['use_vision'] is True
+    assert preflight['image_present'] is True
+    assert preflight['prompt_contract_ok'] is True
+    assert preflight['image_metadata']['camera_names'] == ['left', 'right', 'overhead', 'wrist', 'front']
+    assert preflight['image_metadata']['image_shapes'] == [[8, 15, 3]]
+
+    bundle = planner.bundles[-1]
+    assert bundle.images is not None
+    assert bundle.images[0].shape == (8, 15, 3)
+    assert '## Valid Target Regions:' in bundle.user_prompt
+    assert '## Object States (Geometric):' in bundle.user_prompt
+    assert '## Lid State:' in bundle.user_prompt
+    assert '## Access Constraints:' in bundle.user_prompt
+    assert '### Output Contract' in bundle.user_prompt
+
+    trace_bundle = preflight['prompt_trace']['bundle']
+    assert 'images' not in trace_bundle
+    assert trace_bundle['image_metadata']['image_present'] is True
+
+
+def test_vlm_replanning_sends_fresh_image_with_failure_context() -> None:
+    planner = BundleCapturingPlanner(
+        action_batches=[
+            [
+                DirectAction('pick', ('mug2',)),
+                DirectAction('place', ('mug2', 'table_target_area')),
+            ],
+            [
+                DirectAction('place', ('mug2', 'table_target_area')),
+                DirectAction('open', ('box_lid',)),
+            ],
+        ]
+    )
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            model_type='vlm',
+            enable_vision=True,
+            text_only=False,
+            icl_mode='zero_shot',
+            max_replans=2,
+            enable_goal_check=False,
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=FakeFailureChecker(segmentation_adapter, snapshot),
+        executor=FakeExecutor(),
+    )
+
+    env = FakeVisionEnv()
+    assert pipeline.initialize(env=env) is True
+    summary = pipeline.run('Move mug2 to table_target_area and open the lid.')
+
+    assert summary['success'] is True
+    assert summary['model_type'] == 'vlm'
+    assert len(planner.bundles) == 2
+    first_image = planner.bundles[0].images[0]
+    replan_image = planner.bundles[1].images[0]
+    assert first_image.shape == replan_image.shape == (8, 15, 3)
+    assert not np.array_equal(first_image, replan_image)
+    assert '=== REPLANNING TRIGGERED ===' in planner.bundles[1].user_prompt
+    assert 'COMPLETED_ACTIONS: pick(mug2)' in planner.bundles[1].user_prompt
+    assert env.cams['left'].capture_calls >= 2
 
 
 def test_pipeline_reports_validation_failure_before_execution() -> None:

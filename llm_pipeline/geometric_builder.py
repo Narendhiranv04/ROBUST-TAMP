@@ -78,15 +78,7 @@ class GeometricContextBuilder(BaseContextBuilder):
         icl_mode: str = ICLMode.ZERO_SHOT.value
     ) -> PromptBundle:
         
-        # 1. Image Stitching
-        composite = None
-        if state.images:
-            # If state already has images (e.g. from a previous perception step)
-            # we assume they are the individual frames.
-            # In a real environment, state.images would be a dict Cam -> Array
-            pass
-        
-        # 2. State to PDDL-style Text
+        # 1. State to PDDL-style Text
         obs_lines = []
         obs_lines.append("## Robot State:")
         obs_lines.append(f"- gripper: {state.gripper_state.get('status', 'empty')}")
@@ -196,7 +188,7 @@ class GeometricContextBuilder(BaseContextBuilder):
             visible_objects=state.visible_objects,
             valid_regions=state.valid_regions,
             icl_mode=icl_mode,
-            images=[state.images] if state.images is not None else None,
+            images=list(state.images) if state.images is not None else None,
             previous_actions=tuple(previous_actions) if previous_actions else (),
             failure_context=failure_event.message if failure_event else None,
             metadata={'held_object': state.gripper_state.get('holding')},

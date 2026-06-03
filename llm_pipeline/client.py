@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import time
+from io import BytesIO
 from typing import Any, Dict, Optional
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None
 
 try:
     import requests
@@ -62,6 +69,13 @@ class RemoteTextLLMPlanner:
         self.server_model_info: Dict[str, Any] = {}
         self.last_request_summary: Dict[str, Any] = {}
 
+    def _encode_image_base64(self, image: Any) -> Optional[str]:
+        if image is None or np is None:
+            return None
+        buffer = BytesIO()
+        np.save(buffer, np.asarray(image), allow_pickle=False)
+        return base64.b64encode(buffer.getvalue()).decode('ascii')
+
     def load_model(self) -> bool:
         try:
             response = requests.get(f'{self.server_url}/health', timeout=10)
@@ -105,6 +119,10 @@ class RemoteTextLLMPlanner:
         image_b64 = getattr(bundle, 'image_base64', None) if hasattr(bundle, 'image_base64') else None
         if not image_b64 and 'image_base64' in getattr(bundle, '__dict__', {}):
              image_b64 = bundle.__dict__['image_base64']
+        if not image_b64 and bundle is not None:
+            images = getattr(bundle, 'images', None) or []
+            if images:
+                image_b64 = self._encode_image_base64(images[0])
 
         request_data = {
             'system_prompt': system_prompt,
@@ -115,7 +133,15 @@ class RemoteTextLLMPlanner:
             'temperature': float(temperature),
             'held_object': held_object,
             'use_vision': bool(image_b64 is not None),
-            'image_base64': image_b64,
+            'image_present': bool(image_b64 is not None),
+        }
+        if image_b64 is not None:
+            request_data['image_base64'] = image_b64
+        self.last_request_summary = {
+            'model_type': getattr(self.expected_model, 'model_type', 'llm'),
+            'use_vision': bool(image_b64 is not None),
+            'image_present': bool(image_b64 is not None),
+            'text_only': image_b64 is None,
         }
 
         try:
@@ -240,7 +266,10 @@ class RemoteTextLLMPlanner:
         info: Dict[str, Any] = {
             'model_alias': self.model_alias,
             'model_name': self.model_name,
-            'model_type': 'llm',
+            'model_type': self.server_model_info.get(
+                'model_type',
+                getattr(self.expected_model, 'model_type', 'llm'),
+            ),
             'loaded': self.loaded,
             'server_url': self.server_url,
             'health': dict(self.server_model_info),
@@ -250,6 +279,7 @@ class RemoteTextLLMPlanner:
             health = requests.get(f'{self.server_url}/health', timeout=10)
             if health.status_code == 200:
                 info['health'] = health.json()
+                info['model_type'] = info['health'].get('model_type', info['model_type'])
         except Exception as exc:
             info['health_error'] = str(exc)
 

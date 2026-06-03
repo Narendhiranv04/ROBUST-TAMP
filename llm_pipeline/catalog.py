@@ -28,6 +28,20 @@ def resolve_llm_model(alias_or_path: str) -> ModelSpec:
     return spec
 
 
+def resolve_planner_model(alias_or_path: str, model_type: str = "") -> ModelSpec:
+    explicit_type = (model_type or "").strip().lower()
+    if explicit_type:
+        return resolve_model_spec(alias_or_path, explicit_type)
+    return resolve_model_spec(alias_or_path)
+
+
+def resolve_vlm_model(alias_or_path: str) -> ModelSpec:
+    spec = resolve_model_spec(alias_or_path, "vlm")
+    if spec.model_type != "vlm":
+        raise ValueError(f"Model '{alias_or_path}' is not a VLM entry")
+    return spec
+
+
 def list_candidate_llms() -> List[LLMModelChoice]:
     choices: List[LLMModelChoice] = []
     for spec in list_models():

@@ -1,4 +1,4 @@
-"""Run one LLM-only kitchen or grill trial and emit a structured JSON record."""
+"""Run one maintained LLM/VLM kitchen or grill trial and emit a structured JSON record."""
 
 from __future__ import annotations
 
@@ -85,6 +85,21 @@ def _text_only_contract_issues(preflight_record: Dict[str, Any]) -> list[str]:
         issues.append('image_key_in_prompt_bundle')
     if any('image' in key for key in debug_snapshot):
         issues.append('image_key_in_debug_snapshot')
+    for field_name in ('system_prompt', 'user_prompt'):
+        if field_name not in prompt_trace:
+            issues.append(f'missing_{field_name}')
+    return sorted(set(issues))
+
+
+def _vision_contract_issues(preflight_record: Dict[str, Any]) -> list[str]:
+    issues = list(preflight_record.get('prompt_contract_issues', []))
+    prompt_trace = preflight_record.get('prompt_trace', {}) or {}
+    bundle = prompt_trace.get('bundle', {}) or {}
+    image_metadata = bundle.get('image_metadata') or preflight_record.get('image_metadata') or {}
+    if not image_metadata.get('image_present'):
+        issues.append('missing_image_in_prompt_bundle')
+    if 'images' in bundle:
+        issues.append('raw_images_in_prompt_trace')
     for field_name in ('system_prompt', 'user_prompt'):
         if field_name not in prompt_trace:
             issues.append(f'missing_{field_name}')
@@ -227,11 +242,13 @@ def run_trial(
     live_masks: bool = True,
     scene_state_trace: bool = False,
     goal_check: bool = False,
+    vision: bool = False,
+    model_type: str = '',
 ) -> Dict[str, Any]:
     variant_spec = get_variant_spec(variant_id)
     if not variant_spec.model_eval_supported:
         raise RuntimeError(
-            f'Variant {variant_spec.variant_id} is not supported for the LLM-only runner: '
+            f'Variant {variant_spec.variant_id} is not supported for the maintained planner runner: '
             f"{variant_spec.model_eval_reason or 'unsupported'}"
         )
 
@@ -249,7 +266,10 @@ def run_trial(
         headless=headless,
         use_remote_planner=remote,
         remote_planner_url=remote_url,
-        text_only=True,
+        text_only=not vision,
+        enable_vision=bool(vision),
+        model_type=model_type or ('vlm' if vision else 'llm'),
+        prompt_mode='segmentation_text_image' if vision else 'segmentation_text_only',
         segmentation_first=True,
         pre_action_checks_enabled=replanning_enabled,
         post_action_checks_enabled=replanning_enabled,
@@ -275,15 +295,17 @@ def run_trial(
             raise RuntimeError('pipeline_initialize_failed')
 
         preflight = pipeline.preflight(goal_text)
-        preflight_issues = _text_only_contract_issues(preflight)
+        preflight_issues = _vision_contract_issues(preflight) if vision else _text_only_contract_issues(preflight)
         preflight['prompt_contract_issues'] = preflight_issues
         preflight['prompt_contract_ok'] = not preflight_issues
         preflight['preflight_success'] = (
             bool(preflight.get('loaded'))
             and bool(preflight.get('dry_run_plan_success'))
             and not preflight_issues
-            and preflight.get('image_present') is False
+            and bool(preflight.get('image_present')) is bool(vision)
         )
+        effective_model_type = preflight.get('model_type') or ('vlm' if vision else 'llm')
+        text_only = not bool(vision)
 
         if preflight_only:
             record = {
@@ -293,10 +315,13 @@ def run_trial(
                 'trial_index': int(trial_index),
                 'preflight_only': True,
                 'model_alias': model_alias,
-                'model_type': 'llm',
+                'model_type': effective_model_type,
                 'icl_mode': icl_mode,
                 'goal_text': goal_text,
-                'text_only': True,
+                'text_only': text_only,
+                'use_vision': bool(vision),
+                'image_present': bool(preflight.get('image_present', False)),
+                'image_metadata': dict(preflight.get('image_metadata', {}) or {}),
                 'segmentation_first': True,
                 'replan_mode': replan_mode,
                 'use_remote_planner': bool(remote),
@@ -335,11 +360,14 @@ def run_trial(
                 'extra_observed_subtasks': completion['extra_observed_subtasks'],
                 'success_validation': success_validation,
                 'model_alias': summary.get('model_alias', model_alias),
-                'model_type': 'llm',
+                'model_type': summary.get('model_type', effective_model_type),
                 'icl_mode': icl_mode,
                 'prompt_mode': summary.get('prompt_mode', icl_mode),
                 'goal_text': goal_text,
-                'text_only': True,
+                'text_only': bool(summary.get('text_only', text_only)),
+                'use_vision': bool(summary.get('use_vision', vision)),
+                'image_present': bool(summary.get('image_present', preflight.get('image_present', False))),
+                'image_metadata': dict(summary.get('image_metadata', preflight.get('image_metadata', {})) or {}),
                 'segmentation_first': True,
                 'replan_mode': summary.get('replan_mode', replan_mode),
                 'planning_success': bool(summary.get('success')),
@@ -384,9 +412,11 @@ def run_trial(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Run one LLM-only kitchen or grill benchmark trial')
+    parser = argparse.ArgumentParser(description='Run one maintained LLM/VLM kitchen or grill benchmark trial')
     parser.add_argument('--variant', required=True, help='Variant id (K1/K2/K3/G1/G2/G3)')
-    parser.add_argument('--model', required=True, help='Registered LLM alias or custom HF path')
+    parser.add_argument('--model', required=True, help='Registered planner alias or custom HF path')
+    parser.add_argument('--model-type', choices=['', 'llm', 'vlm'], default='', help='Optional explicit model type')
+    parser.add_argument('--vision', action='store_true', help='Use the maintained multimodal VLM backend')
     parser.add_argument('--icl-mode', required=True, choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode to evaluate')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
     parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
@@ -399,10 +429,10 @@ def main() -> None:
     goal_check_group = parser.add_mutually_exclusive_group()
     goal_check_group.add_argument('--goal-check', action='store_true', help='Enable LLM goal-completion verification during execution')
     goal_check_group.add_argument('--no-goal-check', action='store_true', help='Keep LLM goal-completion verification disabled during execution')
-    parser.add_argument('--remote', action='store_true', help='Use the maintained remote LLM planner server')
+    parser.add_argument('--remote', action='store_true', help='Use the maintained remote planner server')
     parser.add_argument('--remote-url', default=os.environ.get('LLM_SERVER_URL', os.environ.get('VLM_SERVER_URL', 'http://localhost:8000')), help='Remote planner server URL')
     parser.add_argument('--replan-mode', choices=['on', 'off'], default='on', help='Use full execution+replanning (on) or first-plan-only mode with no failure checks (off)')
-    parser.add_argument('--preflight-only', action='store_true', help='Only run text-only load/prompt validation')
+    parser.add_argument('--preflight-only', action='store_true', help='Only run load/prompt validation')
     parser.add_argument('--output', default='', help='Optional JSON output path. Also writes a sibling .txt summary.')
     parser.add_argument('--output-dir', default='', help='Optional run directory. Writes record.json and failure_summary.txt inside it.')
     parser.add_argument('--output-root', default=str(DEFAULT_RUN_OUTPUT_ROOT), help='Root for auto-created run folders when --output/--output-dir are omitted.')
@@ -426,6 +456,8 @@ def main() -> None:
         live_masks=not args.no_live_masks,
         scene_state_trace=args.scene_state_trace,
         goal_check=bool(args.goal_check and not args.no_goal_check),
+        vision=bool(args.vision),
+        model_type=args.model_type,
     )
     print(json.dumps(record, indent=2))
 

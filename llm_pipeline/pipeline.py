@@ -9,7 +9,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from llm_pipeline.catalog import resolve_llm_model
+from llm_pipeline.catalog import resolve_llm_model, resolve_planner_model, resolve_vlm_model
 from llm_pipeline.client import RemoteTextLLMPlanner
 from llm_pipeline.executable_symbols import build_runtime_symbol_registry
 from llm_pipeline.failure_logic import SegmentationFirstFailureChecker, GeometricFailureChecker
@@ -36,6 +36,8 @@ except ImportError:
 
 
 PROMPT_MODE_SEGMENTATION_TEXT = 'segmentation_text_only'
+PROMPT_MODE_VLM_MULTIMODAL = 'segmentation_text_image'
+VLM_CAMERA_NAMES = ('left', 'right', 'overhead', 'wrist', 'front')
 
 
 @dataclass
@@ -58,6 +60,7 @@ class LLMPipelineConfig:
     live_segmentation_view: bool = True
     visible_objects_only: bool = True
     prompt_mode: str = PROMPT_MODE_SEGMENTATION_TEXT
+    model_type: str = ''
     direct_executable_names: bool = True
     explicit_move_token: bool = True
     live_view_update_stride: int = 5
@@ -78,8 +81,13 @@ class LLMPipelineConfig:
     context_builder_type: str = 'geometric'  # IMPROVED ACCURACY: Default to 3D geometric reasoning
 
     def resolve_model_name(self) -> Tuple[str, str]:
-        spec = resolve_llm_model(self.model_path or self.model_alias)
+        model_type = 'vlm' if self.enable_vision else (self.model_type or 'llm')
+        spec = resolve_planner_model(self.model_path or self.model_alias, model_type)
         return spec.alias, spec.path
+
+    @property
+    def effective_model_type(self) -> str:
+        return 'vlm' if self.enable_vision else 'llm'
 
 
 KITCHEN_REQUIRED_OBJECTS = {
@@ -155,6 +163,7 @@ class LLMOnlyReplanningPipeline:
         self.last_prompt_trace: Dict[str, Any] = {}
         self.symbol_registry = None
         self._sim_step_counter = 0
+        self._last_image_camera_names: List[str] = []
 
         # Default Context Builder based on config
         # IMPROVED ACCURACY: Always default to 3D Geometric Reasoning
@@ -240,18 +249,24 @@ class LLMOnlyReplanningPipeline:
 
         if self.planner is None:
             model_alias, model_name = self.config.resolve_model_name()
-            if self.config.enable_vision:
+            if self.config.use_remote_planner:
+                expected_model = (
+                    resolve_vlm_model(self.config.model_path or self.config.model_alias)
+                    if self.config.enable_vision
+                    else resolve_llm_model(self.config.model_path or self.config.model_alias)
+                )
+                self.planner = RemoteTextLLMPlanner(
+                    server_url=self.config.remote_planner_url or None,
+                    expected_model=expected_model,
+                )
+            elif self.config.enable_vision:
                 if VLMPlanner is None:
                     raise ImportError("VLMPlanner dependencies not met, but enable_vision=True")
                 self.planner = VLMPlanner(
                     model_path=model_name or model_alias,
+                    model_alias=model_alias,
                     device=self.config.device,
                     use_4bit=self.config.use_4bit
-                )
-            elif self.config.use_remote_planner:
-                self.planner = RemoteTextLLMPlanner(
-                    server_url=self.config.remote_planner_url or None,
-                    expected_model=resolve_llm_model(self.config.model_path or self.config.model_alias),
                 )
             else:
                 self.planner = TextLLMPlanner(
@@ -289,23 +304,55 @@ class LLMOnlyReplanningPipeline:
         if self.segmentation_adapter is not None and hasattr(self.segmentation_adapter, 'reset_tracking'):
             self.segmentation_adapter.reset_tracking()
 
+    def _image_metadata(self, images: Optional[List[np.ndarray]]) -> Dict[str, Any]:
+        image_list = [image for image in (list(images) if images is not None else []) if image is not None]
+        shapes = [list(getattr(image, 'shape', ())) for image in image_list]
+        return {
+            'image_present': bool(image_list),
+            'image_count': len(image_list),
+            'image_shapes': shapes,
+            'camera_names': list(self._last_image_camera_names) if image_list else [],
+        }
+
+    def _prompt_bundle_trace(self, bundle) -> Dict[str, Any]:
+        trace = {}
+        for key, value in bundle.__dict__.items():
+            if value is None:
+                continue
+            if key == 'images':
+                trace['image_metadata'] = self._image_metadata(value)
+                continue
+            if key == 'image_paths' and not value:
+                continue
+            trace[key] = value
+        return trace
+
     def preflight(self, goal_text: str) -> Dict[str, Any]:
         plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=None, silent=True)
         self._cached_preflight_plan = (plan_result, prompt_trace)
         debug_snapshot = self.get_debug_snapshot()
         bundle = prompt_trace.get('bundle', {})
         prompt_contract_issues = []
-        if any('image' in key and bundle.get(key) for key in bundle):
-            prompt_contract_issues.append('image_key_in_prompt_bundle')
-        if debug_snapshot and any('image' in key and debug_snapshot.get(key) for key in debug_snapshot):
-            prompt_contract_issues.append('image_key_in_debug_snapshot')
+        image_metadata = dict(bundle.get('image_metadata', {}) or {})
+        image_present = bool(image_metadata.get('image_present', False))
+        if self.config.enable_vision:
+            if not image_present:
+                prompt_contract_issues.append('missing_image_in_prompt_bundle')
+        else:
+            if image_present:
+                prompt_contract_issues.append('image_key_in_prompt_bundle')
+            if debug_snapshot and any('image' in key and debug_snapshot.get(key) for key in debug_snapshot):
+                prompt_contract_issues.append('image_key_in_debug_snapshot')
         return {
             'model_alias': getattr(self.planner, 'model_alias', self.config.model_alias),
             'model_name': getattr(self.planner, 'model_name', self.config.model_path or self.config.model_alias),
+            'model_type': self.config.effective_model_type,
             'icl_mode': self.config.icl_mode,
             'loaded': bool(getattr(self.planner, 'loaded', False)),
-            'text_only': True,
-            'image_present': False,
+            'text_only': not self.config.enable_vision,
+            'use_vision': bool(self.config.enable_vision),
+            'image_present': image_present,
+            'image_metadata': image_metadata,
             'prompt_contract_ok': not prompt_contract_issues,
             'prompt_contract_issues': prompt_contract_issues,
             'dry_run_plan_success': bool(plan_result.success),
@@ -395,11 +442,7 @@ class LLMOnlyReplanningPipeline:
                 print(f'[LLM] Plan FAILED: {result.error_message}')
             print(f'{"=" * 60}')
 
-        bundle_trace = {
-            key: value
-            for key, value in bundle.__dict__.items()
-            if value is not None and not (key in {'images', 'image_paths'} and not value)
-        }
+        bundle_trace = self._prompt_bundle_trace(bundle)
         self.last_prompt_trace = {
             'bundle': bundle_trace,
             'state': state.to_dict(),
@@ -412,9 +455,48 @@ class LLMOnlyReplanningPipeline:
             self._update_live_action_sequence([], None)
         return result, dict(self.last_prompt_trace)
 
+    def _capture_rgb_frames(self) -> Dict[str, np.ndarray]:
+        frames: Dict[str, np.ndarray] = {}
+        cameras = getattr(self.env, 'cams', {}) or {}
+        for camera_name in VLM_CAMERA_NAMES:
+            camera = cameras.get(camera_name) if isinstance(cameras, dict) else None
+            if camera is None:
+                continue
+            try:
+                if hasattr(camera, 'handle_explicitly'):
+                    camera.handle_explicitly()
+                image = camera.capture_rgb()
+            except Exception:
+                continue
+            if image is None:
+                continue
+            array = np.asarray(image)
+            if array.dtype != np.uint8:
+                array = np.clip(array * 255.0, 0, 255).astype(np.uint8)
+            frames[camera_name] = array
+        return frames
+
+    def _capture_composite_image(self) -> Optional[np.ndarray]:
+        self._last_image_camera_names = []
+        if not self.config.enable_vision:
+            return None
+        frames = self._capture_rgb_frames()
+        if not frames:
+            return None
+        self._last_image_camera_names = [name for name in VLM_CAMERA_NAMES if name in frames]
+        stitcher = getattr(self.context_builder, 'stitch_frames', None)
+        if callable(stitcher):
+            return stitcher(frames)
+
+        ordered = [frames[name] for name in VLM_CAMERA_NAMES if name in frames]
+        if not ordered:
+            return None
+        return ordered[0]
+
     def _build_scene_state(self) -> SceneState:
         """Helper to build a unified SceneState from current sensors."""
         snapshot = self.segmentation_adapter.capture_snapshot(event='planning')
+        composite_image = self._capture_composite_image()
         
         # Extract 3D poses and region bboxes if available
         pose_map = {}
@@ -471,6 +553,7 @@ class LLMOnlyReplanningPipeline:
             pddl_state=pddl_state,
             masks=snapshot.gripper_evidence.get('masks', {}),
             pose_map=pose_map,
+            images=[composite_image] if composite_image is not None else None,
             region_map=region_map,
             object_region_map=object_region_map,
             object_region_descriptions=object_region_descriptions,
@@ -810,18 +893,27 @@ class LLMOnlyReplanningPipeline:
             remaining_actions = list(planned_actions) if success else []
             held_object = None
         final_scene_state = self._final_scene_state_summary()
+        model_type = self.config.effective_model_type
+        image_metadata = (
+            (self.last_prompt_trace.get('bundle') or {}).get('image_metadata')
+            or self._image_metadata(None)
+        )
+        prompt_mode = PROMPT_MODE_VLM_MULTIMODAL if self.config.enable_vision else self.config.prompt_mode
         return {
             'success': success,
             'goal_text': goal_text,
             'model_alias': getattr(self.planner, 'model_alias', self.config.model_alias),
             'model_path': getattr(self.planner, 'model_name', self.config.model_path or self.config.model_alias),
-            'model_type': 'llm',
+            'model_type': model_type,
             'icl_mode': self.config.icl_mode,
-            'prompt_mode': self.config.prompt_mode,
+            'prompt_mode': prompt_mode,
             'replan_mode': 'off' if execution_skipped else 'on',
             'replanning_enabled': bool(self.config.enable_replanning),
             'execution_skipped': execution_skipped,
-            'text_only': True,
+            'text_only': not self.config.enable_vision,
+            'use_vision': bool(self.config.enable_vision),
+            'image_present': bool(image_metadata.get('image_present', False)),
+            'image_metadata': image_metadata,
             'segmentation_first': True,
             'use_remote_planner': bool(self.config.use_remote_planner),
             'remote_planner_url': self.config.remote_planner_url or None,
@@ -925,6 +1017,7 @@ if __name__ == '__main__':
     parser.add_argument("--variant", type=str, default="", help="Canonical variant id (K1/K2/K3/G1/G2/G3)")
     parser.add_argument("--goal", type=str, default="", help="Task goal text. Defaults to the variant goal when --variant is set.")
     parser.add_argument("--model", type=str, default="qwen", help="Model alias")
+    parser.add_argument("--model-type", choices=["", "llm", "vlm"], default="", help="Optional explicit model type")
     parser.add_argument("--icl-mode", type=str, default=ICLMode.ZERO_SHOT.value, choices=[mode.value for mode in ICLMode], help="Prompt mode")
     parser.add_argument("--vision", action="store_true", help="Enable vision-first reasoning (VLM)")
     display_group = parser.add_mutually_exclusive_group()
@@ -986,6 +1079,9 @@ if __name__ == '__main__':
         enable_replanning=args.replan_mode != "off",
         headless=headless,
         enable_vision=args.vision,
+        model_type=args.model_type or ("vlm" if args.vision else "llm"),
+        text_only=not args.vision,
+        prompt_mode=PROMPT_MODE_VLM_MULTIMODAL if args.vision else PROMPT_MODE_SEGMENTATION_TEXT,
         use_remote_planner=args.remote,
         remote_planner_url=args.remote_url,
         task_family=task_family,

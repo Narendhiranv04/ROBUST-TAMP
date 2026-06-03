@@ -1,3 +1,5 @@
+import numpy as np
+
 from llm_pipeline import client as client_module
 from llm_pipeline.client import RemoteTextLLMPlanner
 from llm_pipeline.pipeline_types import PromptBundle
@@ -100,6 +102,51 @@ def test_remote_planner_returns_server_actions() -> None:
         ]
         assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/plan'
         assert fake_requests.post_calls[0][1]['icl_mode'] == 'zero_shot'
+        assert fake_requests.post_calls[0][1]['use_vision'] is False
+        assert 'image_base64' not in fake_requests.post_calls[0][1]
+    finally:
+        client_module.requests = old_requests
+        client_module.HAS_REQUESTS = old_has_requests
+
+
+def test_remote_planner_sends_vlm_image_payload_from_bundle() -> None:
+    fake_requests = _FakeRequests(
+        health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen-vl', 'model_name': 'qwen-vl', 'model_type': 'vlm', 'prompt_mode': 'segmentation_text_image', 'gpu_available': True},
+        plan_payload={
+            'success': True,
+            'actions': [
+                {'action_name': 'open', 'args': ['box_lid']},
+            ],
+            'raw_output': 'open(box_lid)',
+            'inference_time': 0.08,
+            'error_message': None,
+            'failure_event': None,
+        },
+    )
+    old_requests = client_module.requests
+    old_has_requests = client_module.HAS_REQUESTS
+    client_module.requests = fake_requests
+    client_module.HAS_REQUESTS = True
+    try:
+        planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
+        planner.parser.valid_objects.update({'box_lid'})
+        bundle = PromptBundle(
+            goal_text='Open the lid.',
+            system_prompt='system',
+            user_prompt='user',
+            visible_objects=['box_lid'],
+            valid_regions=[],
+            icl_mode='zero_shot',
+            images=[np.zeros((2, 3, 3), dtype=np.uint8)],
+        )
+
+        result = planner.plan(bundle)
+
+        assert result.success is True
+        payload = fake_requests.post_calls[0][1]
+        assert payload['use_vision'] is True
+        assert payload['image_present'] is True
+        assert payload['image_base64']
     finally:
         client_module.requests = old_requests
         client_module.HAS_REQUESTS = old_has_requests

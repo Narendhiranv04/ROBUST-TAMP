@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 import time
-from typing import Optional, List
-import numpy as np
+from typing import Any, Dict
 from llm_pipeline.pipeline_types import BasePlanner, PromptBundle, PlanResult, DirectAction
 
 
@@ -17,18 +16,28 @@ class VLMPlanner(BasePlanner):
     def __init__(
         self,
         model_path: str,
+        model_alias: str = "",
         device: str = "cuda",
         use_4bit: bool = False,
         trust_remote_code: bool = True
     ):
         from vlm_pipeline.vlm_planner import VLMPlanner as LegacyVLMPlanner
+        self.model_alias = model_alias or model_path
+        self.model_name = model_path
+        self.loaded = False
+        self.last_request_summary: Dict[str, Any] = {}
         self.legacy_planner = LegacyVLMPlanner(
             model_id=model_path,
             device=device,
             load_in_4bit=use_4bit,
             trust_remote_code=trust_remote_code
         )
-        self.legacy_planner.load_model()
+
+    def load_model(self) -> bool:
+        if self.loaded:
+            return True
+        self.loaded = bool(self.legacy_planner.load_model())
+        return self.loaded
 
     def plan(self, bundle: PromptBundle) -> PlanResult:
         start_time = time.time()
@@ -38,6 +47,13 @@ class VLMPlanner(BasePlanner):
         composite = None
         if bundle.images and len(bundle.images) > 0:
             composite = bundle.images[0]  # Assume first image is the composite
+        self.last_request_summary = {
+            "model_type": "vlm",
+            "text_only": False,
+            "use_vision": True,
+            "image_present": composite is not None,
+            "image_shape": list(getattr(composite, "shape", ())) if composite is not None else [],
+        }
 
         # 2. Call legacy planner
         # Note: Legacy planner uses its own state resolution internally if we give it env,
@@ -57,7 +73,7 @@ class VLMPlanner(BasePlanner):
             for skeleton in legacy_result.skeleton:
                 actions.append(DirectAction(
                     action_name=skeleton.action_name,
-                    args=skeleton.args
+                    args=tuple(skeleton.args)
                 ))
         
         return PlanResult(
@@ -67,3 +83,14 @@ class VLMPlanner(BasePlanner):
             inference_time=time.time() - start_time,
             error_message=legacy_result.error_message
         )
+
+    def get_debug_info(self) -> Dict[str, Any]:
+        return {
+            "model_alias": self.model_alias,
+            "model_name": self.model_name,
+            "model_type": "vlm",
+            "loaded": self.loaded,
+            "text_only": False,
+            "use_vision": True,
+            "last_request": dict(self.last_request_summary),
+        }
