@@ -442,7 +442,35 @@ class UnifiedActionBundler:
                 # Unroll LLM action into two GT stages (move -> act)
                 sub_stages = ['move', stage_action.action_name]
                 for sub_stage in sub_stages:
-                    ok, msg = gt_executor.execute_next(requested_action=sub_stage)
+                    try:
+                        ok, msg = gt_executor.execute_next(requested_action=sub_stage)
+                    except Exception as exc:
+                        msg = f'Bundle execution failed during {stage_action.action_name}/{sub_stage}: {exc}'
+                        failure = self._runtime_failure(
+                            stage_action,
+                            msg,
+                            legacy_id=legacy_id,
+                            evidence={
+                                'object': obj_name,
+                                'target': target_region,
+                                'stage_index': stage_index + 1,
+                                'sub_stage': sub_stage,
+                                'exception_type': type(exc).__name__,
+                            },
+                            failure_checker=failure_checker,
+                        )
+                        self.executor._trace_bundle_state(
+                            failure_checker,
+                            event=f'failure-bundle-{stage_index + 1}',
+                            label='final failure event',
+                            desired=f'{obj_name} -> {target_region}',
+                            failure_event=failure,
+                            current_action_index=start_index + stage_index,
+                            current_action_label=str(stage_action),
+                            completed_action_count=start_index + len(completed),
+                            total_action_count=total_action_count,
+                        )
+                        return BundleExecutionOutcome(2, False, failure.message, failure, completed, held_object)
                     if not ok:
                         # If the GT place primitive fails (e.g., geometric bounds check), 
                         # the physical object has already been released. We must clear the held_object state.
@@ -1169,6 +1197,33 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                     self._step_sim()
         return True, 'Success'
 
+    def _clear_pick_planning_error(self) -> None:
+        for env in self._pick_planning_error_envs():
+            try:
+                env.last_pick_trajectory_error = None
+            except Exception:
+                pass
+
+    def _last_pick_planning_error(self) -> Optional[str]:
+        for env in self._pick_planning_error_envs():
+            message = getattr(env, 'last_pick_trajectory_error', None)
+            if message:
+                return str(message)
+        return None
+
+    def _pick_planning_error_envs(self) -> List[object]:
+        envs = []
+        if self.env is not None:
+            envs.append(self.env)
+        try:
+            import rlbench_kitchen_streams
+            stream_env = getattr(rlbench_kitchen_streams, 'ENV', None)
+            if stream_env is not None and stream_env not in envs:
+                envs.append(stream_env)
+        except Exception:
+            pass
+        return envs
+
     def _presolve_pick(self, object_name: str) -> Optional[bool]:
         """Run PDDL solve for pick, execute move trajectory, cache pick segments."""
         self._load_pddl_files()
@@ -1201,6 +1256,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             init=init,
             goal=goal,
         )
+        self._clear_pick_planning_error()
         plan, _, _ = solve(problem, algorithm='adaptive', verbose=False, max_time=60)
         if not plan:
             return None
@@ -1304,9 +1360,10 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                 goal=goal,
             )
             print("DEBUG [Executor]: Calling PDDL solve (adaptive)...")
+            self._clear_pick_planning_error()
             plan, _, _ = solve(problem, algorithm='adaptive', verbose=False, max_time=60)
             if not plan:
-                return False, 'No PDDL plan found'
+                return False, self._last_pick_planning_error() or f'No PDDL plan found for pick({object_name})'
             pick_actions = []
             for action in plan:
                 if action.name == 'move':
@@ -1388,7 +1445,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             print("DEBUG [Executor]: Calling PDDL solve for PLACE (adaptive)...")
             plan, _, _ = solve(problem, algorithm='adaptive', verbose=False, max_time=60)
             if not plan:
-                return False, 'No PDDL plan found'
+                return False, f'No PDDL plan found for place({object_name}, {target_region})'
             place_actions = []
             for action in plan:
                 if action.name == 'move':

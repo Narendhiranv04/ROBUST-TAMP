@@ -1,0 +1,688 @@
+{
+  "variant_id": "K1",
+  "task_family": "kitchen",
+  "scene_path": "/home/boreddog/Documents/RRC/Long_Horizon/Ending_Pipeline/task1_variation1.ttt",
+  "trial_index": 1,
+  "preflight_only": false,
+  "action_sequence_length": 35,
+  "gt_total_subtasks": 6,
+  "completed_gt_subtasks": 5,
+  "subtask_completion_rate": 0.8333333333333334,
+  "bucket_breakdown": {
+    "mug_to_placement": {
+      "expected": 1,
+      "observed": 1,
+      "matched": 1
+    },
+    "open_lid": {
+      "expected": 1,
+      "observed": 1,
+      "matched": 1
+    },
+    "grocery_to_cupboard": {
+      "expected": 2,
+      "observed": 2,
+      "matched": 2
+    },
+    "mug_to_box": {
+      "expected": 2,
+      "observed": 1,
+      "matched": 1
+    }
+  },
+  "observed_subtasks": [
+    "mug_to_placement",
+    "open_lid",
+    "grocery_to_cupboard",
+    "grocery_to_cupboard",
+    "mug_to_box"
+  ],
+  "extra_observed_subtasks": {},
+  "model_alias": "deepseek-r1-qwen-14b",
+  "model_type": "llm",
+  "icl_mode": "zero_shot",
+  "prompt_mode": "segmentation_text_only",
+  "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+  "text_only": true,
+  "segmentation_first": true,
+  "replan_mode": "on",
+  "planning_success": true,
+  "execution_skipped": false,
+  "use_remote_planner": true,
+  "remote_planner_url": "http://127.0.0.1:8000",
+  "pre_action_checks_enabled": true,
+  "post_action_checks_enabled": true,
+  "live_segmentation_view": false,
+  "scene_state_trace": false,
+  "goal_check_enabled": true,
+  "last_goal_check": {
+    "success": true,
+    "goal_satisfied": true,
+    "raw_output": "DETERMINISTIC_GOAL_COMPLETE",
+    "inference_time": 0.0,
+    "reason": "scene_state_satisfies_kitchen_goal",
+    "error_message": null
+  },
+  "episode_success": false,
+  "raw_episode_success": true,
+  "total_cycles": 4,
+  "total_replans": 3,
+  "planned_actions": [
+    "pick(mug2)",
+    "place(mug2, table_target_area)",
+    "open(box_lid)",
+    "pick(mug3)",
+    "place(mug3, inside_box)",
+    "pick(spam)",
+    "place(spam, cupboard_shelf)"
+  ],
+  "completed_actions": [
+    "pick(mug2)",
+    "place(mug2, table_target_area)",
+    "open(box_lid)",
+    "pick(spam)",
+    "place(spam, cupboard_shelf)",
+    "pick(mug2)",
+    "pick(can_of_beans)",
+    "place(can_of_beans, cupboard_shelf)",
+    "pick(mug2)",
+    "pick(mug3)",
+    "place(mug3, inside_box)"
+  ],
+  "remaining_actions": [],
+  "failure_reason": null,
+  "failure_occurrences": {
+    "messages": [
+      "Newly visible objects require replanning: can_of_beans",
+      "Object 'mug2' not in target region 'box_boundary'",
+      "Object 'mug2' didn't move (displacement: 0.000m)"
+    ],
+    "categories": [
+      "new_object_introduced_in_scene",
+      "placement_failed",
+      "grasp_failed"
+    ],
+    "counts": {
+      "new_object_introduced_in_scene": 1,
+      "placement_failed": 1,
+      "grasp_failed": 1
+    }
+  },
+  "episode_time_s": 449.4091684818268,
+  "preflight": {
+    "model_alias": "deepseek-r1-qwen-14b",
+    "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "icl_mode": "zero_shot",
+    "loaded": true,
+    "text_only": true,
+    "image_present": false,
+    "prompt_contract_ok": true,
+    "prompt_contract_issues": [],
+    "dry_run_plan_success": true,
+    "dry_run_action_count": 7,
+    "dry_run_error_message": null,
+    "dry_run_failure_event": null,
+    "dry_run_raw_output": "Okay, so I need to figure out how to move all the groceries into the cupboard and all the mugs into the box. Let me start by looking at the current state.\n\nFirst, the robot's gripper is empty, so it's ready to pick something up. The valid target regions include the table_target_area, cupboard_shelf, inside_box, pantry_area, and box_lid_top. \n\nLooking at the object states, I see that mug2 is on the box_lid_top, mug3 is on the cupboard_shelf, and spam is in the pantry_area. The lid state shows that the box_lid is closed, which means I can't access the inside_box yet. Also, the box_lid is obstructed by mug2, so I need to move mug2 somewhere else before I can open the box.\n\nThe goal is to move all groceries (which I assume are the items in the pantry_area, like spam) into the cupboard, specifically onto the cupboard_shelf. And all mugs should go into the box, which is inside_box.\n\nSo, the first thing I need to do is clear the box lid by moving mug2. Since the box lid is closed and mug2 is on top, I can't open the lid yet. So I should pick up mug2 and place it on the table_target_area. That way, the lid won't be blocked anymore.\n\nOnce mug2 is moved, I can open the box_lid. After opening, I can access the inside_box. Then, I can pick up mug3, which is already on the cupboard_shelf, but wait, no, the goal is to move all mugs into the box. So mug3 is currently on the cupboard_shelf, but I need to move it into the box. Wait, no, the goal says move all mugs into the box, so mug3 is a mug and should go into the box. But currently, it's on the cupboard_shelf. So I need to pick it up and place it inside the box.\n\nWait, but the robot can only hold one object at a time. So after moving mug2, I can open the box, then pick up mug3, place it inside the box, then pick up spam from the pantry_area and place it on the cupboard_shelf.\n\nWait, but the robot's gripper is empty, so it can pick up mug3 after opening the box. Let me outline the steps:\n\n1. Pick up mug2 from box_lid_top and place it on table_target_area. This will clear the lid obstruction.\n2. Open the box_lid since it's now unblocked.\n3. Pick up mug3 from cupboard_shelf and place it inside the box.\n4. Pick up spam from pantry_area and place it on the cupboard_shelf.\n\nWait, but after step 3, the robot has placed mug3 inside the box. Then, in step 4, it picks up spam and places it on the shelf. That should satisfy the goal.\n\nBut wait, the initial state has mug3 on the cupboard_shelf. So when I pick it up, I'm removing it from there, then placing it inside the box. That makes sense.\n\nSo the sequence would be:\n\npick(mug2)\nplace(mug2, table_target_area)\nopen(box_lid)\npick(mug3)\nplace(mug3, inside_box)\npick(spam)\nplace(spam, cupboard_shelf)\n\nWait, but after placing mug3 inside the box, the robot's gripper is empty again, so it can pick up spam. That seems correct.\n\nAlternatively, after opening the box, the robot can pick up mug3 and place it inside, then pick up spam and place it on the shelf.\n\nYes, that should work. Let me make sure I'm not missing anything. The box lid was closed, so I had to move mug2 first. Then open the lid, then move the mugs and groceries.\n\nI think that's the correct sequence.\n</think>\n\npick(mug2)\nplace(mug2, table_target_area)\nopen(box_lid)\npick(mug3)\nplace(mug3, inside_box)\npick(spam)\nplace(spam, cupboard_shelf)",
+    "prompt_trace": {
+      "bundle": {
+        "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+        "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+        "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+        "visible_objects": [
+          "mug2",
+          "mug3",
+          "spam",
+          "box_lid"
+        ],
+        "valid_regions": [
+          "table",
+          "table_target_area",
+          "cupboard_shelf",
+          "inside_box",
+          "pantry_area",
+          "box_lid_top"
+        ],
+        "icl_mode": "zero_shot",
+        "previous_actions": [],
+        "metadata": {
+          "held_object": null
+        }
+      },
+      "state": {
+        "frame_index": 1,
+        "visible_objects": [
+          "mug2",
+          "mug3",
+          "spam",
+          "box_lid"
+        ],
+        "valid_regions": [
+          "table",
+          "table_target_area",
+          "cupboard_shelf",
+          "inside_box",
+          "pantry_area",
+          "box_lid_top"
+        ],
+        "pddl_state": [],
+        "pose_map": {
+          "mug2": [
+            0.1949930489063263,
+            0.2569044828414917,
+            0.997983455657959,
+            -1.5449714261834419e-13,
+            -1.5449712906581703e-13,
+            -0.7071067690849304,
+            0.7071068286895752
+          ],
+          "mug3": [
+            0.5418534278869629,
+            0.08808349072933197,
+            1.2473905086517334,
+            -0.16685819625854492,
+            -0.6872066855430603,
+            0.16095353662967682,
+            0.688476026058197
+          ],
+          "spam": [
+            0.2672518491744995,
+            -0.35250046849250793,
+            0.7899994254112244,
+            -1.1856884185590388e-07,
+            -1.3401675460045226e-05,
+            -3.081234378754516e-09,
+            1.0
+          ],
+          "box_lid": [
+            0.17508965730667114,
+            0.31637561321258545,
+            0.9432991147041321,
+            -0.00291974819265306,
+            -0.0029240360017865896,
+            -0.7070987820625305,
+            0.7071028351783752
+          ]
+        },
+        "gripper_state": {
+          "status": "empty",
+          "holding": null
+        },
+        "object_region_map": {
+          "mug2": "box_lid_top",
+          "mug3": "cupboard_shelf",
+          "spam": "pantry_area"
+        },
+        "object_region_descriptions": {
+          "mug2": "on top of the box lid",
+          "mug3": "on lower cupboard shelf",
+          "spam": "in pantry area"
+        },
+        "lid_states": {
+          "box_lid": false
+        }
+      },
+      "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+      "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed."
+    },
+    "debug_snapshot": {
+      "model_alias": "deepseek-r1-qwen-14b",
+      "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+      "model_type": "llm",
+      "loaded": true,
+      "server_url": "http://127.0.0.1:8000",
+      "health": {
+        "status": "ok",
+        "model_loaded": true,
+        "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "model_alias": "deepseek-r1-qwen-14b",
+        "model_type": "llm",
+        "prompt_mode": "segmentation_text_only",
+        "gpu_available": true
+      },
+      "last_request": {
+        "timestamp": "2026-06-01T23:57:01.313058",
+        "model_alias": "deepseek-r1-qwen-14b",
+        "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "model_type": "llm",
+        "text_only": true,
+        "request_type": "plan",
+        "icl_mode": "zero_shot",
+        "held_object": null,
+        "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+        "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+        "system_prompt_length": 1769,
+        "user_prompt_length": 1895
+      },
+      "symbol_registry": {
+        "actions": [
+          "pick",
+          "place",
+          "open"
+        ],
+        "objects": [
+          "mug1",
+          "mug2",
+          "mug3",
+          "mug4",
+          "can_of_beans",
+          "mustard",
+          "spam",
+          "sugar",
+          "crackers",
+          "box_lid",
+          "box_base",
+          "box_lid_top",
+          "can",
+          "can_of_beans_box",
+          "cupboard_lower",
+          "inside_box",
+          "mug_box",
+          "mug_cupboard",
+          "spam_box",
+          "tin"
+        ],
+        "regions": [
+          "table",
+          "table_target_area",
+          "cupboard_shelf",
+          "inside_box",
+          "pantry_area",
+          "box_lid_top"
+        ]
+      }
+    },
+    "preflight_success": true
+  },
+  "raw_summary": {
+    "success": true,
+    "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+    "model_alias": "deepseek-r1-qwen-14b",
+    "model_path": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "model_type": "llm",
+    "icl_mode": "zero_shot",
+    "prompt_mode": "segmentation_text_only",
+    "replan_mode": "on",
+    "replanning_enabled": true,
+    "execution_skipped": false,
+    "text_only": true,
+    "segmentation_first": true,
+    "use_remote_planner": true,
+    "remote_planner_url": "http://127.0.0.1:8000",
+    "pre_action_checks_enabled": true,
+    "post_action_checks_enabled": true,
+    "goal_check_enabled": true,
+    "planned_actions": [
+      "pick(mug2)",
+      "place(mug2, table_target_area)",
+      "open(box_lid)",
+      "pick(mug3)",
+      "place(mug3, inside_box)",
+      "pick(spam)",
+      "place(spam, cupboard_shelf)"
+    ],
+    "completed_actions": [
+      "pick(mug2)",
+      "place(mug2, table_target_area)",
+      "open(box_lid)",
+      "pick(spam)",
+      "place(spam, cupboard_shelf)",
+      "pick(mug2)",
+      "pick(can_of_beans)",
+      "place(can_of_beans, cupboard_shelf)",
+      "pick(mug2)",
+      "pick(mug3)",
+      "place(mug3, inside_box)"
+    ],
+    "remaining_actions": [],
+    "held_object": null,
+    "last_goal_check": {
+      "success": true,
+      "goal_satisfied": true,
+      "raw_output": "DETERMINISTIC_GOAL_COMPLETE",
+      "inference_time": 0.0,
+      "reason": "scene_state_satisfies_kitchen_goal",
+      "error_message": null
+    },
+    "last_failure_event": {
+      "failure_id": "object_did_not_move",
+      "failure_layer": "layer_2",
+      "stage": "after_execution",
+      "source": "validation",
+      "action": "place(mug2, inside_box)",
+      "evidence": {
+        "runtime_message": "Object 'mug2' didn't move (displacement: 0.000m)",
+        "object": "mug2",
+        "target": "inside_box",
+        "stage_index": 2,
+        "legacy_failure_id": "TAMP_EXECUTION_ERROR"
+      },
+      "should_replan": true,
+      "message": "Object 'mug2' didn't move (displacement: 0.000m)"
+    },
+    "failure_reason": null,
+    "total_cycles": 4,
+    "total_replans": 3,
+    "episode_time_s": 449.4091684818268,
+    "cycles": [
+      {
+        "cycle_number": 1,
+        "is_replan": false,
+        "icl_mode": "zero_shot",
+        "planned_actions": [
+          "pick(mug2)",
+          "place(mug2, table_target_area)",
+          "open(box_lid)",
+          "pick(mug3)",
+          "place(mug3, inside_box)",
+          "pick(spam)",
+          "place(spam, cupboard_shelf)"
+        ],
+        "completed_actions": [
+          "pick(mug2)",
+          "place(mug2, table_target_area)",
+          "open(box_lid)"
+        ],
+        "remaining_actions": [
+          "pick(mug3)",
+          "place(mug3, inside_box)",
+          "pick(spam)",
+          "place(spam, cupboard_shelf)"
+        ],
+        "raw_output": "Okay, so I need to figure out how to move all the groceries into the cupboard and all the mugs into the box. Let me start by looking at the current state.\n\nFirst, the robot's gripper is empty, so it's ready to pick something up. The valid target regions include the table_target_area, cupboard_shelf, inside_box, pantry_area, and box_lid_top. \n\nLooking at the object states, I see that mug2 is on the box_lid_top, mug3 is on the cupboard_shelf, and spam is in the pantry_area. The lid state shows that the box_lid is closed, which means I can't access the inside_box yet. Also, the box_lid is obstructed by mug2, so I need to move mug2 somewhere else before I can open the box.\n\nThe goal is to move all groceries (which I assume are the items in the pantry_area, like spam) into the cupboard, specifically onto the cupboard_shelf. And all mugs should go into the box, which is inside_box.\n\nSo, the first thing I need to do is clear the box lid by moving mug2. Since the box lid is closed and mug2 is on top, I can't open the lid yet. So I should pick up mug2 and place it on the table_target_area. That way, the lid won't be blocked anymore.\n\nOnce mug2 is moved, I can open the box_lid. After opening, I can access the inside_box. Then, I can pick up mug3, which is already on the cupboard_shelf, but wait, no, the goal is to move all mugs into the box. So mug3 is currently on the cupboard_shelf, but I need to move it into the box. Wait, no, the goal says move all mugs into the box, so mug3 is a mug and should go into the box. But currently, it's on the cupboard_shelf. So I need to pick it up and place it inside the box.\n\nWait, but the robot can only hold one object at a time. So after moving mug2, I can open the box, then pick up mug3, place it inside the box, then pick up spam from the pantry_area and place it on the cupboard_shelf.\n\nWait, but the robot's gripper is empty, so it can pick up mug3 after opening the box. Let me outline the steps:\n\n1. Pick up mug2 from box_lid_top and place it on table_target_area. This will clear the lid obstruction.\n2. Open the box_lid since it's now unblocked.\n3. Pick up mug3 from cupboard_shelf and place it inside the box.\n4. Pick up spam from pantry_area and place it on the cupboard_shelf.\n\nWait, but after step 3, the robot has placed mug3 inside the box. Then, in step 4, it picks up spam and places it on the shelf. That should satisfy the goal.\n\nBut wait, the initial state has mug3 on the cupboard_shelf. So when I pick it up, I'm removing it from there, then placing it inside the box. That makes sense.\n\nSo the sequence would be:\n\npick(mug2)\nplace(mug2, table_target_area)\nopen(box_lid)\npick(mug3)\nplace(mug3, inside_box)\npick(spam)\nplace(spam, cupboard_shelf)\n\nWait, but after placing mug3 inside the box, the robot's gripper is empty again, so it can pick up spam. That seems correct.\n\nAlternatively, after opening the box, the robot can pick up mug3 and place it inside, then pick up spam and place it on the shelf.\n\nYes, that should work. Let me make sure I'm not missing anything. The box lid was closed, so I had to move mug2 first. Then open the lid, then move the mugs and groceries.\n\nI think that's the correct sequence.\n</think>\n\npick(mug2)\nplace(mug2, table_target_area)\nopen(box_lid)\npick(mug3)\nplace(mug3, inside_box)\npick(spam)\nplace(spam, cupboard_shelf)",
+        "inference_time_s": 30.932175397872925,
+        "success": false,
+        "error_message": "Newly visible objects require replanning: can_of_beans",
+        "failure_event": {
+          "failure_id": "new_object_discovered",
+          "failure_layer": "layer_2",
+          "stage": "after_execution",
+          "source": "segmentation",
+          "action": "open(box_lid)",
+          "evidence": {
+            "newly_visible_objects": [
+              "can_of_beans"
+            ],
+            "all_newly_visible_objects": [
+              "can_of_beans"
+            ],
+            "bundle": "lid",
+            "legacy_failure_id": "TAMP_OPEN_ERROR"
+          },
+          "should_replan": true,
+          "message": "Newly visible objects require replanning: can_of_beans"
+        },
+        "goal_check": null,
+        "prompt_bundle": {
+          "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+          "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+          "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+          "visible_objects": [
+            "mug2",
+            "mug3",
+            "spam",
+            "box_lid"
+          ],
+          "valid_regions": [
+            "table",
+            "table_target_area",
+            "cupboard_shelf",
+            "inside_box",
+            "pantry_area",
+            "box_lid_top"
+          ],
+          "icl_mode": "zero_shot",
+          "previous_actions": [],
+          "metadata": {
+            "held_object": null
+          }
+        }
+      },
+      {
+        "cycle_number": 2,
+        "is_replan": true,
+        "icl_mode": "zero_shot",
+        "planned_actions": [
+          "pick(spam)",
+          "place(spam, cupboard_shelf)",
+          "pick(mug2)",
+          "place(mug2, inside_box)",
+          "pick(mug3)",
+          "place(mug3, inside_box)"
+        ],
+        "completed_actions": [
+          "pick(mug2)",
+          "place(mug2, table_target_area)",
+          "open(box_lid)",
+          "pick(spam)",
+          "place(spam, cupboard_shelf)",
+          "pick(mug2)"
+        ],
+        "remaining_actions": [
+          "place(mug2, inside_box)",
+          "pick(mug3)",
+          "place(mug3, inside_box)"
+        ],
+        "raw_output": "Okay, so I need to figure out the next steps to achieve the goal of moving all the groceries into the cupboard and all the mugs into the box. Let me start by understanding the current state.\n\nFrom the current state, the robot's gripper is empty, which is good because it can pick up objects. The valid target regions include the table_target_area, cupboard_shelf, inside_box, pantry_area, and box_lid_top. The Lid State shows that the box_lid is already OPEN, so I don't need to open it again.\n\nLooking at the object states, I see:\n- mug2 is on the pantry_area.\n- mug3 is on the cupboard_shelf.\n- can_of_beans is inside the box.\n- spam is also on the pantry_area.\n\nThe goal is to move all groceries (which I assume are can_of_beans and spam) into the cupboard, specifically onto the cupboard_shelf, and all mugs (mug2 and mug3) into the box.\n\nWait, but mug3 is already on the cupboard_shelf. So I don't need to move that. The mugs to move are mug2, which is on the pantry_area, and maybe mug3 is already in the right place. Wait, no, the goal says all mugs inside the box. So I need to move both mug2 and mug3 into the box.\n\nWait, but mug3 is currently on the cupboard_shelf. So I need to pick it up and place it inside the box. But since the box lid is open, I can do that.\n\nSo the steps would be:\n\n1. Pick up mug2 from the pantry_area.\n2. Place mug2 inside the box.\n3. Then pick up mug3 from the cupboard_shelf.\n4. Place mug3 inside the box.\n\nWait, but the robot can only carry one object at a time, so after placing mug2, it can pick up mug3.\n\nBut wait, the can_of_beans is already inside the box, so that's done. Spam is on the pantry_area, so I need to move that to the cupboard_shelf.\n\nSo the steps would be:\n\n1. Pick up spam from pantry_area.\n2. Place spam on the cupboard_shelf.\n3. Pick up mug2 from pantry_area.\n4. Place mug2 inside the box.\n5. Pick up mug3 from cupboard_shelf.\n6. Place mug3 inside the box.\n\nWait, but the robot's gripper is empty, so it can start with picking up spam. But I need to make sure that when placing into the box, the lid is open, which it is.\n\nSo the sequence would be:\n\npick(spam)\nplace(spam, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)\n\nBut wait, after placing mug2, the robot can pick up mug3 from the cupboard_shelf. But mug3 is on the shelf, so the robot can pick it up and place it inside the box.\n\nAlternatively, maybe the robot should first move all the mugs into the box before moving the groceries. But the order might not matter as long as all actions are completed.\n\nWait, but the goal is to move all groceries into the cupboard and all mugs into the box. So I need to ensure that both tasks are done.\n\nSo the plan would be:\n\n1. Move spam (grocery) to the cupboard_shelf.\n2. Move mug2 (mug) to inside_box.\n3. Move mug3 (mug) to inside_box.\n\nThat should satisfy the goal.\n</think>\n\npick(spam)\nplace(spam, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)",
+        "inference_time_s": 27.67023801803589,
+        "success": false,
+        "error_message": "Object 'mug2' not in target region 'box_boundary'",
+        "failure_event": {
+          "failure_id": "placement_failed",
+          "failure_layer": "layer_2",
+          "stage": "after_execution",
+          "source": "validation",
+          "action": "place(mug2, inside_box)",
+          "evidence": {
+            "runtime_message": "Object 'mug2' not in target region 'box_boundary'",
+            "object": "mug2",
+            "target": "inside_box",
+            "stage_index": 2,
+            "legacy_failure_id": "TAMP_EXECUTION_ERROR"
+          },
+          "should_replan": true,
+          "message": "Object 'mug2' not in target region 'box_boundary'"
+        },
+        "goal_check": null,
+        "prompt_bundle": {
+          "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+          "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+          "user_prompt": "=== REPLANNING TRIGGERED ===\nEVENT_ID: new_object_discovered\nSTAGE: after_execution\nINTERRUPTED_AFTER_SUCCESSFUL_ACTION: open(box_lid)\nERROR/MESSAGE: Newly visible objects require replanning: can_of_beans\nCOMPLETED_ACTIONS: pick(mug2), place(mug2, table_target_area), open(box_lid)\n================================\n\n### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=pantry_area, description=in pantry area, pose=(0.181, -0.18, 0.792, 0.0, -0.0, -0.546, 0.838)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.689)\n- can_of_beans: region=inside_box, description=inside the box, pose=(0.066, 0.334, 0.8, -0.0, 0.0, -0.0, 1.0)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, 0.0, 1.0)\n\n## Lid State:\n- box_lid: OPEN\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+          "visible_objects": [
+            "mug2",
+            "mug3",
+            "can_of_beans",
+            "spam",
+            "box_lid"
+          ],
+          "valid_regions": [
+            "table",
+            "table_target_area",
+            "cupboard_shelf",
+            "inside_box",
+            "pantry_area",
+            "box_lid_top"
+          ],
+          "icl_mode": "zero_shot",
+          "previous_actions": [
+            "pick(mug2)",
+            "place(mug2, table_target_area)",
+            "open(box_lid)"
+          ],
+          "failure_context": "Newly visible objects require replanning: can_of_beans",
+          "metadata": {
+            "held_object": null
+          }
+        }
+      },
+      {
+        "cycle_number": 3,
+        "is_replan": true,
+        "icl_mode": "zero_shot",
+        "planned_actions": [
+          "pick(can_of_beans)",
+          "place(can_of_beans, cupboard_shelf)",
+          "pick(mug2)",
+          "place(mug2, inside_box)",
+          "pick(mug3)",
+          "place(mug3, inside_box)"
+        ],
+        "completed_actions": [
+          "pick(mug2)",
+          "place(mug2, table_target_area)",
+          "open(box_lid)",
+          "pick(spam)",
+          "place(spam, cupboard_shelf)",
+          "pick(mug2)",
+          "pick(can_of_beans)",
+          "place(can_of_beans, cupboard_shelf)",
+          "pick(mug2)"
+        ],
+        "remaining_actions": [
+          "place(mug2, inside_box)",
+          "pick(mug3)",
+          "place(mug3, inside_box)"
+        ],
+        "raw_output": "Okay, so I need to figure out how to help the robot planner get back on track after a failed action. The goal is to move all the groceries into the cupboard and all the mugs into the box. Let me look at the current state and the problem that happened.\n\nFrom the current state, I see that the robot's gripper is empty, which is good because it means it's ready to pick up something next. The valid target regions include the table_target_area, cupboard_shelf, inside_box, pantry_area, and box_lid_top. The box_lid is currently OPEN, so the inside_box is accessible.\n\nLooking at the object states, mug2 is inside the box, but it's not in the right place because it's supposed to be moved there. Wait, no, the goal is to move all mugs into the box, so that's correct. But the problem is that when the robot tried to place mug2 into inside_box, it failed because the object wasn't in the target region. Hmm, maybe the robot picked it up but couldn't place it correctly, so it's back in the box or somewhere else.\n\nThe completed actions show that the robot picked mug2, placed it on the table, opened the box lid, picked it again, placed it on the table again, opened the lid again, picked spam, placed spam in the cupboard, and then picked mug2 again. So the last action was picking mug2, but the placement failed.\n\nSo, the robot is holding mug2 and tried to place it inside the box, but it didn't work. Now, the robot's gripper is empty again, as per the current state. So, the next step should be to figure out why the placement failed and how to correct it.\n\nWait, the error message says that 'mug2' wasn't in the target region 'box_boundary'. Maybe the target region for inside_box is different, or the robot's arm couldn't reach it properly. So, perhaps the robot needs to approach it from a different angle or make sure the box lid is fully open.\n\nBut the box lid is already open, so that's not the issue. Maybe the mug is obstructed by another object inside the box. Looking at the object states, can_of_beans is also inside the box. So, maybe mug2 is behind can_of_beans, making it hard to place. If that's the case, the robot might need to move can_of_beans out of the way first.\n\nBut wait, the robot can only pick up one object at a time, and the gripper is empty. So, the next step would be to pick up can_of_beans, move it somewhere else, perhaps the table_target_area, so that mug2 can be placed properly.\n\nAlternatively, maybe the robot should try placing mug2 again after ensuring the path is clear. But since the placement failed once, maybe the position is incorrect, so the robot needs to adjust its approach.\n\nAnother possibility is that the robot needs to pick up mug2 again and try placing it again, but perhaps using a different target region or ensuring the box lid is properly open. But the lid is already open, so that's not it.\n\nWait, the target region for inside_box is 'inside_box', but the error mentions 'box_boundary'. Maybe the robot is trying to place it on the boundary, which isn't allowed. So, perhaps the robot should place it directly inside, not on the boundary.\n\nAlternatively, maybe the robot should pick up mug2 again and place it correctly. But since the gripper is empty, the next action should be to pick up an object. So, perhaps the robot should pick up can_of_beans first, place it on the table, then pick up mug2 and place it inside the box.\n\nWait, but the goal is to move all mugs into the box and all groceries into the cupboard. So, the mugs are mug2 and mug3. Mug3 is on the cupboard shelf, which is where groceries should go. So, maybe mug3 is already in the right place, but the robot needs to move it to the inside_box instead.\n\nWait, no, the goal says to move all groceries into the cupboard and all mugs into the box. So, groceries are items like spam and can_of_beans, which should be in the cupboard. Mugs are to be in the box.\n\nLooking at the object states, can_of_beans is inside the box, which is correct. Spam is on the cupboard shelf, which is correct. Mug2 is inside the box, which is correct. Mug3 is on the cupboard shelf, which is incorrect because it's a mug and should be in the box.\n\nWait, that's a problem. So, mug3 is on the cupboard shelf, which is where groceries go, but it's a mug, so it should be in the box. So, the robot needs to move mug3 from the cupboard shelf to the inside_box.\n\nBut in the current state, the robot's gripper is empty, and the last action was picking mug2, which failed to place. So, the robot needs to figure out what to do next.\n\nSo, the plan should be:\n\n1. Pick up can_of_beans from inside_box and place it on the table_target_area to free up space inside the box.\n2. Then, pick up mug2 and try placing it inside the box again.\n3. After that, pick up mug3 from the cupboard shelf and place it inside the box.\n4. Finally, ensure that all groceries are in the cupboard. But spam is already there, so maybe that's done.\n\nWait, but can_of_beans is already inside the box, which is correct. So, maybe the issue is that the robot is trying to place mug2 into the box but can't because of can_of_beans being in the way. So, moving can_of_beans to the table would allow mug2 to be placed correctly.\n\nAlternatively, maybe the robot should just try placing mug2 again, but perhaps the position was off. But since the gripper is empty, the next action must be a pick.\n\nSo, the next step is to pick up an object. The robot needs to decide which object to pick next. Since the goal is to get all mugs into the box, and mug3 is in the wrong place, perhaps the robot should pick up mug3 first.\n\nBut mug3 is on the cupboard shelf, which is a target region for groceries. So, the robot needs to move it to the inside_box. But to do that, the box lid is open, so it's accessible.\n\nSo, the plan would be:\n\n1. Pick up mug3 from the cupboard shelf.\n2. Place it inside the box.\n3. Then, pick up can_of_beans if needed, but since it's already in the box, maybe it's fine.\n\nWait, but can_of_beans is already in the box, so maybe the issue is with mug2. The robot tried to place mug2 but failed, so perhaps it needs to try again after ensuring the path is clear.\n\nAlternatively, maybe the robot should pick up mug2 again and place it correctly.\n\nBut the gripper is empty, so the next action must be a pick. So, the robot can pick up mug2 again, but perhaps it's better to first move can_of_beans if it's blocking.\n\nWait, can_of_beans is inside the box, so if the robot is trying to place mug2 inside, maybe it's behind can_of_beans. So, the robot should pick up can_of_beans, place it on the table, then pick up mug2 and place it inside.\n\nSo, the steps would be:\n\n1. pick(can_of_beans)\n2. place(can_of_beans, table_target_area)\n3. pick(mug2)\n4. place(mug2, inside_box)\n5. pick(mug3)\n6. place(mug3, inside_box)\n\nBut wait, in the current state, can_of_beans is inside the box, so the robot needs to pick it up. But the gripper is empty, so it can do that.\n\nAlternatively, maybe the robot should just try placing mug2 again. But since the placement failed, perhaps the position was wrong, so the robot needs to adjust.\n\nBut without knowing the exact geometry, it's hard to say. So, the safest bet is to move any objects that might be blocking the way.\n\nSo, the plan would be:\n\n- Pick up can_of_beans from inside_box.\n- Place it on the table_target_area.\n- Then, pick up mug2 and place it inside the box.\n- Then, pick up mug3 from the cupboard shelf and place it inside the box.\n\nThis way, all mugs are in the box, and all groceries are in the cupboard.\n\nWait, but spam is already in the cupboard. So, the only grocery left is can_of_beans, which is inside the box, which is incorrect. So, the robot needs to move can_of_beans from the box to the cupboard.\n\nWait, no, the goal is to move all groceries into the cupboard and all mugs into the box. So, can_of_beans is a grocery, so it should be in the cupboard, not the box. So, the robot made a mistake earlier by placing can_of_beans inside the box.\n\nLooking back, in the completed actions, the robot placed can_of_beans inside the box, which is incorrect. So, that's a problem. So, the robot needs to move can_of_beans from the box to the cupboard.\n\nSo, the correct plan should be:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the cupboard_shelf.\n3. Then, pick up mug2 and place it inside the box.\n4. Then, pick up mug3 from the cupboard_shelf and place it inside the box.\n\nWait, but mug3 is on the cupboard shelf, which is where groceries go, but it's a mug, so it should be in the box. So, the robot needs to move mug3 from the cupboard to the box.\n\nSo, the steps would be:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the cupboard_shelf.\n3. Pick up mug2.\n4. Place it inside the box.\n5. Pick up mug3 from the cupboard_shelf.\n6. Place it inside the box.\n\nThis way, all mugs are in the box, and all groceries are in the cupboard.\n\nBut wait, in the current state, can_of_beans is inside the box, so the robot needs to move it. So, the first action is to pick it up.\n\nSo, the plan is:\n\npick(can_of_beans)\nplace(can_of_beans, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)\n\nBut wait, the robot's gripper is empty, so it can pick can_of_beans first.\n\nAlternatively, maybe the robot should first fix the can_of_beans issue before dealing with the mugs.\n\nSo, the correct sequence would be:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the cupboard_shelf.\n3. Then, pick up mug2 and place it inside the box.\n4. Then, pick up mug3 from the cupboard_shelf and place it inside the box.\n\nThis way, all groceries are in the cupboard, and all mugs are in the box.\n\nBut in the current state, the robot's gripper is empty, so it can start by picking can_of_beans.\n\nWait, but in the current state, can_of_beans is inside the box, so the robot needs to pick it up. So, the first action is pick(can_of_beans).\n\nThen, place it on the cupboard_shelf.\n\nAfter that, the robot can pick up mug2 and place it inside the box.\n\nThen, pick up mug3 from the cupboard_shelf and place it inside the box.\n\nSo, the actions would be:\n\npick(can_of_beans)\nplace(can_of_beans, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)\n\nBut wait, after placing can_of_beans, the robot needs to make sure the box lid is open if needed. But the lid is already open, so that's fine.\n\nAlternatively, maybe the robot should ensure that the box lid is open before placing anything inside. But since it's already open, that's not necessary.\n\nSo, the plan is to move can_of_beans to the cupboard, then move the mugs into the box.\n\nBut wait, in the current state, mug2 is inside the box, but the placement failed, so maybe it's not there anymore. So, the robot needs to pick it up again.\n\nWait, the current state says mug2 is inside the box, but the last action was trying to place it there and failing. So, perhaps mug2 is still inside, but the placement was incorrect, so the robot needs to adjust.\n\nAlternatively, maybe mug2 is back on the table. So, the robot needs to pick it up again.\n\nBut the current state says mug2 is inside the box, so perhaps it's still there, but the placement was just incorrect. So, the robot needs to try placing it again.\n\nBut since the gripper is empty, the next action must be a pick. So, the robot can pick up mug2 again and try placing it.\n\nBut perhaps the issue is that can_of_beans is blocking the way, so moving can_of_beans first would help.\n\nSo, the plan is:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the table_target_area.\n3. Pick up mug2.\n4. Place it inside the box.\n5. Pick up mug3 from the cupboard_shelf.\n6. Place it inside the box.\n\nThis way, all mugs are in the box, and can_of_beans is on the table, but that's not correct because it's a grocery and should be in the cupboard.\n\nWait, no, the goal is to move all groceries into the cupboard. So, can_of_beans should be in the cupboard, not on the table.\n\nSo, after moving can_of_beans to the table, the robot should then move it to the cupboard.\n\nSo, the plan would be:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the table_target_area.\n3. Pick up can_of_beans from table_target_area.\n4. Place it on the cupboard_shelf.\n5. Pick up mug2.\n6. Place it inside the box.\n7. Pick up mug3 from the cupboard_shelf.\n8. Place it inside the box.\n\nBut that's a bit redundant. Alternatively, the robot can pick up can_of_beans and place it directly into the cupboard.\n\nSo, the steps would be:\n\n1. pick(can_of_beans)\n2. place(can_of_beans, cupboard_shelf)\n3. pick(mug2)\n4. place(mug2, inside_box)\n5. pick(mug3)\n6. place(mug3, inside_box)\n\nThis way, all groceries are in the cupboard, and all mugs are in the box.\n\nBut wait, in the current state, can_of_beans is inside the box, so the robot needs to move it. So, the first action is to pick it up.\n\nSo, the plan is:\n\npick(can_of_beans)\nplace(can_of_beans, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)\n\nBut the robot's gripper is empty, so it can start with can_of_beans.\n\nAlternatively, maybe the robot should first fix the can_of_beans issue before dealing with the mugs.\n\nSo, the correct sequence is:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the cupboard_shelf.\n3. Then, pick up mug2 and place it inside the box.\n4. Then, pick up mug3 from the cupboard_shelf and place it inside the box.\n\nThis way, all groceries are in the cupboard, and all mugs are in the box.\n\nBut wait, in the current state, mug2 is inside the box, but the placement failed, so maybe it's not there anymore. So, the robot needs to pick it up again.\n\nBut the current state says mug2 is inside the box, so perhaps it's still there, but the placement was just incorrect. So, the robot needs to try placing it again.\n\nBut since the gripper is empty, the next action must be a pick. So, the robot can pick up mug2 again and try placing it.\n\nBut perhaps the issue is that can_of_beans is blocking the way, so moving can_of_beans first would help.\n\nSo, the plan is:\n\n1. Pick up can_of_beans from inside_box.\n2. Place it on the table_target_area.\n3. Pick up mug2.\n4. Place it inside the box.\n5. Pick up can_of_beans from the table.\n6. Place it on the cupboard_shelf.\n7. Pick up mug3 from the cupboard_shelf.\n8. Place it inside the box.\n\nThis way, all mugs are in the box, and all groceries are in the cupboard.\n\nBut that's a bit lengthy. Alternatively, the robot can move can_of_beans directly to the cupboard after picking it up.\n\nSo, the plan is:\n\n1. pick(can_of_beans)\n2. place(can_of_beans, cupboard_shelf)\n3. pick(mug2)\n4. place(mug2, inside_box)\n5. pick(mug3)\n6. place(mug3, inside_box)\n\nThis seems more efficient.\n\nBut wait, in the current state, can_of_beans is inside the box, so the robot needs to pick it up. So, the first action is to pick can_of_beans.\n\nAfter placing it in the cupboard, the robot can then handle the mugs.\n\nSo, the final plan is:\n\npick(can_of_beans)\nplace(can_of_beans, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)\n\nThis should satisfy the goal.\n</think>\n\npick(can_of_beans)\nplace(can_of_beans, cupboard_shelf)\npick(mug2)\nplace(mug2, inside_box)\npick(mug3)\nplace(mug3, inside_box)",
+        "inference_time_s": 141.45737409591675,
+        "success": false,
+        "error_message": "Object 'mug2' didn't move (displacement: 0.000m)",
+        "failure_event": {
+          "failure_id": "object_did_not_move",
+          "failure_layer": "layer_2",
+          "stage": "after_execution",
+          "source": "validation",
+          "action": "place(mug2, inside_box)",
+          "evidence": {
+            "runtime_message": "Object 'mug2' didn't move (displacement: 0.000m)",
+            "object": "mug2",
+            "target": "inside_box",
+            "stage_index": 2,
+            "legacy_failure_id": "TAMP_EXECUTION_ERROR"
+          },
+          "should_replan": true,
+          "message": "Object 'mug2' didn't move (displacement: 0.000m)"
+        },
+        "goal_check": null,
+        "prompt_bundle": {
+          "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+          "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+          "user_prompt": "=== REPLANNING TRIGGERED ===\nEVENT_ID: placement_failed\nSTAGE: after_execution\nACTION_FAILED: place(mug2, inside_box)\nERROR/MESSAGE: Object 'mug2' not in target region 'box_boundary'\nCOMPLETED_ACTIONS: pick(mug2), place(mug2, table_target_area), open(box_lid), pick(mug2), place(mug2, table_target_area), open(box_lid), pick(spam), place(spam, cupboard_shelf), pick(mug2)\n================================\n\n### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=inside_box, description=inside the box, pose=(0.403, 0.056, 0.792, 0.0, -0.0, -0.348, 0.938)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.607, 0.092, 1.247, -0.129, -0.695, 0.198, 0.679)\n- can_of_beans: region=inside_box, description=inside the box, pose=(0.066, 0.334, 0.8, -0.0, 0.0, -0.0, 1.0)\n- spam: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.527, 0.053, 1.272, -0.707, -0.028, 0.707, -0.028)\n\n## Lid State:\n- box_lid: OPEN\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+          "visible_objects": [
+            "mug2",
+            "mug3",
+            "can_of_beans",
+            "spam",
+            "box_lid"
+          ],
+          "valid_regions": [
+            "table",
+            "table_target_area",
+            "cupboard_shelf",
+            "inside_box",
+            "pantry_area",
+            "box_lid_top"
+          ],
+          "icl_mode": "zero_shot",
+          "previous_actions": [
+            "pick(mug2)",
+            "place(mug2, table_target_area)",
+            "open(box_lid)",
+            "pick(mug2)",
+            "place(mug2, table_target_area)",
+            "open(box_lid)",
+            "pick(spam)",
+            "place(spam, cupboard_shelf)",
+            "pick(mug2)"
+          ],
+          "failure_context": "Object 'mug2' not in target region 'box_boundary'",
+          "metadata": {
+            "held_object": null
+          }
+        }
+      },
+      {
+        "cycle_number": 4,
+        "is_replan": true,
+        "icl_mode": "zero_shot",
+        "planned_actions": [
+          "pick(mug3)",
+          "place(mug3, inside_box)"
+        ],
+        "completed_actions": [
+          "pick(mug2)",
+          "place(mug2, table_target_area)",
+          "open(box_lid)",
+          "pick(spam)",
+          "place(spam, cupboard_shelf)",
+          "pick(mug2)",
+          "pick(can_of_beans)",
+          "place(can_of_beans, cupboard_shelf)",
+          "pick(mug2)",
+          "pick(mug3)",
+          "place(mug3, inside_box)"
+        ],
+        "remaining_actions": [],
+        "raw_output": "Okay, so I'm trying to figure out how to help the robot planner come up with the right sequence of actions to satisfy the goal. The goal is to move all the groceries inside the cupboard and all the mugs inside the box. Let me start by understanding the current state and the problem.\n\nFirst, looking at the current state, the robot's gripper is empty, which is good because it means it's ready to pick up an object. The valid target regions are table_target_area, cupboard_shelf, inside_box, and others, but the important ones here are the targets for mugs and groceries.\n\nThe object states show that mug2 is inside the box, which is correct because mugs should be inside the box. However, the other mugs, like mug3, are on the cupboard shelf, but I think the goal is to have all mugs inside the box. Wait, no, the goal says all mugs inside the box and all groceries inside the cupboard. So, the groceries are can_of_beans, spam, and mug3 is a mug, so it should be inside the box.\n\nWait, no, the object states say mug3 is on the cupboard shelf, which is a grocery shelf. But the goal is to have all mugs inside the box. So, mug3 is a mug, so it should be moved from the cupboard shelf to inside the box. Similarly, can_of_beans and spam are groceries, so they should be on the cupboard shelf.\n\nWait, no, the current state shows that can_of_beans and spam are on the cupboard shelf, which is correct because the goal is to have groceries there. Mug2 is inside the box, which is correct. Mug3 is on the cupboard shelf, but since it's a mug, it should be moved to the inside_box.\n\nWait, but the goal is to move all mugs inside the box and all groceries inside the cupboard. So, the mugs are mug2 and mug3. Currently, mug2 is inside the box, which is correct. Mug3 is on the cupboard shelf, which is incorrect because it's a mug and should be inside the box.\n\nSo, the robot needs to pick up mug3 and place it inside the box. But before placing it inside the box, the box lid must be open. Looking at the Lid State, the box_lid is already OPEN, so that's good. So, the robot can proceed to pick up mug3 and place it inside the box.\n\nWait, but in the current state, the robot's gripper is empty, so it can pick up mug3. But wait, the object states show that mug3 is on the cupboard shelf, which is a target region. So, the robot can pick it up and place it inside the box.\n\nBut wait, the robot might have already tried to place mug2 inside the box and failed, as per the error message. So, maybe the robot needs to try again, but perhaps there's an obstruction. Alternatively, maybe the robot needs to rearrange other objects.\n\nWait, the error message says that the action place(mug2, inside_box) failed because the object didn't move. So, perhaps mug2 is already inside the box, but the robot tried to place it again, which caused a failure. So, the robot should not try to place mug2 again. Instead, it should focus on mug3.\n\nSo, the plan should be:\n\n1. Pick up mug3 from the cupboard shelf.\n2. Place mug3 inside the box, since the box lid is already open.\n\nBut wait, the robot's gripper is empty, so it can pick up mug3. So, the action would be pick(mug3), then place(mug3, inside_box).\n\nBut wait, the current state shows that mug3 is on the cupboard shelf, which is a target region, so the robot can pick it up. So, the sequence would be:\n\npick(mug3)\nplace(mug3, inside_box)\n\nBut I should check if there are any other constraints. For example, if the box lid is open, which it is, so no need to open it again.\n\nWait, but in the current state, the box lid is open, so that's fine. So, the robot can proceed.\n\nSo, the actions needed are:\n\npick(mug3)\nplace(mug3, inside_box)\n\nThat's it because all other objects are already in their correct places. Can_of_beans and spam are on the cupboard shelf, which is correct for groceries. Mug2 is inside the box, correct. So, the only thing left is to move mug3 inside the box.\n\nI think that's the only action needed. So, the output should be those two lines.\n</think>\n\npick(mug3)\nplace(mug3, inside_box)",
+        "inference_time_s": 38.69228410720825,
+        "success": true,
+        "error_message": null,
+        "failure_event": null,
+        "goal_check": {
+          "success": true,
+          "goal_satisfied": true,
+          "raw_output": "DETERMINISTIC_GOAL_COMPLETE",
+          "inference_time": 0.0,
+          "reason": "scene_state_satisfies_kitchen_goal",
+          "error_message": null
+        },
+        "prompt_bundle": {
+          "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+          "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nOutput raw executable action lines only. Do NOT include reasoning, headings, markdown, bullets, or numbering.\nIf the goal is already fully satisfied in the current state, output exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+          "user_prompt": "=== REPLANNING TRIGGERED ===\nEVENT_ID: object_did_not_move\nSTAGE: after_execution\nACTION_FAILED: place(mug2, inside_box)\nERROR/MESSAGE: Object 'mug2' didn't move (displacement: 0.000m)\nCOMPLETED_ACTIONS: pick(mug2), place(mug2, table_target_area), open(box_lid), pick(mug2), place(mug2, table_target_area), open(box_lid), pick(spam), place(spam, cupboard_shelf), pick(mug2), pick(mug2), place(mug2, table_target_area), open(box_lid), pick(spam), place(spam, cupboard_shelf), pick(mug2), pick(can_of_beans), place(can_of_beans, cupboard_shelf), pick(mug2)\n================================\n\n### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=inside_box, description=inside the box, pose=(0.403, 0.056, 0.792, 0.0, -0.0, -0.348, 0.938)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.607, 0.091, 1.247, -0.13, -0.695, 0.198, 0.679)\n- can_of_beans: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.545, 0.15, 1.257, -0.695, 0.128, 0.697, -0.122)\n- spam: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.527, 0.053, 1.272, -0.707, -0.028, 0.707, -0.028)\n\n## Lid State:\n- box_lid: OPEN\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nReturn one action per line, with no numbering, prose, markdown, or commentary.\nIf the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+          "visible_objects": [
+            "mug2",
+            "mug3",
+            "can_of_beans",
+            "spam",
+            "box_lid"
+          ],
+          "valid_regions": [
+            "table",
+            "table_target_area",
+            "cupboard_shelf",
+            "inside_box",
+            "pantry_area",
+            "box_lid_top"
+          ],
+          "icl_mode": "zero_shot",
+          "previous_actions": [
+            "pick(mug2)",
+            "place(mug2, table_target_area)",
+            "open(box_lid)",
+            "pick(mug2)",
+            "place(mug2, table_target_area)",
+            "open(box_lid)",
+            "pick(spam)",
+            "place(spam, cupboard_shelf)",
+            "pick(mug2)",
+            "pick(mug2)",
+            "place(mug2, table_target_area)",
+            "open(box_lid)",
+            "pick(spam)",
+            "place(spam, cupboard_shelf)",
+            "pick(mug2)",
+            "pick(can_of_beans)",
+            "place(can_of_beans, cupboard_shelf)",
+            "pick(mug2)"
+          ],
+          "failure_context": "Object 'mug2' didn't move (displacement: 0.000m)",
+          "metadata": {
+            "held_object": null
+          }
+        }
+      }
+    ]
+  },
+  "output_json_path": "/home/boreddog/Documents/RRC/Long_Horizon/Ending_Pipeline/eval_results_10_trials/deepseek-r1-qwen-14b/K1/trial_008/record.json",
+  "failure_summary_path": "/home/boreddog/Documents/RRC/Long_Horizon/Ending_Pipeline/eval_results_10_trials/deepseek-r1-qwen-14b/K1/trial_008/failure_summary.txt"
+}

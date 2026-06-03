@@ -1,5 +1,6 @@
 # rlbench_kitchen_env.py
 import os
+import time
 import numpy as np
 from pyrep import PyRep
 from pyrep.robots.arms.panda import Panda
@@ -746,6 +747,14 @@ class RLBenchKitchenEnv:
         """Return grasp, q_start, q_end, and trajectory for picking obj at pose."""
         print(f"DEBUG [Env]: Starting compute_pick_trajectory for {obj.get_name()}")
         original_conf = self.get_robot_conf()
+        pick_timeout_s = float(os.environ.get("PICK_TRAJECTORY_TIMEOUT_S", "8.0"))
+        started_at = time.monotonic()
+
+        def _check_pick_timeout():
+            if (time.monotonic() - started_at) > pick_timeout_s:
+                raise RuntimeError(
+                    f"Pick planning timed out while computing trajectory for {obj.get_name()} after {pick_timeout_s:.1f}s"
+                )
         
         # Handle obstructions for specific objects
         # ONLY disable lid collision if lid is actually OPEN (slid away)
@@ -888,11 +897,14 @@ class RLBenchKitchenEnv:
                 y_offsets = [0.0, 0.02, -0.02, 0.04, -0.04]
                 
                 for z_off in z_offsets:
+                    _check_pick_timeout()
                     for y_off in y_offsets:
+                        _check_pick_timeout()
                         target_pos_sample = [target_pos[0], target_pos[1] + y_off, target_pos[2] + z_off]
                         hover_pos_sample = [hover_pos[0], hover_pos[1] + y_off, hover_pos[2] + z_off]
                         
                         for grasp_rot in grasp_quats:
+                            _check_pick_timeout()
                             try:
                                 # A. Solve IK for Hover Pose
                                 path_configs_hover = self.robot.solve_ik_via_sampling(hover_pos_sample, quaternion=grasp_rot, max_configs=20, max_time_ms=500, ignore_collisions=True)
@@ -1021,6 +1033,7 @@ class RLBenchKitchenEnv:
                 xy_offsets = [(0.0, 0.0)]
 
             for depth in valid_depths:
+                _check_pick_timeout()
                 if adaptive_pick_mode:
                     # Adaptive: derive grasp from live world top.
                     target_z = max(w_min_z + 0.005, w_max_z - depth)
@@ -1031,6 +1044,7 @@ class RLBenchKitchenEnv:
                     base_x, base_y = planned_pose[0], planned_pose[1]
 
                 for dx, dy in xy_offsets:
+                    _check_pick_timeout()
                     if in_box_region:
                         target_pos = [live_pos[0], live_pos[1], target_z]
                         hover_pos = [live_pos[0], live_pos[1], live_pos[2] + 0.15] # Changed from 0.40 to 0.15 to avoid kinematic limits
@@ -1040,6 +1054,7 @@ class RLBenchKitchenEnv:
                     # Keep approach strictly vertical in Cartesian space.
 
                     for i, grasp_rot in enumerate(grasp_quats):
+                        _check_pick_timeout()
                         try:
                             # A. Solve IK for Grasp Pose
                             path_configs = self.robot.solve_ik_via_sampling(

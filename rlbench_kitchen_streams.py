@@ -124,11 +124,13 @@ def fn_sample_pick_kin(o, p):
     if not obj: return
 
     try:
+        ENV.last_pick_trajectory_error = None
         print(f"DEBUG [Stream]: Calling compute_pick_trajectory for {o} at {p}")
         grasp, q1, q2, traj_tuple = ENV.compute_pick_trajectory(obj, list(p))
         print(f"DEBUG [Stream]: Success! Found pick trajectory for {o}")
         yield (tuple(grasp), tuple(q1), tuple(q2), traj_tuple)
     except Exception as e:
+        ENV.last_pick_trajectory_error = str(e)
         print(f"DEBUG [Stream]: compute_pick_trajectory failed for {o}: {e}")
         import traceback
         traceback.print_exc()
