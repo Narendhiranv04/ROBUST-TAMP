@@ -27,10 +27,11 @@ class VLMPlanner(BasePlanner):
         self.loaded = False
         self.last_request_summary: Dict[str, Any] = {}
         self.legacy_planner = LegacyVLMPlanner(
-            model_id=model_path,
+            model_name=model_path,
+            model_alias=self.model_alias,
+            model_type="vlm",
             device=device,
-            load_in_4bit=use_4bit,
-            trust_remote_code=trust_remote_code
+            use_4bit=use_4bit,
         )
 
     def load_model(self) -> bool:
@@ -47,6 +48,9 @@ class VLMPlanner(BasePlanner):
         composite = None
         if bundle.images and len(bundle.images) > 0:
             composite = bundle.images[0]  # Assume first image is the composite
+        metadata = dict(getattr(bundle, "metadata", {}) or {})
+        max_new_tokens = int(metadata.get("max_new_tokens", 4096) or 4096)
+        temperature = float(metadata.get("temperature", 0.0) or 0.0)
         self.last_request_summary = {
             "model_type": "vlm",
             "text_only": False,
@@ -62,17 +66,20 @@ class VLMPlanner(BasePlanner):
         
         # For now, we utilize the generate_plan method which takes system/user prompts
         legacy_result = self.legacy_planner.generate_plan(
+            image=composite,
             system_prompt=bundle.system_prompt,
             user_prompt=bundle.user_prompt,
-            composite_image=composite
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
         )
         
         # 3. Map legacy ActionSkeleton to DirectAction
         actions = []
         if legacy_result.success:
             for skeleton in legacy_result.skeleton:
+                action_name = "open" if skeleton.action_name == "open-lid" else skeleton.action_name
                 actions.append(DirectAction(
-                    action_name=skeleton.action_name,
+                    action_name=action_name,
                     args=tuple(skeleton.args)
                 ))
         

@@ -241,9 +241,12 @@ def run_trial(
     goal_override: Optional[str] = None,
     live_masks: bool = True,
     scene_state_trace: bool = False,
+    show_llm_output: bool = False,
     goal_check: bool = False,
     vision: bool = False,
     model_type: str = '',
+    planner_max_new_tokens: int = 4096,
+    goal_check_max_new_tokens: int = 128,
 ) -> Dict[str, Any]:
     variant_spec = get_variant_spec(variant_id)
     if not variant_spec.model_eval_supported:
@@ -269,6 +272,8 @@ def run_trial(
         text_only=not vision,
         enable_vision=bool(vision),
         model_type=model_type or ('vlm' if vision else 'llm'),
+        planner_max_new_tokens=int(planner_max_new_tokens),
+        goal_check_max_new_tokens=int(goal_check_max_new_tokens),
         prompt_mode='segmentation_text_image' if vision else 'segmentation_text_only',
         segmentation_first=True,
         pre_action_checks_enabled=replanning_enabled,
@@ -277,6 +282,7 @@ def run_trial(
         scene_path=variant_spec.scene_path,
         live_segmentation_view=bool(live_masks and not headless),
         scene_state_trace=bool(scene_state_trace),
+        show_llm_output=bool(show_llm_output),
         enable_goal_check=bool(goal_check),
     )
     pipeline = LLMOnlyReplanningPipeline(config=config)
@@ -292,6 +298,9 @@ def run_trial(
     )
     try:
         if not pipeline.initialize(env=env):
+            planner = getattr(pipeline, 'planner', None)
+            debug_info = planner.get_debug_info() if hasattr(planner, 'get_debug_info') else {}
+            print(f"[TrialRunner] Pipeline initialization failed. Planner debug: {debug_info}")
             raise RuntimeError('pipeline_initialize_failed')
 
         preflight = pipeline.preflight(goal_text)
@@ -420,12 +429,15 @@ def main() -> None:
     parser.add_argument('--icl-mode', required=True, choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode to evaluate')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
     parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
+    parser.add_argument('--planner-max-new-tokens', type=int, default=4096, help='Maximum generation tokens for each planner call')
+    parser.add_argument('--goal-check-max-new-tokens', type=int, default=128, help='Maximum generation tokens for each goal-check call')
     parser.add_argument('--goal', default='', help='Optional goal override')
     display_group = parser.add_mutually_exclusive_group()
     display_group.add_argument('--gui', action='store_true', help='Run with simulator GUI (default)')
     display_group.add_argument('--headless', action='store_true', help='Run without simulator GUI')
     parser.add_argument('--no-live-masks', action='store_true', help='Disable the separate live segmentation window')
     parser.add_argument('--scene-state-trace', action='store_true', help='Print scene-state snapshots around execution checks')
+    parser.add_argument('--show-llm-output', action='store_true', help='Print raw LLM/VLM planner output in the local terminal')
     goal_check_group = parser.add_mutually_exclusive_group()
     goal_check_group.add_argument('--goal-check', action='store_true', help='Enable LLM goal-completion verification during execution')
     goal_check_group.add_argument('--no-goal-check', action='store_true', help='Keep LLM goal-completion verification disabled during execution')
@@ -455,9 +467,12 @@ def main() -> None:
         goal_override=args.goal or None,
         live_masks=not args.no_live_masks,
         scene_state_trace=args.scene_state_trace,
+        show_llm_output=bool(args.show_llm_output),
         goal_check=bool(args.goal_check and not args.no_goal_check),
         vision=bool(args.vision),
         model_type=args.model_type,
+        planner_max_new_tokens=args.planner_max_new_tokens,
+        goal_check_max_new_tokens=args.goal_check_max_new_tokens,
     )
     print(json.dumps(record, indent=2))
 

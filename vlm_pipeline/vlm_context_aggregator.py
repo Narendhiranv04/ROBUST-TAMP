@@ -726,10 +726,12 @@ PLANNING RULES:
 - Do not invent hidden objects, hidden blockers, or semantic aliases.
 - Use raw object names such as mug1, mug2, mug3, mug4 exactly as given.
 - Every transfer must follow: move(object) -> pick(object) -> move(object, region) -> place(object, region).
-- Output ONLY a numbered list of executable actions.
-- Do not output commentary, reasoning, markdown, or prose.
+- You may include brief reasoning before the executable plan.
+- End every response with a block headed exactly: FINAL ACTIONS:
+- Inside FINAL ACTIONS, output only executable actions, one per line.
+- Do not include any text after the FINAL ACTIONS block.
 
-Do NOT include any explanation, just the action sequence."""
+The executor ignores text before FINAL ACTIONS and executes only that final block."""
     
     def build_user_prompt(self, state: SceneState, goal: str, 
                           is_replan: bool = False,

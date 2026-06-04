@@ -60,6 +60,8 @@ class RemoteTextLLMPlanner:
             self.request_timeout_s = float(timeout_env)
         else:
             self.request_timeout_s = 300.0
+        self.health_timeout_s = float(os.environ.get('LLM_HEALTH_TIMEOUT_S', '60'))
+        self.health_retries = max(1, int(os.environ.get('LLM_HEALTH_RETRIES', '5')))
 
         self.expected_model = expected_model
         self.loaded = False
@@ -77,18 +79,40 @@ class RemoteTextLLMPlanner:
         return base64.b64encode(buffer.getvalue()).decode('ascii')
 
     def load_model(self) -> bool:
-        try:
-            response = requests.get(f'{self.server_url}/health', timeout=10)
-            if response.status_code != 200:
-                return False
-            data = response.json()
-            self.loaded = bool(data.get('model_loaded', False))
-            self.server_model_info = data
-            self.model_alias = data.get('model_alias', self.model_alias)
-            self.model_name = data.get('model_name', self.model_name)
-            return self.loaded
-        except Exception:
-            return False
+        last_error = ''
+        for attempt in range(1, self.health_retries + 1):
+            try:
+                response = requests.get(
+                    f'{self.server_url}/health',
+                    timeout=self.health_timeout_s,
+                )
+                if response.status_code != 200:
+                    last_error = f'status={response.status_code} body={response.text[:200]}'
+                else:
+                    data = response.json()
+                    self.loaded = bool(data.get('model_loaded', False))
+                    self.server_model_info = data
+                    self.model_alias = data.get('model_alias', self.model_alias)
+                    self.model_name = data.get('model_name', self.model_name)
+                    if self.loaded:
+                        return True
+                    last_error = f"model_not_loaded health={data}"
+            except Exception as exc:
+                last_error = str(exc)
+
+            if attempt < self.health_retries:
+                print(
+                    f"[RemotePlanner] Health check failed "
+                    f"({attempt}/{self.health_retries}): {last_error}. Retrying..."
+                )
+                time.sleep(5.0)
+
+        self.last_request_summary = {
+            'health_error': last_error,
+            'health_timeout_s': self.health_timeout_s,
+            'health_retries': self.health_retries,
+        }
+        return False
 
     def plan(self, bundle: Any) -> PlanResult:
         """Unified interface that handles both text and multimodal bundles."""

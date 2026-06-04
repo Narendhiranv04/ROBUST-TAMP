@@ -161,7 +161,11 @@ class LLMServer:
                 valid_regions=[],
                 icl_mode=request.icl_mode,
                 images=[image],
-                metadata={'held_object': request.held_object},
+                metadata={
+                    'held_object': request.held_object,
+                    'max_new_tokens': request.max_new_tokens,
+                    'temperature': request.temperature,
+                },
             )
             result = self.planner.plan(bundle)
         else:

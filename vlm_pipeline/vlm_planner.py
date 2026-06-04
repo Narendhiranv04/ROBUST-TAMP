@@ -21,7 +21,11 @@ import numpy as np
 # Try to import planner dependencies
 try:
     import torch
-    from transformers import AutoModel, AutoModelForCausalLM, AutoProcessor
+    from transformers import AutoImageProcessor, AutoModel, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+    try:
+        from transformers import AutoVideoProcessor
+    except ImportError:
+        AutoVideoProcessor = None
     try:
         from transformers import AutoModelForImageTextToText
     except ImportError:
@@ -48,6 +52,9 @@ except ImportError:
     AutoModel = None
     AutoModelForCausalLM = None
     AutoProcessor = None
+    AutoImageProcessor = None
+    AutoTokenizer = None
+    AutoVideoProcessor = None
     AutoModelForImageTextToText = None
     AutoModelForVision2Seq = None
     Phi4MultimodalForCausalLM = None
@@ -101,6 +108,8 @@ class VLMPlanner:
         'open-lid': 1,  # open-lid(lid)
         'open_lid': 1,  # alternate format
     }
+
+    FINAL_ACTIONS_MARKER = re.compile(r'(?im)^\s*(?:#+\s*)?FINAL\s+ACTIONS?\s*:?\s*$')
     
     # Known objects and regions for validation. These can be overridden
     # at runtime from the segmentation-derived prompt bundle.
@@ -210,15 +219,84 @@ class VLMPlanner:
         _append("AutoModel", AutoModel)
         return loaders
 
+    def _patch_internvl_tokenizer(self, tokenizer) -> None:
+        """Add InternVL media-token attributes expected by source Transformers."""
+        token_specs = [
+            ("start_image_token", "start_image_token_id", "<img>"),
+            ("end_image_token", "end_image_token_id", "</img>"),
+            ("context_image_token", "context_image_token_id", "<IMG_CONTEXT>"),
+        ]
+        for token_attr, id_attr, token in token_specs:
+            if not hasattr(tokenizer, token_attr):
+                setattr(tokenizer, token_attr, token)
+            token_id = getattr(tokenizer, id_attr, None)
+            if token_id is None and hasattr(tokenizer, "convert_tokens_to_ids"):
+                token_id = tokenizer.convert_tokens_to_ids(getattr(tokenizer, token_attr))
+            if token_id is not None:
+                setattr(tokenizer, id_attr, token_id)
+
+        if not hasattr(tokenizer, "video_token"):
+            setattr(tokenizer, "video_token", "<video>")
+
+    def _load_internvl_processor_fallback(self):
+        if AutoTokenizer is None or AutoImageProcessor is None:
+            raise ImportError("AutoTokenizer and AutoImageProcessor are required for InternVL loading.")
+        try:
+            from transformers.models.internvl.processing_internvl import InternVLProcessor
+        except Exception as exc:
+            raise ImportError(f"InternVLProcessor is unavailable in this Transformers install: {exc}") from exc
+
+        processor_dict: Dict[str, Any] = {}
+        try:
+            processor_dict, _ = InternVLProcessor.get_processor_dict(
+                self.model_name,
+                trust_remote_code=True,
+            )
+        except Exception as exc:
+            print(f"[VLM Planner] Could not read InternVL processor dict; using defaults: {exc}")
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name,
+            trust_remote_code=True,
+            use_fast=False,
+        )
+        self._patch_internvl_tokenizer(tokenizer)
+
+        image_processor = AutoImageProcessor.from_pretrained(
+            self.model_name,
+            trust_remote_code=True,
+        )
+        video_processor = None
+        if AutoVideoProcessor is not None:
+            try:
+                video_processor = AutoVideoProcessor.from_pretrained(
+                    self.model_name,
+                    trust_remote_code=True,
+                )
+            except Exception as exc:
+                print(f"[VLM Planner] InternVL video processor unavailable; continuing image-only: {exc}")
+
+        return InternVLProcessor(
+            image_processor=image_processor,
+            tokenizer=tokenizer,
+            video_processor=video_processor,
+            image_seq_length=int(processor_dict.get("image_seq_length", 256) or 256),
+            chat_template=processor_dict.get("chat_template"),
+        )
+
     def _load_processor(self):
         processor_kwargs = {"trust_remote_code": True}
-        if self._infer_model_family() == "qwen_vl":
+        family = self._infer_model_family()
+        if family in {"qwen_vl", "internvl"}:
             processor_kwargs["use_fast"] = False
 
         try:
             self.processor = AutoProcessor.from_pretrained(self.model_name, **processor_kwargs)
-        except TypeError as exc:
-            if processor_kwargs.get("use_fast") is False:
+        except (TypeError, AttributeError) as exc:
+            if family == "internvl":
+                print(f"[VLM Planner] AutoProcessor failed for InternVL: {exc}. Building processor manually.")
+                self.processor = self._load_internvl_processor_fallback()
+            elif processor_kwargs.get("use_fast") is False:
                 print(f"[VLM Planner] Processor load with use_fast=False failed: {exc}. Retrying with default processor config.")
                 processor_kwargs.pop("use_fast", None)
                 self.processor = AutoProcessor.from_pretrained(self.model_name, **processor_kwargs)
@@ -384,7 +462,7 @@ class VLMPlanner:
                                  max_new_tokens: int,
                                  temperature: float,
                                  pad_token_id: Optional[int] = None) -> Dict[str, Any]:
-        capped_tokens = max(64, min(int(max_new_tokens), 1024))
+        capped_tokens = max(64, min(int(max_new_tokens), 4096))
         kwargs: Dict[str, Any] = {
             "max_new_tokens": capped_tokens,
             "do_sample": temperature > 0,
@@ -398,19 +476,20 @@ class VLMPlanner:
         return kwargs
 
     def _build_format_repair_prompt(self, user_prompt: str, bad_output: str) -> str:
-        prior_output = bad_output.strip() or "(empty output)"
+        prior_output = (bad_output.strip() or "(empty output)")[:1200]
         return f"""{user_prompt}
 
 FORMAT REPAIR:
 Your previous answer was not parseable as executable actions:
 {prior_output}
 
-Rewrite the answer as ONLY a numbered list of executable actions using exactly these action forms:
-1. pick(object)
-2. place(object, region)
-3. open-lid(box_lid)
+Rewrite the answer so it ends with this exact block:
+FINAL ACTIONS:
+pick(object)
+place(object, region)
+open-lid(box_lid)
 
-Do not include reasoning, markdown, comments, or any text before/after the actions."""
+Use only the needed actions. Do not include any text after the FINAL ACTIONS block."""
 
     def _generate_multimodal_output(self,
                                     image: np.ndarray,
@@ -469,6 +548,9 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
             return self._decode_generated_text(generated_ids, inputs)
 
         prompt_text = f"{system_prompt}\n\n{user_prompt}"
+        if self._infer_model_family() == "internvl":
+            image_token = getattr(self.processor, "image_token", "<IMG_CONTEXT>")
+            prompt_text = f"{image_token}\n{prompt_text}"
         inputs = self.processor(
             text=[prompt_text],
             images=[pil_image],
@@ -497,7 +579,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
             text = self.processor.apply_chat_template(
                 messages,
                 tokenize=False,
-                add_generation_prompt=True
+                add_generation_prompt=True,
             )
         else:
             text = f"{system_prompt}\n\n{user_prompt}\n"
@@ -520,7 +602,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
                       image: np.ndarray,
                       system_prompt: str,
                       user_prompt: str,
-                      max_new_tokens: int = 1024,
+                      max_new_tokens: int = 4096,
                       temperature: float = 0.1) -> PlanResult:
         """
         Generate an action plan from visual context and prompts.
@@ -545,7 +627,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
             )
-            print(f"[VLM Planner] Raw output: {output_text}")
+            print(f"[VLM Planner] Generated {len(output_text or '')} characters.")
 
             skeleton = self.parse_plan(output_text)
             if not skeleton:
@@ -557,7 +639,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
                     max_new_tokens=max_new_tokens,
                     temperature=0.0,
                 )
-                print(f"[VLM Planner] Repaired raw output: {repaired_output}")
+                print(f"[VLM Planner] Format repair generated {len(repaired_output or '')} characters.")
                 repaired_skeleton = self.parse_plan(repaired_output)
                 if repaired_skeleton:
                     output_text = repaired_output
@@ -585,7 +667,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
     def generate_plan_text_only(self,
                                 system_prompt: str,
                                 user_prompt: str,
-                                max_new_tokens: int = 1024,
+                                max_new_tokens: int = 4096,
                                 temperature: float = 0.1) -> PlanResult:
         """
         Generate plan without image (text-only mode for testing).
@@ -610,6 +692,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
             )
+            print(f"[VLM Planner] Text-only generation produced {len(output_text or '')} characters.")
             skeleton = self.parse_plan(output_text)
 
             if not skeleton:
@@ -620,6 +703,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
                     max_new_tokens=max_new_tokens,
                     temperature=0.0,
                 )
+                print(f"[VLM Planner] Text-only format repair produced {len(repaired_output or '')} characters.")
                 repaired_skeleton = self.parse_plan(repaired_output)
                 if repaired_skeleton:
                     output_text = repaired_output
@@ -678,6 +762,10 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
         else:
             text = re.sub(r'</?think\s*>', '', text, flags=re.IGNORECASE)
 
+        final_markers = list(self.FINAL_ACTIONS_MARKER.finditer(text))
+        if final_markers:
+            text = text[final_markers[-1].end():]
+
         actions = []
         seen_pick_place_pairs = set()  # Track (object, region) pairs to detect duplicates
         action_pattern = re.compile(r'([A-Za-z][A-Za-z0-9_-]*)\s*\(\s*([^)]*)\s*\)')
@@ -695,7 +783,7 @@ Do not include reasoning, markdown, comments, or any text before/after the actio
                 return "pick"
             if n in {"place", "put", "put_down", "putdown"}:
                 return "place"
-            if n in {"open_lid", "openlid", "open_box_lid", "open_boxlid", "open_box"}:
+            if n in {"open", "open_lid", "openlid", "open_box_lid", "open_boxlid", "open_box"}:
                 return "open-lid"
             if n in {"move_object_to", "move_to", "move_object", "move"}:
                 return "move"

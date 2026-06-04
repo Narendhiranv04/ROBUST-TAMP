@@ -111,7 +111,8 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'Executable action formats for this run:' in user_prompt
     assert 'Respect ACCESS CONSTRAINTS' in user_prompt
     assert 'open(box_lid)' in user_prompt
-    assert 'Return executable action lines only.' in user_prompt
+    assert 'FINAL ACTIONS:' in user_prompt
+    assert 'Inside FINAL ACTIONS, return executable action lines only.' in user_prompt
     assert 'state_text' not in user_prompt
     assert 'region=inside_box' in user_prompt
     assert 'visual_mask_regions=inside_box' in user_prompt
@@ -130,7 +131,8 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     system_prompt = bundle.system_prompt
     assert 'SHARED FEW-SHOT EXEMPLAR' not in system_prompt
     assert 'Valid action lines:' not in system_prompt
-    assert 'Output raw executable action lines only' in system_prompt
+    assert 'FINAL ACTIONS:' in system_prompt
+    assert 'The executor will ignore text before FINAL ACTIONS' in system_prompt
     assert 'EXECUTABLE ACTION SEQUENCE' not in system_prompt
     assert 'mug_box' not in system_prompt
 

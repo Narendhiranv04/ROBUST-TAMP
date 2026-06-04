@@ -124,8 +124,11 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         lines.append('Executable action formats for this run:')
         for action_name in self.symbol_registry.actions:
             lines.append(self._action_format_line(action_name))
-        lines.append('If the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS')
-        lines.append('Return executable action lines only.')
+        lines.append('You may include brief reasoning before the executable plan.')
+        lines.append('End every response with a block headed exactly: FINAL ACTIONS:')
+        lines.append('Inside FINAL ACTIONS, return executable action lines only.')
+        lines.append('Do not include any text after the FINAL ACTIONS block.')
+        lines.append('If the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.')
         return lines
 
     def _action_format_line(self, action_name: str) -> str:

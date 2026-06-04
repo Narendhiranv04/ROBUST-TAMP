@@ -13,6 +13,9 @@ def _args(pipeline="llm"):
         model_type="",
         icl_mode="zero_shot",
         max_replans=3,
+        planner_max_new_tokens=1024,
+        goal_check_max_new_tokens=64,
+        show_llm_output=False,
         remote=True,
         remote_url="http://127.0.0.1:8000",
         goal_check=False,
@@ -27,6 +30,7 @@ def test_vlm_repeated_runner_uses_maintained_trial_runner_with_vision() -> None:
     assert "--vision" in command
     assert "run_model_trial.py" not in command
     assert "--output-dir" in command
+    assert "--planner-max-new-tokens" in command
 
 
 def test_llm_repeated_runner_stays_text_only_by_default() -> None:
@@ -35,3 +39,81 @@ def test_llm_repeated_runner_stays_text_only_by_default() -> None:
     assert command[:3] == [sys.executable, "-m", "llm_pipeline.trial_runner"]
     assert "--vision" not in command
     assert "--no-goal-check" in command
+    assert "1024" in command
+
+
+def test_repeated_runner_can_enable_raw_llm_output() -> None:
+    args = _args()
+    args.show_llm_output = True
+
+    command = runner._trial_command(args, 1, Path("trial_001"))
+
+    assert "--show-llm-output" in command
+
+
+def test_aggregate_separates_object_region_success_from_raw_success() -> None:
+    records = [
+        {
+            "variant_id": "K1",
+            "success_validation": {
+                "success": False,
+                "missing": ["spam is in table, expected cupboard_shelf"],
+            },
+            "raw_episode_success": True,
+            "subtask_completion_rate": 1.0,
+            "episode_time_s": 10.0,
+            "total_replans": 1,
+            "raw_summary": {
+                "last_failure_event": {
+                    "failure_id": "new_object_discovered",
+                    "failure_layer": "layer_2",
+                    "source": "segmentation",
+                }
+            },
+        },
+        {
+            "variant_id": "K1",
+            "success_validation": {"success": True, "missing": []},
+            "raw_episode_success": True,
+            "subtask_completion_rate": 0.5,
+            "episode_time_s": 20.0,
+            "total_replans": 3,
+        },
+    ]
+
+    summary = runner.aggregate_records(records)
+
+    assert summary["episode_successes"] == 1
+    assert summary["raw_episode_successes"] == 2
+    assert summary["mean_task_success"] == 0.5
+    assert summary["mean_raw_task_success"] == 1.0
+    assert summary["failed_trial_reasons"] == {"object_region_goal_not_satisfied": 1}
+    assert summary["failure_ids"] == {"new_object_discovered": 1}
+
+
+def test_print_summary_uses_unambiguous_metric_labels(capsys) -> None:
+    args = _args()
+    summary = {
+        "valid_trials": 1,
+        "episode_successes": 0,
+        "raw_episode_successes": 1,
+        "success_metric": "object_region_validation",
+        "mean_task_success": 0.0,
+        "mean_raw_task_success": 1.0,
+        "mean_subtask_coverage": 1.0,
+        "avg_time_s": 12.0,
+        "avg_replans": 2.0,
+        "failed_trial_reasons": {"object_region_goal_not_satisfied": 1},
+        "failure_ids": {"new_object_discovered": 1},
+        "failure_layers": {"layer_2": 1},
+        "failure_sources": {"segmentation": 1},
+        "bucket_breakdown_totals": {},
+    }
+
+    runner._print_summary(args, summary)
+    output = capsys.readouterr().out
+
+    assert "Object-Region Success:" in output
+    assert "Raw Pipeline Success:" in output
+    assert "Latest Replan/Failure IDs:" in output
+    assert "Mean Task Success:" not in output

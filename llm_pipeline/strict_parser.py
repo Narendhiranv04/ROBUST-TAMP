@@ -12,6 +12,7 @@ from llm_pipeline.region_aliases import normalize_region_name
 
 
 ACTION_CALL = re.compile(r'^(pick|place|open|close)\(([A-Za-z0-9_-]+)(?:,\s*([A-Za-z0-9_-]+))?\)$')
+FINAL_ACTIONS_MARKER = re.compile(r'(?im)^\s*(?:#+\s*)?FINAL\s+ACTIONS?\s*:?\s*$')
 
 
 @dataclass
@@ -48,6 +49,9 @@ class StrictActionParser:
         text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
         # Also catch any lingering <think> blocks if there are multiple or if the regex missed
         text = re.sub(r'<think>.*?(</think>|$)', '', text, flags=re.DOTALL | re.IGNORECASE)
+        final_markers = list(FINAL_ACTIONS_MARKER.finditer(text))
+        if final_markers:
+            text = text[final_markers[-1].end():]
 
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:

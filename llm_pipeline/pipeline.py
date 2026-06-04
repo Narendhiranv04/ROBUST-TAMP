@@ -69,6 +69,7 @@ class LLMPipelineConfig:
     task_family: str = 'kitchen'
     scene_path: str = ''
     scene_state_trace: bool = False
+    show_llm_output: bool = False
     enable_goal_check: bool = True
     goal_check_max_new_tokens: int = 128
     goal_check_temperature: float = 0.0
@@ -370,9 +371,7 @@ class LLMOnlyReplanningPipeline:
         if is_replan and failure_event is not None:
             print(f'[LLM] Failure context: {failure_event.message}')
         print(f'{"=" * 60}')
-        print(f'[LLM] Raw output:')
-        for line in (result.raw_output or '').strip().splitlines():
-            print(f'   {line}')
+        print(f'[LLM] Raw output: {len(result.raw_output or "")} characters')
         if result.success and result.actions:
             print(f'[LLM] Parsed plan ({len(result.actions)} actions):')
             for i, action in enumerate(result.actions, 1):
@@ -429,9 +428,10 @@ class LLMOnlyReplanningPipeline:
             )
 
         if not silent:
-            print(f'[LLM] Raw output:')
-            for line in (result.raw_output or '').strip().splitlines():
-                print(f'   {line}')
+            print(f'[LLM] Raw output: {len(result.raw_output or "")} characters')
+            if self.config.show_llm_output and result.raw_output:
+                print('[LLM] Raw output text:')
+                print(result.raw_output.rstrip())
             if result.success and result.actions:
                 print(f'[LLM] Parsed plan ({len(result.actions)} actions):')
                 for i, action in enumerate(result.actions, 1):

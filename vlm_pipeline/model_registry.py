@@ -44,6 +44,24 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
         "vlm",
         "Qwen3 Vision-Language Model for scene understanding",
     ),
+    "qwen3-vl-8b-thinking": _make_spec(
+        "qwen3-vl-8b-thinking",
+        "Qwen/Qwen3-VL-8B-Thinking",
+        "vlm",
+        "Qwen3 VL 8B Thinking model for multimodal planning",
+    ),
+    "qwen3-vl-32b-fp8": _make_spec(
+        "qwen3-vl-32b-fp8",
+        "Qwen/Qwen3-VL-32B-Instruct-FP8",
+        "vlm",
+        "Qwen3 VL 32B FP8 multimodal model",
+    ),
+    "qwen2.5-vl-72b-awq": _make_spec(
+        "qwen2.5-vl-72b-awq",
+        "Qwen/Qwen2.5-VL-72B-Instruct-AWQ",
+        "vlm",
+        "Qwen2.5 VL 72B AWQ multimodal model",
+    ),
     "gsarch": _make_spec(
         "gsarch",
         "gsarch/ViGoRL-MCTS-SFT-7b-Spatial",
@@ -68,11 +86,35 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
         "vlm",
         "High-resolution VLM for dense perception",
     ),
+    "internvl-3.5-8b": _make_spec(
+        "internvl-3.5-8b",
+        "OpenGVLab/InternVL3_5-8B",
+        "vlm",
+        "InternVL 3.5 8B for dense perception",
+    ),
+    "internvl-3.5-38b": _make_spec(
+        "internvl-3.5-38b",
+        "OpenGVLab/InternVL3_5-38B",
+        "vlm",
+        "InternVL 3.5 38B for large-scale perception-heavy planning",
+    ),
+    "llama-3.2-11b-vision": _make_spec(
+        "llama-3.2-11b-vision",
+        "meta-llama/Llama-3.2-11B-Vision-Instruct",
+        "vlm",
+        "Llama 3.2 11B Vision Instruct model",
+    ),
     "qwen": _make_spec(
         "qwen",
         "Qwen/Qwen3-8B",
         "llm",
         "Qwen3 language model for planning",
+    ),
+    "qwen3-8b": _make_spec(
+        "qwen3-8b",
+        "Qwen/Qwen3-8B",
+        "llm",
+        "Qwen3 8B language model for planning",
     ),
     "selene": _make_spec(
         "selene",
@@ -116,6 +158,12 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
         "llm",
         "DeepSeek Qwen-32B distilled reasoning model",
     ),
+    "qwen3.6-27b": _make_spec(
+        "qwen3.6-27b",
+        "Qwen/Qwen3.6-27B",
+        "llm",
+        "Qwen3.6 27B language model for planning",
+    ),
     "devstral-24b": _make_spec(
         "devstral-24b",
         "mistralai/Devstral-Small-2-24B-Instruct-2512",
@@ -124,9 +172,15 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
     ),
     "llama-3.3-70b": _make_spec(
         "llama-3.3-70b",
-        "unsloth/Llama-3.3-70B-Instruct-GGUF",
+        "casperhansen/llama-3.3-70b-instruct-awq",
         "llm",
-        "Llama 3.3 70B Instruct model",
+        "Llama 3.3 70B Instruct AWQ model",
+    ),
+    "llama-3.3-70b-awq": _make_spec(
+        "llama-3.3-70b-awq",
+        "casperhansen/llama-3.3-70b-instruct-awq",
+        "llm",
+        "Llama 3.3 70B Instruct AWQ model",
     ),
 }
 

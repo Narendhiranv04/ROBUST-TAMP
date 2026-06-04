@@ -35,6 +35,19 @@ def test_accepts_numbered_output_by_stripping_prefixes() -> None:
     assert [str(action) for action in actions][-1] == 'place(mug2, inside_box)'
 
 
+def test_prefers_final_actions_block_after_reasoning() -> None:
+    actions = parser.parse(
+        'Reasoning: I might mention pick(mug3), but this should not execute.\n'
+        'FINAL ACTIONS:\n'
+        'pick(mug2)\n'
+        'place(mug2, table_target_area)\n'
+    )
+    assert [str(action) for action in actions] == [
+        'pick(mug2)',
+        'place(mug2, table_target_area)',
+    ]
+
+
 def test_accepts_no_actions_terminal_token() -> None:
     actions = parser.parse('NO_ACTIONS')
     assert actions == []
@@ -85,4 +98,3 @@ def test_rejects_alias_names_and_missing_terminal_place() -> None:
         assert exc.failure_id == 'missing_post_pick_place'
     else:
         raise AssertionError('Expected missing post-pick place to fail strict parsing')
-

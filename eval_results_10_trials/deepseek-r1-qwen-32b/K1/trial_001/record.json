@@ -1,0 +1,417 @@
+{
+  "variant_id": "K1",
+  "task_family": "kitchen",
+  "scene_path": "/home/boreddog/Documents/RRC/Long_Horizon/Ending_Pipeline/task1_variation1.ttt",
+  "trial_index": 1,
+  "preflight_only": false,
+  "action_sequence_length": 35,
+  "gt_total_subtasks": 6,
+  "completed_gt_subtasks": 0,
+  "subtask_completion_rate": 0.0,
+  "bucket_breakdown": {
+    "mug_to_placement": {
+      "expected": 1,
+      "observed": 0,
+      "matched": 0
+    },
+    "open_lid": {
+      "expected": 1,
+      "observed": 0,
+      "matched": 0
+    },
+    "grocery_to_cupboard": {
+      "expected": 2,
+      "observed": 0,
+      "matched": 0
+    },
+    "mug_to_box": {
+      "expected": 2,
+      "observed": 0,
+      "matched": 0
+    }
+  },
+  "observed_subtasks": [],
+  "extra_observed_subtasks": {},
+  "success_validation": {
+    "success": false,
+    "variant_id": "K1",
+    "validator": "kitchen_scene_state",
+    "missing": [
+      "mug2 is in box_lid_top, expected inside_box",
+      "mug3 is in cupboard_shelf, expected inside_box",
+      "soup is in unknown, expected cupboard_shelf",
+      "spam is in pantry_area, expected cupboard_shelf"
+    ],
+    "satisfied": [],
+    "details": {
+      "object_region_map": {
+        "mug2": "box_lid_top",
+        "mug3": "cupboard_shelf",
+        "spam": "pantry_area"
+      },
+      "expected_regions": {
+        "inside_box": [
+          "mug2",
+          "mug3"
+        ],
+        "cupboard_shelf": [
+          "soup",
+          "spam"
+        ]
+      }
+    }
+  },
+  "model_alias": "deepseek-r1-qwen-32b",
+  "model_type": "llm",
+  "icl_mode": "zero_shot",
+  "prompt_mode": "segmentation_text_only",
+  "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+  "text_only": true,
+  "use_vision": false,
+  "image_present": false,
+  "image_metadata": {
+    "image_present": false,
+    "image_count": 0,
+    "image_shapes": [],
+    "camera_names": []
+  },
+  "segmentation_first": true,
+  "replan_mode": "on",
+  "planning_success": false,
+  "execution_skipped": false,
+  "use_remote_planner": true,
+  "remote_planner_url": "http://127.0.0.1:8000",
+  "pre_action_checks_enabled": true,
+  "post_action_checks_enabled": true,
+  "live_segmentation_view": false,
+  "scene_state_trace": false,
+  "goal_check_enabled": false,
+  "last_goal_check": null,
+  "episode_success": false,
+  "raw_episode_success": false,
+  "total_cycles": 1,
+  "total_replans": 0,
+  "planned_actions": [],
+  "completed_actions": [],
+  "remaining_actions": [],
+  "final_object_region_map": {
+    "mug2": "box_lid_top",
+    "mug3": "cupboard_shelf",
+    "spam": "pantry_area"
+  },
+  "final_lid_states": {
+    "box_lid": false
+  },
+  "failure_reason": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=300.0)",
+  "failure_occurrences": {
+    "messages": [
+      "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=300.0)",
+      "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=300.0)"
+    ],
+    "categories": [
+      "unknown",
+      "unknown"
+    ],
+    "counts": {
+      "unknown": 2
+    }
+  },
+  "episode_time_s": 0.18771910667419434,
+  "preflight": {
+    "model_alias": "deepseek-r1-qwen-32b",
+    "model_name": "casperhansen/deepseek-r1-distill-qwen-32b-awq",
+    "model_type": "llm",
+    "icl_mode": "zero_shot",
+    "loaded": true,
+    "text_only": true,
+    "use_vision": false,
+    "image_present": false,
+    "image_metadata": {},
+    "prompt_contract_ok": true,
+    "prompt_contract_issues": [],
+    "dry_run_plan_success": false,
+    "dry_run_action_count": 0,
+    "dry_run_error_message": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=300.0)",
+    "dry_run_failure_event": null,
+    "dry_run_raw_output": "",
+    "prompt_trace": {
+      "bundle": {
+        "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+        "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nYou may include brief reasoning before the executable plan.\nAlways end your response with a final executable block headed exactly:\nFINAL ACTIONS:\n\nThe FINAL ACTIONS block must contain raw executable action lines only.\nDo NOT include prose, markdown, bullets, numbering, or comments after FINAL ACTIONS.\nThe executor will ignore text before FINAL ACTIONS and execute only that final block.\nIf the goal is already fully satisfied in the current state, the final block must contain exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+        "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nYou may include brief reasoning before the executable plan.\nEnd every response with a block headed exactly: FINAL ACTIONS:\nInside FINAL ACTIONS, return one raw action per line with no numbering, prose, markdown, or commentary.\nDo not include any text after the FINAL ACTIONS block.\nIf the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+        "visible_objects": [
+          "mug2",
+          "mug3",
+          "spam",
+          "box_lid"
+        ],
+        "valid_regions": [
+          "table",
+          "table_target_area",
+          "cupboard_shelf",
+          "inside_box",
+          "pantry_area",
+          "box_lid_top"
+        ],
+        "icl_mode": "zero_shot",
+        "previous_actions": [],
+        "metadata": {
+          "held_object": null
+        }
+      },
+      "state": {
+        "frame_index": 1,
+        "visible_objects": [
+          "mug2",
+          "mug3",
+          "spam",
+          "box_lid"
+        ],
+        "valid_regions": [
+          "table",
+          "table_target_area",
+          "cupboard_shelf",
+          "inside_box",
+          "pantry_area",
+          "box_lid_top"
+        ],
+        "pddl_state": [],
+        "pose_map": {
+          "mug2": [
+            0.1949930489063263,
+            0.2569044828414917,
+            0.997983455657959,
+            -1.5449714261834419e-13,
+            -1.5449712906581703e-13,
+            -0.7071067690849304,
+            0.7071068286895752
+          ],
+          "mug3": [
+            0.5418534278869629,
+            0.08808349072933197,
+            1.2473905086517334,
+            -0.16685819625854492,
+            -0.6872066855430603,
+            0.16095353662967682,
+            0.688476026058197
+          ],
+          "spam": [
+            0.2672518491744995,
+            -0.35250046849250793,
+            0.7899994254112244,
+            -1.1856884185590388e-07,
+            -1.3401675460045226e-05,
+            -3.081234378754516e-09,
+            1.0
+          ],
+          "box_lid": [
+            0.17508965730667114,
+            0.31637561321258545,
+            0.9432991147041321,
+            -0.00291974819265306,
+            -0.0029240360017865896,
+            -0.7070987820625305,
+            0.7071028351783752
+          ]
+        },
+        "gripper_state": {
+          "status": "empty",
+          "holding": null
+        },
+        "object_region_map": {
+          "mug2": "box_lid_top",
+          "mug3": "cupboard_shelf",
+          "spam": "pantry_area"
+        },
+        "object_region_descriptions": {
+          "mug2": "on top of the box lid",
+          "mug3": "on lower cupboard shelf",
+          "spam": "in pantry area"
+        },
+        "lid_states": {
+          "box_lid": false
+        }
+      },
+      "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nYou may include brief reasoning before the executable plan.\nAlways end your response with a final executable block headed exactly:\nFINAL ACTIONS:\n\nThe FINAL ACTIONS block must contain raw executable action lines only.\nDo NOT include prose, markdown, bullets, numbering, or comments after FINAL ACTIONS.\nThe executor will ignore text before FINAL ACTIONS and execute only that final block.\nIf the goal is already fully satisfied in the current state, the final block must contain exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+      "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nYou may include brief reasoning before the executable plan.\nEnd every response with a block headed exactly: FINAL ACTIONS:\nInside FINAL ACTIONS, return one raw action per line with no numbering, prose, markdown, or commentary.\nDo not include any text after the FINAL ACTIONS block.\nIf the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed."
+    },
+    "debug_snapshot": {
+      "model_alias": "deepseek-r1-qwen-32b",
+      "model_name": "casperhansen/deepseek-r1-distill-qwen-32b-awq",
+      "model_type": "llm",
+      "loaded": true,
+      "server_url": "http://127.0.0.1:8000",
+      "health": {
+        "status": "ok",
+        "model_loaded": true,
+        "model_name": "casperhansen/deepseek-r1-distill-qwen-32b-awq",
+        "model_alias": "deepseek-r1-qwen-32b",
+        "model_type": "llm",
+        "prompt_mode": "segmentation_text_only",
+        "gpu_available": true
+      },
+      "last_request": {
+        "model_type": "llm",
+        "use_vision": false,
+        "image_present": false,
+        "text_only": true
+      },
+      "health_error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=10)",
+      "last_request_error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=10)",
+      "symbol_registry": {
+        "actions": [
+          "pick",
+          "place",
+          "open"
+        ],
+        "objects": [
+          "mug1",
+          "mug2",
+          "mug3",
+          "mug4",
+          "can_of_beans",
+          "mustard",
+          "spam",
+          "sugar",
+          "crackers",
+          "box_lid",
+          "box_base",
+          "box_lid_top",
+          "can",
+          "can_of_beans_box",
+          "cupboard_lower",
+          "inside_box",
+          "mug_box",
+          "mug_cupboard",
+          "spam_box",
+          "tin"
+        ],
+        "regions": [
+          "table",
+          "table_target_area",
+          "cupboard_shelf",
+          "inside_box",
+          "pantry_area",
+          "box_lid_top"
+        ]
+      }
+    },
+    "preflight_success": false
+  },
+  "raw_summary": {
+    "success": false,
+    "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+    "model_alias": "deepseek-r1-qwen-32b",
+    "model_path": "casperhansen/deepseek-r1-distill-qwen-32b-awq",
+    "model_type": "llm",
+    "icl_mode": "zero_shot",
+    "prompt_mode": "segmentation_text_only",
+    "replan_mode": "on",
+    "replanning_enabled": true,
+    "execution_skipped": false,
+    "text_only": true,
+    "use_vision": false,
+    "image_present": false,
+    "image_metadata": {
+      "image_present": false,
+      "image_count": 0,
+      "image_shapes": [],
+      "camera_names": []
+    },
+    "segmentation_first": true,
+    "use_remote_planner": true,
+    "remote_planner_url": "http://127.0.0.1:8000",
+    "pre_action_checks_enabled": true,
+    "post_action_checks_enabled": true,
+    "goal_check_enabled": false,
+    "planned_actions": [],
+    "completed_actions": [],
+    "remaining_actions": [],
+    "held_object": null,
+    "final_scene_state": {
+      "visible_objects": [
+        "mug2",
+        "mug3",
+        "spam",
+        "box_lid"
+      ],
+      "valid_regions": [
+        "table",
+        "table_target_area",
+        "cupboard_shelf",
+        "inside_box",
+        "pantry_area",
+        "box_lid_top"
+      ],
+      "object_region_map": {
+        "mug2": "box_lid_top",
+        "mug3": "cupboard_shelf",
+        "spam": "pantry_area"
+      },
+      "object_region_descriptions": {
+        "mug2": "on top of the box lid",
+        "mug3": "on lower cupboard shelf",
+        "spam": "in pantry area"
+      },
+      "lid_states": {
+        "box_lid": false
+      }
+    },
+    "final_object_region_map": {
+      "mug2": "box_lid_top",
+      "mug3": "cupboard_shelf",
+      "spam": "pantry_area"
+    },
+    "final_lid_states": {
+      "box_lid": false
+    },
+    "last_goal_check": null,
+    "last_failure_event": null,
+    "failure_reason": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=300.0)",
+    "total_cycles": 1,
+    "total_replans": 0,
+    "episode_time_s": 0.18771910667419434,
+    "cycles": [
+      {
+        "cycle_number": 1,
+        "is_replan": false,
+        "icl_mode": "zero_shot",
+        "planned_actions": [],
+        "completed_actions": [],
+        "remaining_actions": [],
+        "raw_output": "",
+        "inference_time_s": 300.1010859012604,
+        "success": false,
+        "error_message": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=300.0)",
+        "failure_event": null,
+        "goal_check": null,
+        "prompt_bundle": {
+          "goal_text": "move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box",
+          "system_prompt": "You are a Robotic Task Planner. Your goal is to generate a valid action sequence for manipulation environments.\n\n### 1. CORE ACTIONS\n- pick(obj): (Precondition: Hand empty, obj not physically blocked by closed containers or other objects. You can only grasp one object at a time)\n- place(obj, region): (Precondition: Hand holding obj)\n- open(lid_or_door): (Precondition: Hand empty, lid/door is CLOSED and not obstructed. CRITICAL: If an object is resting on a lid, you MUST pick and place that object somewhere else before opening the lid. Note: You do NOT `pick` or `place` lids. The open mechanism simply slides the lid autonomously)\n\n### 2. LID STATE\nThe observation includes a `## Lid State` section showing whether each lid is OPEN or CLOSED.\n- If a lid is OPEN, do NOT call open() on it again \u2014 its contents are already accessible.\n- If a lid is CLOSED, you must open() it before accessing items inside.\n- `inside_box` is inaccessible while `box_lid` is CLOSED. Before any `place(object, inside_box)`, the plan must include `open(box_lid)` unless the current Lid State already says `box_lid: OPEN`.\n- `inside_grill` is inaccessible while `grill_lid` is CLOSED. Before any `place(object, inside_grill)`, the plan must include `open(grill_lid)` unless the current Lid State already says `grill_lid: OPEN`.\n\n### 3. OUTPUT FORMAT\nYou may include brief reasoning before the executable plan.\nAlways end your response with a final executable block headed exactly:\nFINAL ACTIONS:\n\nThe FINAL ACTIONS block must contain raw executable action lines only.\nDo NOT include prose, markdown, bullets, numbering, or comments after FINAL ACTIONS.\nThe executor will ignore text before FINAL ACTIONS and execute only that final block.\nIf the goal is already fully satisfied in the current state, the final block must contain exactly: NO_ACTIONS\nIf replanning after a failure, you will be provided with `COMPLETED_ACTIONS`. DO NOT repeat these actions. Assume they have already successfully executed and changed the physical state. Continue your plan from the exact next logical step.",
+          "user_prompt": "### Current State\n## Robot State:\n- gripper: empty\n\n## Valid Target Regions:\n- table: broad table surface; DO NOT place objects here (use table_target_area instead)\n- table_target_area: specific target area on the table for objects that should be moved onto the table\n- cupboard_shelf: shelf inside the cupboard for storing groceries\n- inside_box: interior storage area of the box for objects that should be put inside the box\n- pantry_area: source area on the table where groceries start\n- box_lid_top: support surface on top of the box lid for objects resting on the lid\n\n## Object States (Geometric):\n- mug2: region=box_lid_top, description=on top of the box lid, pose=(0.195, 0.257, 0.998, -0.0, -0.0, -0.707, 0.707)\n- mug3: region=cupboard_shelf, description=on lower cupboard shelf, pose=(0.542, 0.088, 1.247, -0.167, -0.687, 0.161, 0.688)\n- spam: region=pantry_area, description=in pantry area, pose=(0.267, -0.353, 0.79, -0.0, -0.0, -0.0, 1.0)\n\n## Lid State:\n- box_lid: CLOSED\n\n## Access Constraints:\n- inside_box is BLOCKED until open(box_lid) is completed\n- box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area\n(No symbolic state retrieved)\n\n### Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n### Output Contract\nChoose the action order needed to satisfy the goal from the current state.\nUse only object names and target regions listed above.\nRespect Access Constraints: do not place into a blocked container region until its lid has been opened.\nYou may include brief reasoning before the executable plan.\nEnd every response with a block headed exactly: FINAL ACTIONS:\nInside FINAL ACTIONS, return one raw action per line with no numbering, prose, markdown, or commentary.\nDo not include any text after the FINAL ACTIONS block.\nIf the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.\n\n### Actions\n- pick(object): grasp a visible movable object.\n- place(object, region): put the held object on or in a listed target region.\n- open(box_lid): open the box lid when access to the box is needed.",
+          "visible_objects": [
+            "mug2",
+            "mug3",
+            "spam",
+            "box_lid"
+          ],
+          "valid_regions": [
+            "table",
+            "table_target_area",
+            "cupboard_shelf",
+            "inside_box",
+            "pantry_area",
+            "box_lid_top"
+          ],
+          "icl_mode": "zero_shot",
+          "previous_actions": [],
+          "metadata": {
+            "held_object": null
+          }
+        }
+      }
+    ]
+  },
+  "output_json_path": "/home/boreddog/Documents/RRC/Long_Horizon/Ending_Pipeline/eval_results_10_trials/deepseek-r1-qwen-32b/K1/trial_001/record.json",
+  "failure_summary_path": "/home/boreddog/Documents/RRC/Long_Horizon/Ending_Pipeline/eval_results_10_trials/deepseek-r1-qwen-32b/K1/trial_001/failure_summary.txt"
+}

@@ -200,8 +200,11 @@ class GeometricContextBuilder(BaseContextBuilder):
         lines.append('Choose the action order needed to satisfy the goal from the current state.')
         lines.append('Use only object names and target regions listed above.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
-        lines.append('Return one action per line, with no numbering, prose, markdown, or commentary.')
-        lines.append('If the goal is already fully satisfied in the current state, return exactly: NO_ACTIONS')
+        lines.append('You may include brief reasoning before the executable plan.')
+        lines.append('End every response with a block headed exactly: FINAL ACTIONS:')
+        lines.append('Inside FINAL ACTIONS, return one raw action per line with no numbering, prose, markdown, or commentary.')
+        lines.append('Do not include any text after the FINAL ACTIONS block.')
+        lines.append('If the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.')
         lines.append('')
         lines.append('### Actions')
         for action_name in actions:

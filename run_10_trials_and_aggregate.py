@@ -15,6 +15,8 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List
 
+from llm_pipeline.metrics import validate_variant_success
+
 
 def _record_path(output_dir: Path, trial_index: int) -> Path:
     return output_dir / f"trial_{trial_index:03d}" / "record.json"
@@ -33,6 +35,10 @@ def _trial_command(args: argparse.Namespace, trial_index: int, trial_dir: Path) 
         args.icl_mode,
         "--max-replans",
         str(args.max_replans),
+        "--planner-max-new-tokens",
+        str(args.planner_max_new_tokens),
+        "--goal-check-max-new-tokens",
+        str(args.goal_check_max_new_tokens),
         "--trial-index",
         str(trial_index),
         "--output-dir",
@@ -42,6 +48,8 @@ def _trial_command(args: argparse.Namespace, trial_index: int, trial_dir: Path) 
         command.append("--vision")
     if args.model_type:
         command.extend(["--model-type", args.model_type])
+    if args.show_llm_output:
+        command.append("--show-llm-output")
 
     if args.remote:
         command.extend(["--remote", "--remote-url", args.remote_url])
@@ -87,11 +95,36 @@ def _aggregate_bucket_breakdown(records: Iterable[Dict[str, Any]]) -> Dict[str, 
     return {name: dict(counter) for name, counter in sorted(buckets.items())}
 
 
+def _object_region_success(record: Dict[str, Any]) -> bool:
+    validation = record.get("success_validation") or {}
+    if "success" in validation:
+        return bool(validation.get("success"))
+
+    variant_id = str(record.get("variant_id") or "")
+    if variant_id:
+        validation = validate_variant_success(
+            variant_id,
+            record.get("final_object_region_map") or {},
+            record.get("completed_actions") or [],
+        )
+        return bool(validation.get("success"))
+
+    return bool(record.get("episode_success", False))
+
+
+def _trial_failure_reason(record: Dict[str, Any]) -> str:
+    validation = record.get("success_validation") or {}
+    missing = validation.get("missing") or []
+    if missing:
+        return "object_region_goal_not_satisfied"
+    return str(record.get("failure_reason") or "no_failure_event")
+
+
 def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not records:
         return {}
 
-    success_count = sum(1 for record in records if bool(record.get("episode_success", False)))
+    success_count = sum(1 for record in records if _object_region_success(record))
     raw_success_count = sum(1 for record in records if bool(record.get("raw_episode_success", False)))
     coverage = [float(record.get("subtask_completion_rate") or 0.0) for record in records]
     times = [float(record.get("episode_time_s") or 0.0) for record in records]
@@ -100,20 +133,30 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     failure_ids = Counter()
     failure_layers = Counter()
     failure_sources = Counter()
+    failed_trial_reasons = Counter()
     for record in records:
         event = _latest_failure_event(record)
         if event:
             failure_ids[event.get("failure_id") or "unknown"] += 1
             failure_layers[event.get("failure_layer") or "unknown"] += 1
             failure_sources[event.get("source") or "unknown"] += 1
-        elif not record.get("episode_success", False):
+        elif not _object_region_success(record):
             reason = record.get("failure_reason") or "no_failure_event"
             failure_ids[str(reason)] += 1
+        if not _object_region_success(record):
+            failed_trial_reasons[_trial_failure_reason(record)] += 1
 
     return {
         "valid_trials": len(records),
         "episode_successes": success_count,
         "raw_episode_successes": raw_success_count,
+        "success_metric": "object_region_validation",
+        "display_metric_notes": {
+            "mean_task_success": "Object-region validation of final scene state.",
+            "mean_raw_task_success": "Pipeline raw execution/planning success before final object-region validation.",
+            "failure_ids": "Latest failure/replan event per trial; successful trials can still have replan events.",
+            "failed_trial_reasons": "Reasons for trials that failed the object-region success metric.",
+        },
         "mean_task_success": success_count / len(records),
         "mean_raw_task_success": raw_success_count / len(records),
         "mean_subtask_coverage": mean(coverage),
@@ -122,6 +165,7 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "failure_ids": dict(failure_ids),
         "failure_layers": dict(failure_layers),
         "failure_sources": dict(failure_sources),
+        "failed_trial_reasons": dict(failed_trial_reasons),
         "bucket_breakdown_totals": _aggregate_bucket_breakdown(records),
     }
 
@@ -135,15 +179,17 @@ def _print_summary(args: argparse.Namespace, summary: Dict[str, Any]) -> None:
     print("\n===========================================")
     print(f"RESULTS FOR {args.pipeline.upper()} {args.model} - {args.variant} ({valid} trials)")
     print("===========================================")
-    print(f"Mean Task Success:       {summary['mean_task_success'] * 100:.1f}% ({summary['episode_successes']}/{valid})")
-    print(f"Mean Raw Task Success:   {summary['mean_raw_task_success'] * 100:.1f}% ({summary['raw_episode_successes']}/{valid})")
-    print(f"Mean Subtask Coverage:   {summary['mean_subtask_coverage'] * 100:.1f}%")
-    print(f"Avg. Time (s):           {summary['avg_time_s']:.2f}")
-    print(f"Avg. Replans:            {summary['avg_replans']:.2f}")
-    print(f"Failure IDs:             {summary['failure_ids']}")
-    print(f"Failure Layers:          {summary['failure_layers']}")
-    print(f"Failure Sources:         {summary['failure_sources']}")
-    print(f"Bucket Totals:           {summary['bucket_breakdown_totals']}")
+    print(f"Object-Region Success:     {summary['mean_task_success'] * 100:.1f}% ({summary['episode_successes']}/{valid})")
+    print(f"Object-Region Metric:      {summary.get('success_metric', 'episode_success')}")
+    print(f"Raw Pipeline Success:      {summary['mean_raw_task_success'] * 100:.1f}% ({summary['raw_episode_successes']}/{valid})")
+    print(f"Subtask Coverage:          {summary['mean_subtask_coverage'] * 100:.1f}%")
+    print(f"Avg. Time (s):             {summary['avg_time_s']:.2f}")
+    print(f"Avg. Replans:              {summary['avg_replans']:.2f}")
+    print(f"Failed Trial Reasons:      {summary.get('failed_trial_reasons', {})}")
+    print(f"Latest Replan/Failure IDs: {summary['failure_ids']}")
+    print(f"Latest Event Layers:       {summary['failure_layers']}")
+    print(f"Latest Event Sources:      {summary['failure_sources']}")
+    print(f"Bucket Totals:             {summary['bucket_breakdown_totals']}")
     print("===========================================")
     print("\nLaTeX Table String:")
     print(
@@ -164,6 +210,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--icl-mode", choices=["zero_shot", "few_shot_shared_1"], default="zero_shot")
     parser.add_argument("--remote-url", default="http://127.0.0.1:8000")
     parser.add_argument("--max-replans", type=int, default=10)
+    parser.add_argument("--planner-max-new-tokens", type=int, default=4096)
+    parser.add_argument("--goal-check-max-new-tokens", type=int, default=128)
     parser.add_argument("--output-root", default="eval_results_10_trials")
     parser.add_argument("--local", dest="remote", action="store_false", help="Use local model loading instead of a remote server.")
     parser.add_argument("--remote", dest="remote", action="store_true", help="Use a remote planner server.")
@@ -172,6 +220,7 @@ def parse_args() -> argparse.Namespace:
     display.add_argument("--headless", action="store_true", default=True)
     display.add_argument("--gui", action="store_false", dest="headless")
     parser.add_argument("--aggregate-only", action="store_true", help="Skip running trials and aggregate existing records.")
+    parser.add_argument("--show-llm-output", action="store_true", help="Print raw LLM/VLM planner output for debugging")
     parser.add_argument("--no-goal-check", dest="goal_check", action="store_false", help="Disable LLM goal-completion verification.")
     parser.set_defaults(goal_check=False)
     return parser.parse_args()

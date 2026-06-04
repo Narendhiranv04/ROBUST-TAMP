@@ -497,6 +497,34 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert segmentation_adapter.live_updates >= 1
 
 
+def test_pipeline_can_print_raw_llm_output_for_debugging(capsys) -> None:
+    planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_target_area)'])
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-llm',
+            icl_mode='zero_shot',
+            max_replans=0,
+            show_llm_output=True,
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    pipeline.run('Move mug2 to table_target_area.')
+    output = capsys.readouterr().out
+
+    assert '[LLM] Raw output text:' in output
+    assert 'pick(mug2)' in output
+    assert 'place(mug2, table_target_area)' in output
+
+
 def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
     planner = GoalCheckingQueuePlanner(
         [
