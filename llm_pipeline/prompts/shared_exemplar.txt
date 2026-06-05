@@ -1,14 +1,245 @@
-CORRECT example of picking and placing one object:
-pick(object1)
-place(object1, region1)
+These examples show the expected planning style. They are illustrative only; for the real task, use the objects, regions, actions, and constraints in the current user prompt.
 
-WRONG example - picking one object but placing a different one:
-pick(object1)
-place(object2, region1)
-This is wrong because you must place the same object you picked. You cannot pick object1 and then place object2.
+EXAMPLE 1: correct visible-only kitchen planning
 
-CORRECT example of clearing an obstacle before opening:
-If an object1 is on top of object2, relocate object1 somewhere else first, then try opening object2.
-pick(object1)
-place(object1, region1)
-open(object2)
+INPUT:
+### Planning Checkpoint
+checkpoint_type: initial_planning
+visible_objects: mug1, box_lid
+newly_visible_objects: (none)
+
+### Goal
+Move all visible mugs into the box.
+
+### Visible-Object Relational State
+- mug1: region=table_target_area, description=on the table
+
+### Valid Target Regions
+- table_target_area: table area for temporary placement
+- inside_box: interior storage area of the box
+
+### Articulation State
+- box_lid: CLOSED
+
+### Access Constraints
+- inside_box is BLOCKED until open(box_lid) is completed
+
+### Completed Actions
+- (none)
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(box_lid)
+
+GOOD OUTPUT:
+The mug is visible and the box is closed, so the lid must be opened before placing the mug inside.
+FINAL ACTIONS:
+open(box_lid)
+pick(mug1)
+place(mug1, inside_box)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(hidden_mug)
+place(hidden_mug, inside_box)
+
+WHY BAD:
+hidden_mug is not listed as visible. Do not invent or use hidden objects.
+
+
+EXAMPLE 2: correct held-object consistency
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(mug1)
+place(mug2, inside_box)
+
+WHY BAD:
+The placed object must be the same object that was picked. After pick(mug1), the matching placement is place(mug1, region).
+
+GOOD OUTPUT:
+FINAL ACTIONS:
+pick(mug1)
+place(mug1, inside_box)
+
+
+EXAMPLE 3: correct clearing before opening an obstructed lid
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: initial_planning
+visible_objects: mug1, box_lid
+newly_visible_objects: (none)
+
+### Goal
+Open the box and put the mug inside the box.
+
+### Visible-Object Relational State
+- mug1: region=box_lid_top, description=on top of the box lid
+
+### Valid Target Regions
+- table_target_area: table area for temporary placement
+- inside_box: interior storage area of the box
+
+### Articulation State
+- box_lid: CLOSED
+
+### Access Constraints
+- inside_box is BLOCKED until open(box_lid) is completed
+- box_lid is OBSTRUCTED by mug1; before open(box_lid), move mug1 to table_target_area
+
+### Completed Actions
+- (none)
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(box_lid)
+
+GOOD OUTPUT:
+The mug is obstructing the lid, so clear it before opening the box.
+FINAL ACTIONS:
+pick(mug1)
+place(mug1, table_target_area)
+open(box_lid)
+pick(mug1)
+place(mug1, inside_box)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+open(box_lid)
+pick(mug1)
+place(mug1, inside_box)
+
+WHY BAD:
+The lid is obstructed by mug1, so opening the lid first violates the access constraint.
+
+
+EXAMPLE 4: correct replanning after discovery
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: replanning
+visible_objects: box_lid, mug1, mug2
+newly_visible_objects: mug2
+
+### Goal
+Move all visible mugs into the box.
+
+### Visible-Object Relational State
+- mug1: region=inside_box, description=inside the box
+- mug2: region=table_target_area, description=on the table
+
+### Valid Target Regions
+- table_target_area: table area for temporary placement
+- inside_box: interior storage area of the box
+
+### Articulation State
+- box_lid: OPEN
+
+### Access Constraints
+- (none)
+
+### Completed Actions
+- open(box_lid)
+- pick(mug1)
+- place(mug1, inside_box)
+
+### Replanning Event
+event_type: discovery
+event_id: new_object_discovered
+interrupted_after_successful_action: open(box_lid)
+event_message: Newly visible objects require replanning: mug2
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(box_lid)
+
+GOOD OUTPUT:
+mug1 is already inside the box. Continue from the updated state and move only the newly visible mug2.
+FINAL ACTIONS:
+pick(mug2)
+place(mug2, inside_box)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+open(box_lid)
+pick(mug1)
+place(mug1, inside_box)
+pick(mug2)
+place(mug2, inside_box)
+
+WHY BAD:
+Completed actions must not be repeated during replanning.
+
+
+EXAMPLE 5: correct implicit handling of a visible non-target object in the grill
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: replanning
+visible_objects: grill_lid, phone, chicken, plate
+newly_visible_objects: phone
+
+### Goal
+Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.
+
+### Visible-Object Relational State
+- phone: region=inside_grill, description=inside the grill cooking area
+- chicken: region=prep_area, description=raw meat in the preparation area
+- plate: region=serving_area, description=plate in the serving area
+
+### Valid Target Regions
+- table: table area for non-target objects
+- inside_grill: inside grill cooking area
+- plate_top: top surface of the plate
+- serving_area: serving area for the plate
+
+### Articulation State
+- grill_lid: OPEN
+
+### Access Constraints
+- (none)
+
+### Domain Semantic State
+- grill_lid_open
+- in_prep_area(chicken)
+- plate_at_boundary
+
+### Completed Actions
+- open(grill_lid)
+
+### Replanning Event
+event_type: discovery
+event_id: new_object_discovered
+interrupted_after_successful_action: open(grill_lid)
+event_message: Newly visible objects require replanning: phone
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(grill_lid)
+- close(grill_lid)
+
+GOOD OUTPUT:
+The goal is about cooking meat. The phone is visible inside the grill and is not meat, so move it to the table before using the grill for cooking.
+FINAL ACTIONS:
+pick(phone)
+place(phone, table)
+pick(chicken)
+place(chicken, inside_grill)
+close(grill_lid)
+open(grill_lid)
+pick(chicken)
+place(chicken, plate_top)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(chicken)
+place(chicken, inside_grill)
+close(grill_lid)
+
+WHY BAD:
+The phone is visible inside the grill and does not belong in the cooking area. It should be moved to the table before cooking proceeds.

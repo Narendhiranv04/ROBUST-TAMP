@@ -576,7 +576,7 @@ class LLMOnlyReplanningPipeline:
             icl_mode=self.config.icl_mode,
         )
         current_state_text = bundle.user_prompt
-        for marker in ('### Output Contract', 'OUTPUT CONTRACT:'):
+        for marker in ('### Executable Interface', '### Output Contract', 'OUTPUT CONTRACT:'):
             if marker in current_state_text:
                 current_state_text = current_state_text.split(marker, 1)[0].strip()
 

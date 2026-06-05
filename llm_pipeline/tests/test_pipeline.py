@@ -1,6 +1,9 @@
 import numpy as np
 
 from llm_pipeline.executor import PrimitiveExecutionOutcome
+from llm_pipeline.executable_symbols import RuntimeSymbolRegistry
+from llm_pipeline.geometric_builder import GeometricContextBuilder
+from llm_pipeline.grill_geometry import derive_grill_semantic_facts
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
 from llm_pipeline.planner import MockTextLLMPlanner, TextLLMPlanner
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
@@ -11,6 +14,7 @@ from llm_pipeline.pipeline_types import (
     DirectAction,
     GoalCheckResult,
     PlanResult,
+    SceneState,
     SegmentationObjectEvidence,
     SegmentationSnapshot,
 )
@@ -485,14 +489,23 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     ]
     assert summary['held_object'] is None
 
-    assert 'COMPLETED_ACTIONS: pick(mug2)' in planner.requests[1]['user_prompt']
+    assert 'checkpoint_type: initial_planning' in planner.requests[0]['user_prompt']
+    assert 'newly_visible_objects: (none)' in planner.requests[0]['user_prompt']
+    assert 'checkpoint_type: replanning' in planner.requests[1]['user_prompt']
+    assert '### Completed Actions' in planner.requests[1]['user_prompt']
+    assert '- pick(mug2)' in planner.requests[1]['user_prompt']
+    assert '### Replanning Event' in planner.requests[1]['user_prompt']
+    assert 'event_type: failure' in planner.requests[1]['user_prompt']
+    assert 'failed_action: place(mug2, table_target_area)' in planner.requests[1]['user_prompt']
     assert 'pick(mug2)' in planner.requests[1]['user_prompt']
     assert 'place failed after pick' in planner.requests[1]['user_prompt']
-    assert 'You are a Robotic Task Planner' in planner.requests[0]['system_prompt']
-    assert '## Object States (Geometric):' in planner.requests[0]['user_prompt']
+    assert 'You are a high-level robotic task planner' in planner.requests[0]['system_prompt']
+    assert 'Do not invent hidden objects' in planner.requests[0]['system_prompt']
+    assert '### Visible-Object Relational State' in planner.requests[0]['user_prompt']
     assert 'region=inside_box' in planner.requests[0]['user_prompt']
-    assert '### Output Contract' in planner.requests[0]['user_prompt']
-    assert 'Choose the action order needed to satisfy the goal from the current state.' in planner.requests[0]['user_prompt']
+    assert 'pose=' not in planner.requests[0]['user_prompt']
+    assert '### Executable Interface' in planner.requests[0]['user_prompt']
+    assert 'Choose the task-level action order needed to satisfy the goal from the current checkpoint.' in planner.requests[0]['user_prompt']
     assert 'Every pick, place, open, or close must be immediately preceded by a matching move(target).' not in planner.requests[0]['user_prompt']
     assert 'visible_objects=' not in planner.requests[0]['user_prompt']
     assert segmentation_adapter.refresh_calls[:2] == ['initial', 'initial']
@@ -754,11 +767,13 @@ def test_vlm_preflight_uses_state_text_plus_redacted_composite_image() -> None:
     bundle = planner.bundles[-1]
     assert bundle.images is not None
     assert bundle.images[0].shape == (8, 15, 3)
-    assert '## Valid Target Regions:' in bundle.user_prompt
-    assert '## Object States (Geometric):' in bundle.user_prompt
-    assert '## Lid State:' in bundle.user_prompt
-    assert '## Access Constraints:' in bundle.user_prompt
-    assert '### Output Contract' in bundle.user_prompt
+    assert 'checkpoint_type: initial_planning' in bundle.user_prompt
+    assert '### Valid Target Regions' in bundle.user_prompt
+    assert '### Visible-Object Relational State' in bundle.user_prompt
+    assert '### Articulation State' in bundle.user_prompt
+    assert '### Access Constraints' in bundle.user_prompt
+    assert '### Executable Interface' in bundle.user_prompt
+    assert 'pose=' not in bundle.user_prompt
 
     trace_bundle = preflight['prompt_trace']['bundle']
     assert 'images' not in trace_bundle
@@ -807,9 +822,84 @@ def test_vlm_replanning_sends_fresh_image_with_failure_context() -> None:
     replan_image = planner.bundles[1].images[0]
     assert first_image.shape == replan_image.shape == (8, 15, 3)
     assert not np.array_equal(first_image, replan_image)
-    assert '=== REPLANNING TRIGGERED ===' in planner.bundles[1].user_prompt
-    assert 'COMPLETED_ACTIONS: pick(mug2)' in planner.bundles[1].user_prompt
+    assert 'checkpoint_type: replanning' in planner.bundles[1].user_prompt
+    assert '### Replanning Event' in planner.bundles[1].user_prompt
+    assert 'event_type: failure' in planner.bundles[1].user_prompt
+    assert '### Completed Actions' in planner.bundles[1].user_prompt
+    assert '- pick(mug2)' in planner.bundles[1].user_prompt
     assert env.cams['left'].capture_calls >= 2
+
+
+def test_geometric_prompt_renders_grill_semantics_without_phone_meat_fact() -> None:
+    object_region_map = {
+        'phone': 'inside_grill',
+        'chicken': 'inside_grill',
+        'plate': 'serving_area',
+    }
+    builder = GeometricContextBuilder()
+    builder.set_symbol_registry(
+        RuntimeSymbolRegistry(
+            actions=('pick', 'place', 'open', 'close'),
+            objects=('grill_lid', 'phone', 'chicken', 'plate'),
+            regions=('table', 'inside_grill', 'plate_top', 'serving_area'),
+        )
+    )
+    state = SceneState(
+        frame_index=1,
+        visible_objects=['grill_lid', 'phone', 'chicken', 'plate'],
+        valid_regions=['inside_grill', 'table', 'plate_top', 'serving_area'],
+        pddl_state=derive_grill_semantic_facts(object_region_map, lid_open=False),
+        object_region_map=object_region_map,
+        object_region_descriptions={
+            'phone': 'inside the grill cooking area',
+            'chicken': 'inside the grill cooking area',
+            'plate': 'in the serving area',
+        },
+        lid_states={'grill_lid': False},
+        gripper_state={'status': 'empty', 'holding': None},
+    )
+
+    bundle = builder.build_bundle(
+        state=state,
+        goal_text='Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.',
+        icl_mode='zero_shot',
+    )
+
+    assert '### Domain Semantic State' in bundle.user_prompt
+    assert '- grill_lid_closed' in bundle.user_prompt
+    assert '- inside_grill(chicken)' in bundle.user_prompt
+    assert 'inside_grill(phone)' not in bundle.user_prompt
+    assert '- phone: region=inside_grill' in bundle.user_prompt
+    assert '- table: table surface for placing non-target objects that should be removed from the grill' in bundle.user_prompt
+    assert 'DO NOT place objects here' not in bundle.user_prompt
+    assert 'pose=' not in bundle.user_prompt
+
+
+def test_few_shot_system_prompt_includes_shared_behavior_examples() -> None:
+    builder = GeometricContextBuilder()
+    state = SceneState(
+        frame_index=1,
+        visible_objects=['box_lid', 'mug1'],
+        valid_regions=['table_target_area', 'inside_box'],
+        object_region_map={'mug1': 'box_lid_top'},
+        object_region_descriptions={'mug1': 'on top of the box lid'},
+        lid_states={'box_lid': False},
+        gripper_state={'status': 'empty', 'holding': None},
+    )
+
+    bundle = builder.build_bundle(
+        state=state,
+        goal_text='Open the box and put the mug inside.',
+        icl_mode='few_shot_shared_1',
+    )
+
+    assert 'SHARED FEW-SHOT EXEMPLAR' in bundle.system_prompt
+    assert 'EXAMPLE 1: correct visible-only kitchen planning' in bundle.system_prompt
+    assert 'Do not invent or use hidden objects.' in bundle.system_prompt
+    assert 'EXAMPLE 3: correct clearing before opening an obstructed lid' in bundle.system_prompt
+    assert 'EXAMPLE 4: correct replanning after discovery' in bundle.system_prompt
+    assert 'EXAMPLE 5: correct implicit handling of a visible non-target object in the grill' in bundle.system_prompt
+    assert 'pick(phone)' in bundle.system_prompt
 
 
 def test_pipeline_reports_validation_failure_before_execution() -> None:

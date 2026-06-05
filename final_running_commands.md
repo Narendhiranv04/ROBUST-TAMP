@@ -341,6 +341,22 @@ python3 run_10_trials_and_aggregate.py \
 
 Change `--pipeline`, `--model`, `--model-type`, `--variant`, `--icl-mode`, and `--output-root` to match the condition being recomputed.
 
+## Collect Final Tables
+
+After the relevant model/condition/variant runs are complete, collect the final paper-facing tables:
+
+```bash
+python3 collect_final_results.py \
+  --root "$OUT_ROOT" \
+  --output-dir "$OUT_ROOT/collected"
+```
+
+This writes:
+
+- `final_results_summary.csv` and `final_results_summary.md`
+- `layered_failure_summary.csv` and `layered_failure_summary.md`
+- `implicit_non_target_summary.csv` and `implicit_non_target_summary.md`
+
 ## Notes For Paper Reporting
 
 - Do not report no-replanning as an ablation. It is unfair because the planner is not given hidden objects before discovery.

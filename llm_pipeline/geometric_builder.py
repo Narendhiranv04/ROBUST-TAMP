@@ -77,14 +77,6 @@ class GeometricContextBuilder(BaseContextBuilder):
         previous_actions: List[str] = None,
         icl_mode: str = ICLMode.ZERO_SHOT.value
     ) -> PromptBundle:
-        
-        # 1. State to PDDL-style Text
-        obs_lines = []
-        obs_lines.append("## Robot State:")
-        obs_lines.append(f"- gripper: {state.gripper_state.get('status', 'empty')}")
-        if state.gripper_state.get('holding'):
-            obs_lines.append(f"- holding: {state.gripper_state['holding']}")
-        
         region_map = getattr(state, 'region_map', {}) # Fallback to state's pre-resolved map if available
         object_region_map = getattr(state, 'object_region_map', {}) or {}
         object_region_descriptions = getattr(state, 'object_region_descriptions', {}) or {}
@@ -92,68 +84,109 @@ class GeometricContextBuilder(BaseContextBuilder):
             region for region in state.valid_regions
             if normalize_region_name(region) not in set(PLANNER_HIDDEN_REGIONS)
         ]
-        if valid_regions:
-            obs_lines.append("\n## Valid Target Regions:")
-            for region in valid_regions:
-                meaning = region_semantics(region)
-                if meaning:
-                    obs_lines.append(f"- {region}: {meaning}")
-                else:
-                    obs_lines.append(f"- {region}")
-        
-        lid_objects = set(getattr(state, 'lid_states', {}).keys()) | {'box_lid', 'grill_lid', 'lid'}
 
-        obs_lines.append("\n## Object States (Geometric):")
-        for obj_name in state.visible_objects:
-            # Lid objects are rendered separately as state, not geometric region
-            if obj_name in lid_objects:
-                continue
+        snapshot = getattr(state, '_original_snapshot', None)
+        newly_visible = list(getattr(snapshot, 'newly_visible_objects', []) or []) if failure_event else []
+
+        checkpoint_lines = ['### Planning Checkpoint']
+        checkpoint_lines.append(f"checkpoint_type: {'replanning' if failure_event else 'initial_planning'}")
+        checkpoint_lines.append(f"frame_index: {state.frame_index}")
+        checkpoint_lines.append(f"gripper: {state.gripper_state.get('status', 'empty')}")
+        if state.gripper_state.get('holding'):
+            checkpoint_lines.append(f"holding: {state.gripper_state['holding']}")
+        checkpoint_lines.append(
+            'visible_objects: ' + (', '.join(state.visible_objects) if state.visible_objects else '(none)')
+        )
+        checkpoint_lines.append(
+            'newly_visible_objects: ' + (', '.join(newly_visible) if newly_visible else '(none)')
+        )
+
+        relational_lines = ['### Visible-Object Relational State']
+        lid_objects = set(getattr(state, 'lid_states', {}).keys()) | {'box_lid', 'grill_lid', 'lid'}
+        rendered_objects = [obj_name for obj_name in state.visible_objects if obj_name not in lid_objects]
+        if not rendered_objects:
+            relational_lines.append('- (none)')
+        for obj_name in rendered_objects:
             pos = state.pose_map.get(obj_name)
             r_id = object_region_map.get(obj_name)
             r_desc = object_region_descriptions.get(obj_name)
-            if pos:
-                if not r_id:
-                    r_id, r_desc = resolve_region(pos, region_map, state.valid_regions)
-                obs_lines.append(f"- {obj_name}: region={r_id}, description={r_desc}, pose={tuple(np.round(pos, 3))}")
-            elif r_id:
-                obs_lines.append(f"- {obj_name}: region={r_id}, description={r_desc or '(none)'}, pose=unresolved")
-            else:
-                obs_lines.append(f"- {obj_name}: visible but pose unresolved")
+            if pos and not r_id:
+                r_id, r_desc = resolve_region(pos, region_map, state.valid_regions)
+            r_id = r_id or 'unresolved'
+            r_desc = r_desc or '(none)'
+            relational_lines.append(f"- {obj_name}: region={r_id}, description={r_desc}")
+
+        region_lines = ['### Valid Target Regions']
+        if valid_regions:
+            for region in valid_regions:
+                meaning = self._region_meaning(region)
+                if meaning:
+                    region_lines.append(f"- {region}: {meaning}")
+                else:
+                    region_lines.append(f"- {region}")
+        else:
+            region_lines.append('- (none)')
 
         # Render lid states as OPEN/CLOSED instead of geometric regions
         lid_states = getattr(state, 'lid_states', {})
+        articulation_lines = ['### Articulation State']
+        access_lines = ['### Access Constraints']
         if lid_states:
-            obs_lines.append("\n## Lid State:")
             for lid_name, is_open in lid_states.items():
-                obs_lines.append(f"- {lid_name}: {'OPEN' if is_open else 'CLOSED'}")
-            blocked_regions = []
+                articulation_lines.append(f"- {lid_name}: {'OPEN' if is_open else 'CLOSED'}")
             box_lid_blockers = sorted(
                 obj_name
                 for obj_name, region_name in object_region_map.items()
                 if normalize_region_name(region_name) == 'box_lid_top'
             )
             if lid_states.get('box_lid') is False:
-                blocked_regions.append('inside_box is BLOCKED until open(box_lid) is completed')
+                access_lines.append('- inside_box is BLOCKED until open(box_lid) is completed')
                 if box_lid_blockers:
                     blockers = ', '.join(box_lid_blockers)
-                    blocked_regions.append(
-                        f'box_lid is OBSTRUCTED by {blockers}; before open(box_lid), move '
+                    access_lines.append(
+                        f'- box_lid is OBSTRUCTED by {blockers}; before open(box_lid), move '
                         f'{blockers} to table_target_area'
                     )
             if lid_states.get('grill_lid') is False:
-                blocked_regions.append('inside_grill is BLOCKED until open(grill_lid) is completed')
-            if blocked_regions:
-                obs_lines.append("\n## Access Constraints:")
-                for constraint in blocked_regions:
-                    obs_lines.append(f"- {constraint}")
-        
-        # Use the pre-computed pddl_state if available
-        if state.pddl_state:
-            obs_lines.extend(state.pddl_state)
+                access_lines.append('- inside_grill is BLOCKED until open(grill_lid) is completed')
         else:
-            obs_lines.append("(No symbolic state retrieved)")
+            articulation_lines.append('- (none)')
+        if len(access_lines) == 1:
+            access_lines.append('- (none)')
 
-        observation_text = "\n".join(obs_lines)
+        semantic_lines = ['### Domain Semantic State']
+        if state.pddl_state:
+            semantic_lines.extend(f"- {fact}" for fact in state.pddl_state)
+        else:
+            semantic_lines.append('- (none)')
+
+        completed_lines = ['### Completed Actions']
+        if previous_actions:
+            completed_lines.extend(f"- {action}" for action in previous_actions)
+        else:
+            completed_lines.append('- (none)')
+
+        replan_lines = []
+        if failure_event:
+            event_type = 'discovery' if failure_event.failure_id == 'new_object_discovered' else 'failure'
+            event_stage = getattr(failure_event.stage, 'value', failure_event.stage)
+            event_source = getattr(failure_event.source, 'value', failure_event.source)
+            event_layer = getattr(failure_event.failure_layer, 'value', failure_event.failure_layer)
+            replan_lines = [
+                '### Replanning Event',
+                f'event_type: {event_type}',
+                f'event_id: {failure_event.failure_id}',
+                f'event_stage: {event_stage}',
+                f'event_source: {event_source}',
+                f'event_layer: {event_layer}',
+            ]
+            if event_type == 'discovery':
+                replan_lines.append(
+                    f'interrupted_after_successful_action: {failure_event.action or "(none)"}'
+                )
+            else:
+                replan_lines.append(f'failed_action: {failure_event.action or "(none)"}')
+            replan_lines.append(f'event_message: {failure_event.message}')
 
         # 3. Assemble Prompts
         system_prompt = self.system_prompt_template
@@ -163,23 +196,21 @@ class GeometricContextBuilder(BaseContextBuilder):
         if icl_mode == ICLMode.FEW_SHOT_SHARED_1.value:
             example = (PROMPTS_DIR / 'shared_exemplar.txt').read_text(encoding='utf-8').strip()
             system_prompt = f"{system_prompt}\n\nSHARED FEW-SHOT EXEMPLAR:\n{example}\n"
-        
-        user_prompt = ""
-        if failure_event:
-            user_prompt += "=== REPLANNING TRIGGERED ===\n"
-            user_prompt += f"EVENT_ID: {failure_event.failure_id}\n"
-            user_prompt += f"STAGE: {failure_event.stage.value}\n"
-            if failure_event.failure_id == 'new_object_discovered':
-                user_prompt += f"INTERRUPTED_AFTER_SUCCESSFUL_ACTION: {failure_event.action or '(none)'}\n"
-            else:
-                user_prompt += f"ACTION_FAILED: {failure_event.action or '(none)'}\n"
-            user_prompt += f"ERROR/MESSAGE: {failure_event.message}\n"
-            if previous_actions:
-                user_prompt += f"COMPLETED_ACTIONS: {', '.join(previous_actions)}\n"
-            user_prompt += "================================\n\n"
-        
-        user_prompt += f"### Current State\n{observation_text}\n\n### Goal\n{goal_text}"
-        user_prompt += "\n\n" + "\n".join(self._build_action_contract_lines())
+
+        user_sections = [
+            checkpoint_lines,
+            ['### Goal', goal_text],
+            relational_lines,
+            region_lines,
+            articulation_lines,
+            access_lines,
+            semantic_lines,
+            completed_lines,
+        ]
+        if replan_lines:
+            user_sections.append(replan_lines)
+        user_sections.append(self._build_action_contract_lines())
+        user_prompt = '\n\n'.join('\n'.join(section) for section in user_sections)
 
         return PromptBundle(
             goal_text=goal_text,
@@ -196,9 +227,10 @@ class GeometricContextBuilder(BaseContextBuilder):
 
     def _build_action_contract_lines(self) -> List[str]:
         actions = tuple(getattr(self.symbol_registry, 'actions', ()) or ACTION_SYMBOLS)
-        lines = ['### Output Contract']
-        lines.append('Choose the action order needed to satisfy the goal from the current state.')
-        lines.append('Use only object names and target regions listed above.')
+        lines = ['### Executable Interface']
+        lines.append('Choose the task-level action order needed to satisfy the goal from the current checkpoint.')
+        lines.append('Use only visible object names and target-region names listed above.')
+        lines.append('Do not output move, grasp, trajectory, coordinate, PDDL, or implementation steps.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
         lines.append('You may include brief reasoning before the executable plan.')
         lines.append('End every response with a block headed exactly: FINAL ACTIONS:')
@@ -227,3 +259,12 @@ class GeometricContextBuilder(BaseContextBuilder):
                 return '- close(grill_lid): close the grill lid when the goal requires it.'
             return '- close(object): close a visible closeable object.'
         return f'- {action_name}(...): use this action only when it directly advances the goal.'
+
+    def _region_meaning(self, region: str) -> str:
+        if (
+            normalize_region_name(region) == 'table'
+            and self.symbol_registry is not None
+            and 'grill_lid' in getattr(self.symbol_registry, 'objects', ())
+        ):
+            return 'table surface for placing non-target objects that should be removed from the grill'
+        return region_semantics(region)

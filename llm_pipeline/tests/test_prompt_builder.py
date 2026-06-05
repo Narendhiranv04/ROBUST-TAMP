@@ -95,7 +95,8 @@ def test_prompt_bundle_stays_text_only() -> None:
     user_prompt = bundle.user_prompt
 
     assert 'SHARED FEW-SHOT EXEMPLAR' in system_prompt
-    assert 'pick(mug2)' not in system_prompt
+    assert 'Move mug2 to table_target_area.' not in system_prompt
+    assert 'failure_id=placement_failed' not in system_prompt
     assert 'CURRENT SEGMENTATION SNAPSHOT:' in user_prompt
     assert 'REGION MEANINGS:' in user_prompt
     assert 'table_target_area: specific target area on the table for objects that should be moved onto the table' in user_prompt
@@ -132,7 +133,9 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     assert 'SHARED FEW-SHOT EXEMPLAR' not in system_prompt
     assert 'Valid action lines:' not in system_prompt
     assert 'FINAL ACTIONS:' in system_prompt
-    assert 'The executor will ignore text before FINAL ACTIONS' in system_prompt
+    assert 'Plan only from the current scene evidence' in system_prompt
+    assert 'Do not invent hidden objects' in system_prompt
+    assert 'Do not output robot motions, grasp poses, trajectories, coordinates, PDDL predicates' in system_prompt
     assert 'EXECUTABLE ACTION SEQUENCE' not in system_prompt
     assert 'mug_box' not in system_prompt
 
