@@ -63,13 +63,19 @@ def test_aggregate_separates_object_region_success_from_raw_success() -> None:
             "subtask_completion_rate": 1.0,
             "episode_time_s": 10.0,
             "total_replans": 1,
-            "raw_summary": {
-                "last_failure_event": {
+            "discovery_triggered_replans": 1,
+            "failure_triggered_replans": 0,
+            "other_triggered_replans": 0,
+            "structured_events": [
+                {
+                    "event_type": "discovery",
+                    "is_failure": False,
+                    "is_replan_trigger": True,
                     "failure_id": "new_object_discovered",
                     "failure_layer": "layer_2",
                     "source": "segmentation",
                 }
-            },
+            ],
         },
         {
             "variant_id": "K1",
@@ -78,6 +84,9 @@ def test_aggregate_separates_object_region_success_from_raw_success() -> None:
             "subtask_completion_rate": 0.5,
             "episode_time_s": 20.0,
             "total_replans": 3,
+            "discovery_triggered_replans": 0,
+            "failure_triggered_replans": 1,
+            "other_triggered_replans": 2,
         },
     ]
 
@@ -88,7 +97,9 @@ def test_aggregate_separates_object_region_success_from_raw_success() -> None:
     assert summary["mean_task_success"] == 0.5
     assert summary["mean_raw_task_success"] == 1.0
     assert summary["failed_trial_reasons"] == {"object_region_goal_not_satisfied": 1}
-    assert summary["failure_ids"] == {"new_object_discovered": 1}
+    assert summary["discovery_triggered_replans"] == 1
+    assert summary["failure_triggered_replans"] == 1
+    assert summary["real_failure_counts"]["total_occurrences"] == {}
 
 
 def test_print_summary_uses_unambiguous_metric_labels(capsys) -> None:
@@ -103,7 +114,15 @@ def test_print_summary_uses_unambiguous_metric_labels(capsys) -> None:
         "mean_subtask_coverage": 1.0,
         "avg_time_s": 12.0,
         "avg_replans": 2.0,
+        "mean_planner_invocations": 2.0,
+        "mean_total_planner_time_s": 4.0,
+        "mean_planner_time_per_invocation_s": 2.0,
+        "discovery_triggered_replans": 1,
+        "failure_triggered_replans": 0,
+        "other_triggered_replans": 1,
+        "implicit_non_target_handling_rate": None,
         "failed_trial_reasons": {"object_region_goal_not_satisfied": 1},
+        "real_failure_counts": {"total_occurrences": {}},
         "failure_ids": {"new_object_discovered": 1},
         "failure_layers": {"layer_2": 1},
         "failure_sources": {"segmentation": 1},
@@ -115,5 +134,6 @@ def test_print_summary_uses_unambiguous_metric_labels(capsys) -> None:
 
     assert "Object-Region Success:" in output
     assert "Raw Pipeline Success:" in output
-    assert "Latest Replan/Failure IDs:" in output
+    assert "Real Failure Counts:" in output
+    assert "Latest Diagnostic IDs:" in output
     assert "Mean Task Success:" not in output

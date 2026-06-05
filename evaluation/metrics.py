@@ -257,8 +257,17 @@ def _aggregate_failure_counts(records: Sequence[Dict[str, Any]]) -> Dict[str, An
     total_occurrences: Counter = Counter()
     trials_affected: Counter = Counter()
     for record in records:
-        failure_info = record.get('failure_occurrences', {}) or {}
-        categories = [str(cat) for cat in failure_info.get('categories', [])]
+        structured_events = list(record.get('structured_events') or [])
+        if structured_events:
+            categories = [
+                str(event.get('event_type') or event.get('failure_id') or 'unknown')
+                for event in structured_events
+                if bool(event.get('is_failure'))
+            ]
+        else:
+            failure_info = record.get('failure_occurrences', {}) or {}
+            categories = [str(cat) for cat in failure_info.get('categories', [])]
+            categories = [cat for cat in categories if cat != 'new_object_introduced_in_scene']
         total_occurrences.update(categories)
         trials_affected.update(set(categories))
     categories = sorted(set(total_occurrences) | set(trials_affected))
@@ -267,6 +276,19 @@ def _aggregate_failure_counts(records: Sequence[Dict[str, Any]]) -> Dict[str, An
         'total_occurrences': {name: int(total_occurrences.get(name, 0)) for name in categories},
         'trials_affected': {name: int(trials_affected.get(name, 0)) for name in categories},
     }
+
+
+def _sum_record_field(records: Sequence[Dict[str, Any]], field_name: str) -> int:
+    return int(sum(int(record.get(field_name) or 0) for record in records))
+
+
+def _implicit_non_target_rate(records: Sequence[Dict[str, Any]]) -> Optional[float]:
+    values = [
+        1.0 if record.get('implicit_non_target_handling_success') else 0.0
+        for record in records
+        if record.get('implicit_non_target_handling_success') is not None
+    ]
+    return _safe_mean(values)
 
 
 def aggregate_gt_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -329,6 +351,9 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
     completion_values: List[float] = []
     partial_goal_values: List[float] = []
     replans_values: List[float] = []
+    planner_invocations: List[float] = []
+    planner_times: List[float] = []
+    mean_planner_times: List[float] = []
     episode_times: List[float] = []
 
     for variant_id in sorted(by_variant):
@@ -342,6 +367,17 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
             if row.get('partial_goal_completion') is not None
         ]
         replans = [float(row.get('total_replans', 0)) for row in rows]
+        invocations = [float(row.get('planner_invocations', 0)) for row in rows]
+        total_planner_times = [
+            float(row.get('total_planner_time_s', 0.0))
+            for row in rows
+            if row.get('total_planner_time_s') is not None
+        ]
+        per_invocation_times = [
+            float(row.get('mean_planner_time_per_invocation_s', 0.0))
+            for row in rows
+            if row.get('mean_planner_time_per_invocation_s') is not None
+        ]
         times = [float(row.get('episode_time_s', 0.0)) for row in rows if row.get('episode_time_s') is not None]
         variant_summaries[variant_id] = {
             'trials': len(rows),
@@ -349,10 +385,21 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
             'raw_execution_success_rate': _safe_mean(raw_success),
             'mean_subtask_completion_rate': _safe_mean(completion),
             'mean_partial_goal_completion': _safe_mean(partial_goal_completion),
+            'std_partial_goal_completion': _safe_std(partial_goal_completion),
             'mean_completed_gt_subtasks': _safe_mean([float(row.get('completed_gt_subtasks', 0)) for row in rows]),
             'mean_replans': _safe_mean(replans),
+            'discovery_triggered_replans': _sum_record_field(rows, 'discovery_triggered_replans'),
+            'failure_triggered_replans': _sum_record_field(rows, 'failure_triggered_replans'),
+            'other_triggered_replans': _sum_record_field(rows, 'other_triggered_replans'),
+            'mean_planner_invocations': _safe_mean(invocations),
+            'mean_total_planner_time_s': _safe_mean(total_planner_times),
+            'std_total_planner_time_s': _safe_std(total_planner_times),
+            'mean_planner_time_per_invocation_s': _safe_mean(per_invocation_times),
+            'std_planner_time_per_invocation_s': _safe_std(per_invocation_times),
             'mean_episode_time_s': _safe_mean(times),
             'std_episode_time_s': _safe_std(times),
+            'implicit_non_target_handling_rate': _implicit_non_target_rate(rows),
+            'failure_counts': _aggregate_failure_counts(rows),
             'gt_total_subtasks': rows[0].get('gt_total_subtasks'),
             'action_sequence_length': rows[0].get('action_sequence_length'),
             'model_alias': rows[0].get('model_alias'),
@@ -364,6 +411,9 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
         completion_values.extend(completion)
         partial_goal_values.extend(partial_goal_completion)
         replans_values.extend(replans)
+        planner_invocations.extend(invocations)
+        planner_times.extend(total_planner_times)
+        mean_planner_times.extend(per_invocation_times)
         episode_times.extend(times)
 
     return {
@@ -375,9 +425,19 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
             'raw_execution_success_rate': _safe_mean(raw_success_values),
             'mean_subtask_completion_rate': _safe_mean(completion_values),
             'mean_partial_goal_completion': _safe_mean(partial_goal_values),
+            'std_partial_goal_completion': _safe_std(partial_goal_values),
             'mean_replans': _safe_mean(replans_values),
+            'discovery_triggered_replans': _sum_record_field(records, 'discovery_triggered_replans'),
+            'failure_triggered_replans': _sum_record_field(records, 'failure_triggered_replans'),
+            'other_triggered_replans': _sum_record_field(records, 'other_triggered_replans'),
+            'mean_planner_invocations': _safe_mean(planner_invocations),
+            'mean_total_planner_time_s': _safe_mean(planner_times),
+            'std_total_planner_time_s': _safe_std(planner_times),
+            'mean_planner_time_per_invocation_s': _safe_mean(mean_planner_times),
+            'std_planner_time_per_invocation_s': _safe_std(mean_planner_times),
             'mean_episode_time_s': _safe_mean(episode_times),
             'std_episode_time_s': _safe_std(episode_times),
+            'implicit_non_target_handling_rate': _implicit_non_target_rate(records),
         },
         'failure_counts': _aggregate_failure_counts(records),
     }

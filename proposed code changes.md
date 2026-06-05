@@ -5,7 +5,7 @@
 - **Change 1: Deterministic benchmark success validators** -- implemented for primary task success. The trial runner now sets `episode_success` from deterministic variant validators.
 - **Change 2: VLM multimodal backend support** -- implemented at the pipeline/protocol level. Final VLM result aggregation and result claims still require completed experiments.
 - **Change 3: Grill objective and `phone` non-target object** -- implemented for the main benchmark path. G1, G2, and G3 now share the same grill goal, G1/G3 use `phone` as the hidden non-target object, and the three grill debug-execution scenes have been run successfully.
-- **Change 4: Evaluation protocol and metric aggregation fixes** -- partially implemented. `partial_goal_completion` is computed and aggregated; corrected timing, replanning-trigger categorization, all-event failure aggregation, and a separate implicit non-target handling metric remain open.
+- **Change 4: Evaluation protocol and metric aggregation fixes** -- implemented for the maintained code path. Measured trials no longer run preflight, validator relation/procedure counts are exposed, planner-call timing is recorded, structured events and replan trigger categories are aggregated, discovery is excluded from real-failure tables, and G1/G3 implicit phone handling is reported separately.
 
 ## 1. Replace Benchmark Success With Deterministic Domain Validators
 
@@ -172,22 +172,34 @@ This wording specifies the desired cooking outcome without naming the non-target
 
 ### Status
 
-Partially implemented.
+Implemented for the maintained benchmark code path.
 
-`partial_goal_completion` is now computed from deterministic validator conditions and included in aggregation. Remaining work for final experiments includes corrected timing, replanning-trigger categorization, all-event failure aggregation, and a separate implicit non-target handling metric.
+`partial_goal_completion` is computed from deterministic validator conditions and included in aggregation. Measured trials call `pipeline.run(...)` directly instead of first running preflight. Top-level trial records now include planner-call timing, relation/procedure condition counts, structured events, replanning trigger counts, real-failure summaries, and the G1/G3 implicit non-target handling metric.
 
 ### Current Code State
 
-The maintained trial runner records deterministic task success, canonical subtask-bucket coverage, planning cycles, replanning cycles, per-cycle inference time, episode time, and structured failure events. However, the current aggregation path is not yet sufficient for all claims planned in the paper:
+The maintained trial runner records deterministic task success, canonical subtask-bucket diagnostics, planning cycles, replanning cycles, planner-call time, episode time, and structured events.
 
-- The deterministic validators now expose a validator-aligned `partial_goal_completion` score for trials that satisfy only some required final relations or procedural predicates.
-- `episode_time_s` starts inside `pipeline.run()` after trial preflight. Because the initial plan generated during preflight may be reused during execution, the reported episode time can exclude the initial model query and preflight overhead.
-- Each planning cycle records `inference_time_s`, but the repeated-trial aggregator does not report cumulative inference time or mean inference time per planner invocation.
-- The repeated-trial aggregator counts only the latest structured failure event from each trial rather than every surfaced event.
-- `new_object_discovered` is represented using the structured event interface, but it is a successful discovery-triggered replanning event rather than an execution failure.
-- Executor-local fallbacks that recover successfully are generally not recorded as structured recovery events, so their frequency cannot currently be reported reliably.
-- Implicit handling of the newly revealed `phone` is included in final task validation but is not reported as a separate capability metric.
-- `raw_episode_success` indicates only that the final pipeline cycle ended without an unrecovered error; it does not establish deterministic task completion.
+- Deterministic validators expose `partial_goal_completion` and separate relation/procedure counts.
+- Normal measured trials do not call `pipeline.preflight(...)`; `--preflight-only` remains available for prompt/backend checks.
+- `episode_time_s` starts inside `pipeline.run()` before the first measured planner call.
+- Top-level records include `planner_invocations`, `total_planner_time_s`, and `mean_planner_time_per_invocation_s`.
+- `run_10_trials_and_aggregate.py`, `evaluation.metrics`, and `llm_pipeline/aggregate.py` now aggregate partial goal completion, planner timing, replanning trigger counts, implicit non-target handling, and real failure counts.
+- `new_object_discovered` is represented as a discovery-triggered replan event, not as an execution failure.
+- Executor-local fallbacks that recover successfully are still not recorded as quantitative failure/recovery events; reported failure distributions are limited to events surfaced to the shared monitoring and replanning layer.
+- `raw_episode_success` remains diagnostic and does not establish deterministic task completion.
+
+### Preflight Policy for Final Experiments
+
+Use preflight as a separate debug and prompt-contract check, not as part of measured benchmark trials.
+
+For final measured trials:
+
+- Do not call `pipeline.preflight(...)` before `pipeline.run(...)`.
+- Let the measured run build the initial scene state, prompt the model, parse the plan, execute, and replan from a single execution path.
+- Keep `--preflight-only` or an equivalent mode for inspecting prompt traces, VLM image presence, parser behavior, and remote model connectivity before running experiments.
+
+This avoids counting the first model invocation zero times or twice, and it prevents a cached preflight plan from being based on a scene state captured before the execution run resets and settles the simulator.
 
 ### Required Partial Goal Completion Metric
 
@@ -208,25 +220,36 @@ partial_goal_completion =
 
 The validators should expose the individual satisfied and missing conditions so the score remains auditable. This metric must permit alternative valid plans and must not depend on matching the canonical ground-truth action sequence or subtask buckets.
 
+The implementation also records the equivalent flat validator-condition counts:
+
+```text
+partial_goal_completion =
+    satisfied_condition_count / required_condition_count
+```
+
+For grill tasks, each required cooking sequence counts as one procedural condition per meat, not as multiple substeps. This prevents cooking-heavy variants from dominating the partial score while still checking the full ordered sequence internally.
+
 Aggregate the mean and standard deviation of `partial_goal_completion` for each model--variant condition. Keep canonical subtask-bucket coverage only as a diagnostic for inspecting execution traces.
 
 ### Required Timing Metrics
 
-Record and aggregate the following timing quantities for every trial:
+Record and aggregate the following timing quantities for every measured trial:
 
-- `total_inference_time_s`: the sum of `inference_time_s` across all initial-planning and replanning cycles.
-- `mean_inference_time_per_invocation_s`: `total_inference_time_s / total_cycles`.
-- `episode_time_s`: end-to-end wall-clock time beginning before initial planning or preflight and ending when the episode terminates.
+- `planner_invocations`: number of LLM/VLM planner calls made during the measured run. This equals `total_cycles` in the maintained pipeline because each cycle corresponds to one planner call.
+- `total_planner_time_s`: sum of planner-call latency across all initial-planning and replanning cycles.
+- `mean_planner_time_per_invocation_s`: `total_planner_time_s / planner_invocations`.
+- `episode_time_s`: end-to-end wall-clock time beginning immediately before the first measured planning call and ending after final execution and deterministic validation.
+For final experiments, do not reuse a cached preflight plan. The initial planning query should occur inside the measured run and contribute exactly once to both `planner_invocations` and `total_planner_time_s`.
 
-The initial planning query must be included exactly once in both cumulative inference time and end-to-end episode time, even when its result is generated during preflight and reused by `pipeline.run()`.
+Report planner time as planner-call latency under the current local/remote planner contract. Do not call it pure model inference time unless the measurement is changed to server-side generation only. A separate execution-only timer is not currently recorded; use `episode_time_s` together with planner timing for total measured runtime analysis.
 
-Document whether reported `inference_time_s` represents server-side model inference or client-observed request latency, and use the same definition for every model condition. Record the hardware, inference precision or quantization, generation limit, decoding temperature, and prompt condition used for the final benchmark.
+Record the hardware, inference precision or quantization, generation limit, decoding temperature, model server location, and prompt condition used for the final benchmark.
 
 ### Required Replanning Metrics
 
 Continue recording:
 
-- `total_cycles`, interpreted as the number of foundation-model planner invocations.
+- `total_cycles`, interpreted as the number of measured foundation-model planning cycles.
 - `total_replans`, interpreted as the number of planning cycles after the initial planning cycle.
 
 Additionally divide replanning events into:
@@ -237,18 +260,73 @@ Additionally divide replanning events into:
 
 These categories must be mutually exclusive and sum to `total_replans`. Object discovery must not be counted as an execution failure in reported failure distributions.
 
-### Required Failure Aggregation
+### Required Structured Event Recording
 
-Aggregate every structured event surfaced in every planning or execution cycle, rather than only the latest event from each trial. For each event, preserve and aggregate:
+For each trial, record every surfaced structured event from every planning and execution cycle in a top-level list:
 
+```text
+structured_events: [...]
+```
+
+Each event should preserve:
+
+- `event_id`
+- `event_type`
+- `cycle_number`
+- `is_failure`
+- `is_replan_trigger`
 - `failure_id`
 - `failure_layer`
 - `stage`
 - `source`
 - `should_replan`
 - associated action, when available
+- `message`
+- auditable evidence
 
-Report both the total number of occurrences and the number of trials affected for each category. Structural parser rejections should be reported separately from scene-dependent pre-execution failures, runtime failures, and post-execution validation failures.
+Use the following event-type definitions:
+
+- `discovery`: a previously hidden task object becomes visible and triggers checkpoint replanning. This is not a failure.
+- `structural_failure`: parser or strict-interface rejection before execution.
+- `pre_execution_failure`: scene-dependent applicability failure before physical execution.
+- `runtime_failure`: unrecovered executor, geometry, PDDL, or motion failure during physical execution.
+- `post_execution_failure`: monitoring or validation failure after physical execution.
+- `goal_validation_failure`: deterministic final task validator fails after execution terminates.
+
+For `new_object_discovered`, record:
+
+```text
+event_type = discovery
+is_failure = false
+is_replan_trigger = true
+```
+
+For parser, executor, geometry, and postcheck failures, record:
+
+```text
+is_failure = true
+is_replan_trigger = should_replan
+```
+
+### Required Failure Aggregation
+
+Aggregate every real failure event surfaced in every planning or execution cycle, rather than only the latest event from each trial. Exclude `event_type = discovery` from failure tables.
+
+Report both:
+
+- total occurrences for each category;
+- number of trials affected for each category.
+
+Group failure summaries by:
+
+- `event_type`
+- `failure_id`
+- `failure_layer`
+- `stage`
+- `source`
+- `should_replan`
+
+Structural parser rejections should be reported separately from scene-dependent pre-execution failures, runtime failures, post-execution validation failures, and final deterministic goal-validation failures.
 
 If executor-local fallbacks are to be included in the quantitative failure analysis, add explicit structured records for each fallback attempt and whether it recovered the action. Otherwise, limit the reported failure distribution to failures surfaced to the shared monitoring and replanning layer, and state this scope in the paper.
 
@@ -268,28 +346,33 @@ Report the implicit non-target handling rate as the proportion of valid G1 and G
 Use the following hierarchy in benchmark tables and analysis:
 
 - **Primary metric:** deterministic `episode_success`.
-- **Secondary metrics:** partial goal completion, planner invocations, replanning counts, cumulative inference time, mean inference time per invocation, and end-to-end episode time.
+- **Secondary metrics:** partial goal completion, planner invocations, replanning counts, total planner time, mean planner time per invocation, and end-to-end episode time.
 - **Capability metric:** implicit non-target handling rate for G1 and G3.
-- **Failure-analysis metrics:** surfaced structured events grouped by identifier, layer, stage, source, and replanning requirement.
+- **Replanning-analysis metrics:** discovery-triggered, failure-triggered, and other-triggered replans.
+- **Failure-analysis metrics:** real failure events grouped by event type, identifier, layer, stage, source, and replanning requirement.
 - **Diagnostics only:** `raw_episode_success`, `completed_gt_subtasks`, `subtask_completion_rate`, raw failure messages, detailed bucket breakdowns, observed subtasks, and extra observed subtasks.
 
 Do not label `raw_episode_success` as task success or foreground it in the main result tables.
 
-### Suggested Implementation Locations
+### Implementation Locations
 
-- Deterministic validators in `llm_pipeline/metrics.py` already expose required and satisfied validator-condition counts and compute `partial_goal_completion`.
-- Update `llm_pipeline/pipeline.py` and `llm_pipeline/trial_runner.py` to record partial goal completion, corrected timing totals, and replanning-event categories.
-- Update `run_10_trials_and_aggregate.py` and `evaluation/metrics.py` to aggregate partial goal completion, cumulative inference time, all structured events, discovery-triggered replans, failure-triggered replans, and implicit non-target handling.
-- Update `metric_information.md` to document the finalized definitions and distinguish primary metrics from diagnostics.
-- Add focused tests for partial goal completion, timing aggregation, event counting across multiple cycles, discovery-versus-failure classification, and implicit non-target handling.
+- `llm_pipeline/metrics.py` exposes required and satisfied relation/procedure counts, computes `partial_goal_completion`, builds structured events, summarizes real failures, and computes G1/G3 implicit non-target handling.
+- `llm_pipeline/trial_runner.py` keeps preflight as a separate `--preflight-only` path and records structured metric fields for measured runs.
+- `llm_pipeline/pipeline.py` records top-level planner timing totals from cycle planner latencies.
+- `run_10_trials_and_aggregate.py`, `llm_pipeline/aggregate.py`, and `evaluation/metrics.py` aggregate partial goal completion, planner timing, structured events, discovery-triggered replans, failure-triggered replans, and implicit non-target handling.
+- `metric_information.md` documents the finalized definitions and distinguishes primary metrics from diagnostics.
+- Focused tests cover no-preflight measured runs, partial goal completion relation/procedure counts, planner timing aggregation, event counting across multiple cycles, discovery-versus-failure classification, aggregation, and implicit non-target handling.
 
 ### Acceptance Criteria
 
+- Measured benchmark trials do not call preflight before execution; preflight remains available only for prompt/backend debugging and `--preflight-only` inspection.
 - `partial_goal_completion` is computed from validator conditions and included in aggregation.
-- The initial model query contributes exactly once to cumulative inference time and end-to-end episode time.
+- Relation and procedure condition counts are exposed separately while preserving the validator-aligned partial completion ratio.
+- The initial model query contributes exactly once to `planner_invocations`, `total_planner_time_s`, and end-to-end `episode_time_s`.
 - Aggregated planner invocations equal `total_cycles`, and replanning-category counts sum to `total_replans`.
 - Discovery-triggered replans are not counted as execution failures.
-- Every surfaced structured event from every cycle contributes to the failure aggregates.
+- Every surfaced structured event from every cycle is recorded in trial records.
+- Every real failure event contributes to failure aggregates; discovery events contribute only to replanning aggregates.
 - Failure summaries report both total occurrences and trials affected.
 - G1 and G3 records contain a reproducible implicit non-target handling result.
 - Main benchmark success is determined only by the deterministic variant validator.

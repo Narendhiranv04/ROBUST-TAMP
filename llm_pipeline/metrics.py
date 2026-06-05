@@ -221,19 +221,54 @@ def _normalized_object_region_map(object_region_map: Optional[Dict[str, Any]]) -
 def _validator_result(
     variant_id: str,
     validator: str,
-    missing: List[str],
-    satisfied: List[str],
-    details: Dict[str, Any],
+    details: Optional[Dict[str, Any]] = None,
+    missing: Optional[List[str]] = None,
+    satisfied: Optional[List[str]] = None,
+    missing_relations: Optional[List[str]] = None,
+    satisfied_relations: Optional[List[str]] = None,
+    missing_procedures: Optional[List[str]] = None,
+    satisfied_procedures: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    details = dict(details or {})
+    if missing_relations is None and missing_procedures is None:
+        missing_relations = list(missing or [])
+        missing_procedures = []
+    if satisfied_relations is None and satisfied_procedures is None:
+        satisfied_relations = list(satisfied or [])
+        satisfied_procedures = []
+
+    missing_relations = list(missing_relations or [])
+    satisfied_relations = list(satisfied_relations or [])
+    missing_procedures = list(missing_procedures or [])
+    satisfied_procedures = list(satisfied_procedures or [])
+    missing = missing_relations + missing_procedures
+    satisfied = satisfied_relations + satisfied_procedures
+
     satisfied_count = len(satisfied)
     missing_count = len(missing)
     required_count = satisfied_count + missing_count
+    satisfied_relation_count = len(satisfied_relations)
+    missing_relation_count = len(missing_relations)
+    required_relation_count = satisfied_relation_count + missing_relation_count
+    satisfied_procedure_count = len(satisfied_procedures)
+    missing_procedure_count = len(missing_procedures)
+    required_procedure_count = satisfied_procedure_count + missing_procedure_count
     return {
         'success': not missing,
         'variant_id': variant_id,
         'validator': validator,
         'missing': missing,
         'satisfied': satisfied,
+        'missing_relations': missing_relations,
+        'satisfied_relations': satisfied_relations,
+        'missing_procedures': missing_procedures,
+        'satisfied_procedures': satisfied_procedures,
+        'required_relation_count': required_relation_count,
+        'satisfied_relation_count': satisfied_relation_count,
+        'missing_relation_count': missing_relation_count,
+        'required_procedure_count': required_procedure_count,
+        'satisfied_procedure_count': satisfied_procedure_count,
+        'missing_procedure_count': missing_procedure_count,
         'required_condition_count': required_count,
         'satisfied_condition_count': satisfied_count,
         'missing_condition_count': missing_count,
@@ -252,14 +287,14 @@ def validate_kitchen_goal_from_scene(
         return _validator_result(
             variant,
             'kitchen_scene_state',
-            [f'No kitchen validator configured for variant {variant or "(none)"}'],
-            [],
             {'object_region_map': dict(object_region_map or {})},
+            missing=[f'No kitchen validator configured for variant {variant or "(none)"}'],
+            satisfied=[],
         )
 
     normalized = _normalized_object_region_map(object_region_map)
-    missing: List[str] = []
-    satisfied: List[str] = []
+    missing_relations: List[str] = []
+    satisfied_relations: List[str] = []
     for expected_region, objects in goals.items():
         target_region = _normalize_region(expected_region)
         for obj_name in objects:
@@ -267,19 +302,19 @@ def validate_kitchen_goal_from_scene(
             observed_region = normalized.get(obj)
             check = f'{obj} in {target_region}'
             if observed_region == target_region:
-                satisfied.append(check)
+                satisfied_relations.append(check)
             else:
-                missing.append(f'{obj} is in {observed_region or "unknown"}, expected {target_region}')
+                missing_relations.append(f'{obj} is in {observed_region or "unknown"}, expected {target_region}')
 
     return _validator_result(
         variant,
         'kitchen_scene_state',
-        missing,
-        satisfied,
         {
             'object_region_map': normalized,
             'expected_regions': goals,
         },
+        missing_relations=missing_relations,
+        satisfied_relations=satisfied_relations,
     )
 
 
@@ -341,20 +376,20 @@ def validate_grill_goal_from_scene_and_history(
         return _validator_result(
             variant,
             'grill_scene_state_temporal',
-            [f'No grill validator configured for variant {variant or "(none)"}'],
-            [],
             {
                 'object_region_map': dict(object_region_map or {}),
                 'completed_actions': [str(action) for action in completed_actions],
             },
+            missing=[f'No grill validator configured for variant {variant or "(none)"}'],
+            satisfied=[],
         )
 
     normalized = _normalized_object_region_map(object_region_map)
     parsed_actions = [parse_action_string(action) for action in completed_actions]
     parsed_actions = [action for action in parsed_actions if action is not None]
 
-    missing: List[str] = []
-    satisfied: List[str] = []
+    missing_relations: List[str] = []
+    satisfied_relations: List[str] = []
     for expected_region, objects in final_goals.items():
         target_region = _normalize_region(expected_region)
         for obj_name in objects:
@@ -362,20 +397,22 @@ def validate_grill_goal_from_scene_and_history(
             observed_region = normalized.get(obj)
             check = f'{obj} in {target_region}'
             if observed_region == target_region:
-                satisfied.append(check)
+                satisfied_relations.append(check)
             else:
-                missing.append(f'{obj} is in {observed_region or "unknown"}, expected {target_region}')
+                missing_relations.append(f'{obj} is in {observed_region or "unknown"}, expected {target_region}')
 
     cooking_details: Dict[str, bool] = {}
+    missing_procedures: List[str] = []
+    satisfied_procedures: List[str] = []
     for meat_name in cooked_meats:
         meat = _normalize_token(meat_name)
         cooked = _has_cooking_sequence(parsed_actions, meat)
         cooking_details[meat] = cooked
         check = f'{meat} cooked before plating'
         if cooked:
-            satisfied.append(check)
+            satisfied_procedures.append(check)
         else:
-            missing.append(
+            missing_procedures.append(
                 f'{meat} missing ordered cooking sequence: '
                 'place inside_grill -> close grill_lid -> open grill_lid -> place plate_top'
             )
@@ -383,8 +420,6 @@ def validate_grill_goal_from_scene_and_history(
     return _validator_result(
         variant,
         'grill_scene_state_temporal',
-        missing,
-        satisfied,
         {
             'object_region_map': normalized,
             'expected_regions': final_goals,
@@ -392,7 +427,202 @@ def validate_grill_goal_from_scene_and_history(
             'cooking_sequences': cooking_details,
             'parsed_actions': parsed_actions,
         },
+        missing_relations=missing_relations,
+        satisfied_relations=satisfied_relations,
+        missing_procedures=missing_procedures,
+        satisfied_procedures=satisfied_procedures,
     )
+
+
+def _event_type_for_failure_event(event: Dict[str, Any]) -> str:
+    failure_id = str(event.get('failure_id') or '')
+    stage = str(event.get('stage') or '')
+    source = str(event.get('source') or '')
+    if failure_id == 'new_object_discovered':
+        return 'discovery'
+    if source == 'goal_check' or failure_id == 'goal_not_satisfied':
+        return 'goal_validation_failure'
+    if stage == 'before_execution' and source in {'validation', 'parser'}:
+        return 'structural_failure'
+    if stage == 'before_execution':
+        return 'pre_execution_failure'
+    if stage == 'after_execution' and source in {'executor', 'geometry', 'pddl'}:
+        return 'runtime_failure'
+    if stage == 'after_execution':
+        return 'post_execution_failure'
+    return 'runtime_failure'
+
+
+def _structured_event_from_failure_event(event: Dict[str, Any], cycle_number: int) -> Dict[str, Any]:
+    event_type = _event_type_for_failure_event(event)
+    is_discovery = event_type == 'discovery'
+    should_replan = bool(event.get('should_replan', False))
+    failure_id = str(event.get('failure_id') or '')
+    return {
+        'event_id': f'cycle_{int(cycle_number)}:{failure_id or event_type}',
+        'event_type': event_type,
+        'cycle_number': int(cycle_number),
+        'is_failure': not is_discovery,
+        'is_replan_trigger': bool(should_replan),
+        'failure_id': failure_id,
+        'failure_layer': event.get('failure_layer'),
+        'stage': event.get('stage'),
+        'source': event.get('source'),
+        'action': event.get('action'),
+        'should_replan': should_replan,
+        'message': event.get('message'),
+        'evidence': dict(event.get('evidence') or {}),
+    }
+
+
+def extract_structured_events(
+    cycles: Sequence[Dict[str, Any]],
+    success_validation: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    for index, cycle in enumerate(cycles or [], start=1):
+        event = (cycle or {}).get('failure_event') or {}
+        if event:
+            cycle_number = int((cycle or {}).get('cycle_number') or index)
+            events.append(_structured_event_from_failure_event(dict(event), cycle_number))
+
+    validation = success_validation or {}
+    if validation and not bool(validation.get('success', False)):
+        missing = list(validation.get('missing') or [])
+        events.append({
+            'event_id': 'final:goal_validation_failure',
+            'event_type': 'goal_validation_failure',
+            'cycle_number': int(len(cycles or [])),
+            'is_failure': True,
+            'is_replan_trigger': False,
+            'failure_id': 'goal_validation_failed',
+            'failure_layer': 'layer_2',
+            'stage': 'after_execution',
+            'source': 'validation',
+            'action': None,
+            'should_replan': False,
+            'message': '; '.join(str(item) for item in missing) or 'deterministic goal validation failed',
+            'evidence': {
+                'missing': missing,
+                'satisfied': list(validation.get('satisfied') or []),
+                'validator': validation.get('validator'),
+            },
+        })
+    return events
+
+
+def summarize_replanning_events(structured_events: Sequence[Dict[str, Any]], total_replans: int) -> Dict[str, int]:
+    discovery = 0
+    failure = 0
+    for event in structured_events or []:
+        if not event.get('is_replan_trigger'):
+            continue
+        if event.get('event_type') == 'discovery':
+            discovery += 1
+        elif event.get('is_failure'):
+            failure += 1
+    other = max(0, int(total_replans or 0) - discovery - failure)
+    return {
+        'discovery_triggered_replans': int(discovery),
+        'failure_triggered_replans': int(failure),
+        'other_triggered_replans': int(other),
+    }
+
+
+def summarize_failure_events(structured_events: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    total_occurrences: Counter = Counter()
+    by_type: Counter = Counter()
+    by_id: Counter = Counter()
+    by_layer: Counter = Counter()
+    by_stage: Counter = Counter()
+    by_source: Counter = Counter()
+    by_should_replan: Counter = Counter()
+    for event in structured_events or []:
+        if not event.get('is_failure'):
+            continue
+        total_occurrences['all'] += 1
+        by_type[str(event.get('event_type') or 'unknown')] += 1
+        by_id[str(event.get('failure_id') or 'unknown')] += 1
+        by_layer[str(event.get('failure_layer') or 'unknown')] += 1
+        by_stage[str(event.get('stage') or 'unknown')] += 1
+        by_source[str(event.get('source') or 'unknown')] += 1
+        by_should_replan[str(bool(event.get('should_replan', False)))] += 1
+    return {
+        'total_real_failures': int(total_occurrences.get('all', 0)),
+        'by_event_type': dict(by_type),
+        'by_failure_id': dict(by_id),
+        'by_failure_layer': dict(by_layer),
+        'by_stage': dict(by_stage),
+        'by_source': dict(by_source),
+        'by_should_replan': dict(by_should_replan),
+    }
+
+
+def implicit_non_target_handling_success(
+    variant_id: str,
+    structured_events: Sequence[Dict[str, Any]],
+    completed_actions: Sequence[Any],
+    final_object_region_map: Optional[Dict[str, Any]],
+    goal_text: str,
+) -> Optional[bool]:
+    variant = str(variant_id or '').strip().upper()
+    if variant not in {'G1', 'G3'}:
+        return None
+    if 'phone' in (goal_text or '').lower():
+        return False
+    discovered_phone = any(
+        event.get('event_type') == 'discovery'
+        and 'phone' in {
+            _normalize_token(item)
+            for value in (event.get('evidence') or {}).values()
+            for item in (value if isinstance(value, list) else [value])
+        }
+        for event in structured_events or []
+    )
+    normalized_map = _normalized_object_region_map(final_object_region_map)
+    phone_on_table = normalized_map.get('phone') == 'table'
+
+    parsed = [parse_action_string(action) for action in completed_actions]
+    parsed = [action for action in parsed if action is not None]
+    phone_to_table = False
+    for index, action in enumerate(parsed):
+        if action.get('action') != 'pick' or action.get('args') != ['phone']:
+            continue
+        place_index = _place_to_region_after(parsed, index + 1, 'phone', 'table')
+        if place_index is not None:
+            phone_to_table = True
+            break
+    return bool(discovered_phone and phone_to_table and phone_on_table)
+
+
+def build_trial_metric_events(
+    cycles: Sequence[Dict[str, Any]],
+    success_validation: Optional[Dict[str, Any]],
+    total_replans: int,
+) -> Dict[str, Any]:
+    """Return structured event and replan/failure summaries for one trial."""
+    structured_events = extract_structured_events(cycles, success_validation=success_validation)
+    cycle_count = len(cycles or [])
+    for event in structured_events:
+        if event.get('is_replan_trigger') and int(event.get('cycle_number') or 0) >= cycle_count:
+            event['is_replan_trigger'] = False
+    replan_counts = summarize_replanning_events(structured_events, total_replans=total_replans)
+    failure_event_counts = summarize_failure_events(structured_events)
+    summed_replans = (
+        replan_counts['discovery_triggered_replans']
+        + replan_counts['failure_triggered_replans']
+        + replan_counts['other_triggered_replans']
+    )
+    if summed_replans != int(total_replans or 0):
+        raise ValueError(
+            'structured replan counts do not sum to total_replans: '
+            f'{summed_replans} != {int(total_replans or 0)}'
+        )
+    return {
+        'structured_events': structured_events,
+        'failure_event_counts': failure_event_counts,
+        **replan_counts,
+    }
 
 
 def validate_variant_success(
@@ -408,12 +638,12 @@ def validate_variant_success(
     return _validator_result(
         variant,
         'unknown_variant',
-        [f'No validator configured for variant {variant or "(none)"}'],
-        [],
         {
             'object_region_map': dict(object_region_map or {}),
             'completed_actions': [str(action) for action in completed_actions],
         },
+        missing=[f'No validator configured for variant {variant or "(none)"}'],
+        satisfied=[],
     )
 
 
@@ -423,6 +653,11 @@ __all__ = [
     'collapse_actions_to_subtasks',
     'parse_action_string',
     'score_variant_completion',
+    'build_trial_metric_events',
+    'extract_structured_events',
+    'implicit_non_target_handling_success',
+    'summarize_failure_events',
+    'summarize_replanning_events',
     'validate_grill_goal_from_scene_and_history',
     'validate_kitchen_goal_from_scene',
     'validate_variant_success',

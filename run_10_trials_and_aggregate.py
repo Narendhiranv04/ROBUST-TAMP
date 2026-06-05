@@ -15,6 +15,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List
 
+from evaluation.metrics import aggregate_model_records
 from llm_pipeline.metrics import validate_variant_success
 
 
@@ -124,9 +125,16 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not records:
         return {}
 
+    canonical = aggregate_model_records(records)
+    overall = canonical.get("overall", {}) or {}
     success_count = sum(1 for record in records if _object_region_success(record))
     raw_success_count = sum(1 for record in records if bool(record.get("raw_episode_success", False)))
     coverage = [float(record.get("subtask_completion_rate") or 0.0) for record in records]
+    partial_goal_completion = [
+        float(record.get("partial_goal_completion") or 0.0)
+        for record in records
+        if record.get("partial_goal_completion") is not None
+    ]
     times = [float(record.get("episode_time_s") or 0.0) for record in records]
     replans = [int(record.get("total_replans") or 0) for record in records]
 
@@ -146,6 +154,7 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not _object_region_success(record):
             failed_trial_reasons[_trial_failure_reason(record)] += 1
 
+    real_failure_counts = canonical.get("failure_counts", {}) or {}
     return {
         "valid_trials": len(records),
         "episode_successes": success_count,
@@ -154,14 +163,24 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "display_metric_notes": {
             "mean_task_success": "Object-region validation of final scene state.",
             "mean_raw_task_success": "Pipeline raw execution/planning success before final object-region validation.",
-            "failure_ids": "Latest failure/replan event per trial; successful trials can still have replan events.",
+            "real_failure_counts": "Structured failure events only; discovery-triggered replans are excluded.",
             "failed_trial_reasons": "Reasons for trials that failed the object-region success metric.",
         },
         "mean_task_success": success_count / len(records),
         "mean_raw_task_success": raw_success_count / len(records),
         "mean_subtask_coverage": mean(coverage),
+        "mean_partial_goal_completion": mean(partial_goal_completion) if partial_goal_completion else None,
+        "std_partial_goal_completion": overall.get("std_partial_goal_completion"),
         "avg_time_s": mean(times),
         "avg_replans": mean(replans),
+        "mean_planner_invocations": overall.get("mean_planner_invocations"),
+        "mean_total_planner_time_s": overall.get("mean_total_planner_time_s"),
+        "mean_planner_time_per_invocation_s": overall.get("mean_planner_time_per_invocation_s"),
+        "discovery_triggered_replans": overall.get("discovery_triggered_replans"),
+        "failure_triggered_replans": overall.get("failure_triggered_replans"),
+        "other_triggered_replans": overall.get("other_triggered_replans"),
+        "implicit_non_target_handling_rate": overall.get("implicit_non_target_handling_rate"),
+        "real_failure_counts": real_failure_counts,
         "failure_ids": dict(failure_ids),
         "failure_layers": dict(failure_layers),
         "failure_sources": dict(failure_sources),
@@ -183,10 +202,23 @@ def _print_summary(args: argparse.Namespace, summary: Dict[str, Any]) -> None:
     print(f"Object-Region Metric:      {summary.get('success_metric', 'episode_success')}")
     print(f"Raw Pipeline Success:      {summary['mean_raw_task_success'] * 100:.1f}% ({summary['raw_episode_successes']}/{valid})")
     print(f"Subtask Coverage:          {summary['mean_subtask_coverage'] * 100:.1f}%")
+    if summary.get("mean_partial_goal_completion") is not None:
+        print(f"Partial Goal Completion:   {summary['mean_partial_goal_completion'] * 100:.1f}%")
     print(f"Avg. Time (s):             {summary['avg_time_s']:.2f}")
+    print(f"Avg. Planner Calls:        {summary.get('mean_planner_invocations')}")
+    print(f"Avg. Planner Time (s):     {summary.get('mean_total_planner_time_s')}")
+    print(f"Avg. Planner Call (s):     {summary.get('mean_planner_time_per_invocation_s')}")
     print(f"Avg. Replans:              {summary['avg_replans']:.2f}")
+    print(
+        "Replan Triggers:           "
+        f"discovery={summary.get('discovery_triggered_replans')}, "
+        f"failure={summary.get('failure_triggered_replans')}, "
+        f"other={summary.get('other_triggered_replans')}"
+    )
+    print(f"Implicit Non-Target Rate:  {summary.get('implicit_non_target_handling_rate')}")
     print(f"Failed Trial Reasons:      {summary.get('failed_trial_reasons', {})}")
-    print(f"Latest Replan/Failure IDs: {summary['failure_ids']}")
+    print(f"Real Failure Counts:       {summary.get('real_failure_counts', {})}")
+    print(f"Latest Diagnostic IDs:     {summary['failure_ids']}")
     print(f"Latest Event Layers:       {summary['failure_layers']}")
     print(f"Latest Event Sources:      {summary['failure_sources']}")
     print(f"Bucket Totals:             {summary['bucket_breakdown_totals']}")

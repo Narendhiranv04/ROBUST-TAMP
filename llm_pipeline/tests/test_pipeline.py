@@ -475,6 +475,9 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
 
     assert summary['success'] is True
     assert summary['total_replans'] == 1
+    assert summary['planner_invocations'] == 2
+    assert summary['total_planner_time_s'] == 0.02
+    assert summary['mean_planner_time_per_invocation_s'] == 0.01
     assert summary['completed_actions'] == [
         'pick(mug2)',
         'place(mug2, table_target_area)',

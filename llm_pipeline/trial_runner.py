@@ -15,7 +15,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from evaluation.canonical_variants import get_variant_spec
-from llm_pipeline.metrics import collect_failure_occurrences, score_variant_completion, validate_variant_success
+from llm_pipeline.metrics import (
+    build_trial_metric_events,
+    collect_failure_occurrences,
+    implicit_non_target_handling_success,
+    score_variant_completion,
+    validate_variant_success,
+)
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
 
 
@@ -304,20 +310,21 @@ def run_trial(
             print(f"[TrialRunner] Pipeline initialization failed. Planner debug: {debug_info}")
             raise RuntimeError('pipeline_initialize_failed')
 
-        preflight = pipeline.preflight(goal_text)
-        preflight_issues = _vision_contract_issues(preflight) if vision else _text_only_contract_issues(preflight)
-        preflight['prompt_contract_issues'] = preflight_issues
-        preflight['prompt_contract_ok'] = not preflight_issues
-        preflight['preflight_success'] = (
-            bool(preflight.get('loaded'))
-            and bool(preflight.get('dry_run_plan_success'))
-            and not preflight_issues
-            and bool(preflight.get('image_present')) is bool(vision)
-        )
-        effective_model_type = preflight.get('model_type') or ('vlm' if vision else 'llm')
+        effective_model_type = model_type or ('vlm' if vision else 'llm')
         text_only = not bool(vision)
 
         if preflight_only:
+            preflight = pipeline.preflight(goal_text)
+            preflight_issues = _vision_contract_issues(preflight) if vision else _text_only_contract_issues(preflight)
+            preflight['prompt_contract_issues'] = preflight_issues
+            preflight['prompt_contract_ok'] = not preflight_issues
+            preflight['preflight_success'] = (
+                bool(preflight.get('loaded'))
+                and bool(preflight.get('dry_run_plan_success'))
+                and not preflight_issues
+                and bool(preflight.get('image_present')) is bool(vision)
+            )
+            effective_model_type = preflight.get('model_type') or effective_model_type
             record = {
                 'variant_id': variant_spec.variant_id,
                 'task_family': variant_spec.task_family,
@@ -352,9 +359,25 @@ def run_trial(
                 summary.get('final_object_region_map', {}),
                 summary.get('completed_actions', []),
             )
-            failure_occurrences = collect_failure_occurrences(summary.get('cycles', []), summary.get('failure_reason'))
             execution_skipped = bool(summary.get('execution_skipped', False))
             episode_success = None if execution_skipped else bool(success_validation.get('success', False))
+            total_replans = int(summary.get('total_replans', 0))
+            event_metrics = build_trial_metric_events(
+                summary.get('cycles', []),
+                success_validation=None if execution_skipped else success_validation,
+                total_replans=total_replans,
+            )
+            implicit_non_target_success = implicit_non_target_handling_success(
+                variant_spec.variant_id,
+                event_metrics['structured_events'],
+                summary.get('completed_actions', []),
+                summary.get('final_object_region_map', {}),
+                goal_text,
+            )
+            raw_failure_occurrences = collect_failure_occurrences(
+                summary.get('cycles', []),
+                summary.get('failure_reason'),
+            )
             record = {
                 'variant_id': variant_spec.variant_id,
                 'task_family': variant_spec.task_family,
@@ -370,6 +393,15 @@ def run_trial(
                 'extra_observed_subtasks': completion['extra_observed_subtasks'],
                 'success_validation': success_validation,
                 'partial_goal_completion': success_validation.get('partial_goal_completion'),
+                'required_relation_count': success_validation.get('required_relation_count'),
+                'satisfied_relation_count': success_validation.get('satisfied_relation_count'),
+                'missing_relation_count': success_validation.get('missing_relation_count'),
+                'required_procedure_count': success_validation.get('required_procedure_count'),
+                'satisfied_procedure_count': success_validation.get('satisfied_procedure_count'),
+                'missing_procedure_count': success_validation.get('missing_procedure_count'),
+                'required_condition_count': success_validation.get('required_condition_count'),
+                'satisfied_condition_count': success_validation.get('satisfied_condition_count'),
+                'missing_condition_count': success_validation.get('missing_condition_count'),
                 'model_alias': summary.get('model_alias', model_alias),
                 'model_type': summary.get('model_type', effective_model_type),
                 'icl_mode': icl_mode,
@@ -377,8 +409,8 @@ def run_trial(
                 'goal_text': goal_text,
                 'text_only': bool(summary.get('text_only', text_only)),
                 'use_vision': bool(summary.get('use_vision', vision)),
-                'image_present': bool(summary.get('image_present', preflight.get('image_present', False))),
-                'image_metadata': dict(summary.get('image_metadata', preflight.get('image_metadata', {})) or {}),
+                'image_present': bool(summary.get('image_present', False)),
+                'image_metadata': dict(summary.get('image_metadata', {}) or {}),
                 'segmentation_first': True,
                 'replan_mode': summary.get('replan_mode', replan_mode),
                 'planning_success': bool(summary.get('success')),
@@ -394,16 +426,26 @@ def run_trial(
                 'episode_success': episode_success,
                 'raw_episode_success': None if execution_skipped else bool(summary.get('success')),
                 'total_cycles': int(summary.get('total_cycles', 0)),
-                'total_replans': int(summary.get('total_replans', 0)),
+                'total_replans': total_replans,
+                'discovery_triggered_replans': event_metrics['discovery_triggered_replans'],
+                'failure_triggered_replans': event_metrics['failure_triggered_replans'],
+                'other_triggered_replans': event_metrics['other_triggered_replans'],
+                'planner_invocations': int(summary.get('planner_invocations', 0)),
+                'total_planner_time_s': summary.get('total_planner_time_s'),
+                'mean_planner_time_per_invocation_s': summary.get('mean_planner_time_per_invocation_s'),
                 'planned_actions': list(summary.get('planned_actions', [])),
                 'completed_actions': list(summary.get('completed_actions', [])),
                 'remaining_actions': list(summary.get('remaining_actions', [])),
                 'final_object_region_map': dict(summary.get('final_object_region_map', {}) or {}),
                 'final_lid_states': dict(summary.get('final_lid_states', {}) or {}),
                 'failure_reason': summary.get('failure_reason'),
-                'failure_occurrences': failure_occurrences,
+                'structured_events': event_metrics['structured_events'],
+                'failure_event_counts': event_metrics['failure_event_counts'],
+                'raw_failure_occurrences': raw_failure_occurrences,
+                'failure_occurrences': raw_failure_occurrences,
+                'implicit_non_target_handling_success': implicit_non_target_success,
                 'episode_time_s': summary.get('episode_time_s'),
-                'preflight': preflight,
+                'preflight': None,
                 'raw_summary': summary,
             }
 

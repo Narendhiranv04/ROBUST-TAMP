@@ -899,6 +899,9 @@ class LLMOnlyReplanningPipeline:
             or self._image_metadata(None)
         )
         prompt_mode = PROMPT_MODE_VLM_MULTIMODAL if self.config.enable_vision else self.config.prompt_mode
+        planner_times = [float(cycle.inference_time_s or 0.0) for cycle in self.cycles]
+        planner_invocations = len(planner_times)
+        total_planner_time_s = float(sum(planner_times))
         return {
             'success': success,
             'goal_text': goal_text,
@@ -935,6 +938,11 @@ class LLMOnlyReplanningPipeline:
             'failure_reason': failure_reason,
             'total_cycles': len(self.cycles),
             'total_replans': sum(1 for cycle in self.cycles if cycle.is_replan),
+            'planner_invocations': int(planner_invocations),
+            'total_planner_time_s': total_planner_time_s,
+            'mean_planner_time_per_invocation_s': (
+                total_planner_time_s / planner_invocations if planner_invocations else None
+            ),
             'episode_time_s': time.time() - started_at,
             'cycles': [cycle.to_dict() for cycle in self.cycles],
         }
