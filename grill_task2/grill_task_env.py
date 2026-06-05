@@ -167,8 +167,8 @@ class GrillTaskEnv:
             include_tokens=['chicken'],
             exclude_tokens=['boundary', 'grill', 'lid', 'handle', 'joint', 'visual'],
         )
-        self.spam = _safe_shape('spam') or _safe_shape('spam_visual') or _find_shape(
-            include_tokens=['spam'],
+        self.phone = _safe_shape('phone') or _safe_shape('phone_visual') or _find_shape(
+            include_tokens=['phone'],
             exclude_tokens=['boundary', 'grill', 'lid', 'handle', 'joint', 'visual'],
         )
 
@@ -246,8 +246,8 @@ class GrillTaskEnv:
             'grill_lid': self.grill_lid,
             'lid': self.grill_lid,
         }
-        if self.spam:
-            self.name_to_obj['spam'] = self.spam
+        if self.phone:
+            self.name_to_obj['phone'] = self.phone
         
         # Add plate if exists
         if self.plate:
@@ -299,7 +299,7 @@ class GrillTaskEnv:
         # dynamic lookups in variants resolve reliably (e.g., #0/#1 suffixes).
         for alias in _scene_shape_aliases():
             low = alias.lower()
-            if any(k in low for k in ('steak', 'chicken', 'spam', 'plate')):
+            if any(k in low for k in ('steak', 'chicken', 'phone', 'plate')):
                 obj = _safe_shape(alias)
                 if obj is not None:
                     self.name_to_obj.setdefault(alias, obj)
@@ -512,7 +512,7 @@ class GrillTaskEnv:
         # Primary mapped objects
         _add(self.steak)
         _add(self.chicken)
-        _add(self.spam)
+        _add(self.phone)
         _add(self.plate)
 
         # Additional known physical object names used in grill variations.
@@ -523,9 +523,10 @@ class GrillTaskEnv:
             "chicken1",
             "chicken2",
             "chicken3",
-            "spam1",
-            "spam2",
-            "spam3",
+            "phone",
+            "phone1",
+            "phone2",
+            "phone3",
             "plate1",
             "plate2",
         ]
@@ -820,15 +821,48 @@ class GrillTaskEnv:
             (q_hover, hover_orientation) - joint config and the quaternion used
         """
         original_conf = self.get_robot_conf()
+        debug = os.environ.get("GRILL_PICK_DEBUG", "").strip().lower() in {"1", "true", "yes"}
+
+        def _fmt(values, digits=4):
+            try:
+                return [round(float(v), digits) for v in values]
+            except Exception:
+                return values
+
+        def _debug(*args, **kwargs):
+            if debug:
+                print(*args, **kwargs)
+
         try:
+            try:
+                obj_name = str(obj.get_name()).lower()
+            except Exception:
+                obj_name = str(obj)
+            try:
+                world_bbox = self._get_world_bounding_box(obj)
+            except Exception:
+                world_bbox = None
             min_x, max_x, min_y, max_y, min_z, max_z = obj.get_bounding_box()
             top_z_local = max_z
-            hover_z = pose[2] + top_z_local + hover_offset
+            top_z_world = float(world_bbox[5]) if world_bbox is not None else float(pose[2] + top_z_local)
+            hover_z = top_z_world + hover_offset
 
             target_pos = [pose[0], pose[1], hover_z]
+            _debug(
+                "DEBUG hover: object="
+                f"{obj_name} pose={_fmt(pose)} "
+                f"local_bbox=[x={float(max_x - min_x):.4f}, "
+                f"y={float(max_y - min_y):.4f}, z={float(max_z - min_z):.4f}] "
+                f"top_z_local={float(top_z_local):.4f} "
+                f"top_z_world={float(top_z_world):.4f} "
+                f"hover_offset={float(hover_offset):.4f} "
+                f"target_pos={_fmt(target_pos)} "
+                f"world_bbox={_fmt(world_bbox) if world_bbox is not None else None}"
+            )
 
             # If preferred orientation is given, try that first
             if preferred_orientation is not None:
+                _debug(f"DEBUG hover: trying preferred quat={_fmt(preferred_orientation)}")
                 path_configs = self.robot.solve_ik_via_sampling(
                     target_pos, quaternion=preferred_orientation, 
                     max_configs=5, max_time_ms=100, 
@@ -836,9 +870,14 @@ class GrillTaskEnv:
                 )
                 if path_configs is not None and len(path_configs) > 0:
                     q_hover = path_configs[0]
+                    _debug(f"DEBUG hover: preferred IK ok q_hover={_fmt(q_hover)}")
                     self.set_robot_conf(q_hover)
                     if not self.robot.check_collision():
+                        _debug("DEBUG hover: preferred collision-free")
                         return q_hover, preferred_orientation
+                    _debug("DEBUG hover: preferred hover collision")
+                else:
+                    _debug("DEBUG hover: preferred IK failed")
 
             # Sample orientations pointing down
             grasp_quats = []
@@ -846,18 +885,32 @@ class GrillTaskEnv:
                 q = quaternion_from_euler(np.pi, 0, angle)
                 grasp_quats.append((angle, q))
 
-            for angle, grasp_rot in grasp_quats:
-                path_configs = self.robot.solve_ik_via_sampling(
-                    target_pos, quaternion=grasp_rot, 
-                    max_configs=5, max_time_ms=100, 
-                    ignore_collisions=True
+            for idx, (angle, grasp_rot) in enumerate(grasp_quats):
+                _debug(
+                    f"DEBUG hover: candidate {idx:02d} "
+                    f"yaw_rad={float(angle):.3f} yaw_deg={np.degrees(float(angle)):.1f} "
+                    f"quat={_fmt(grasp_rot)}"
                 )
+                try:
+                    path_configs = self.robot.solve_ik_via_sampling(
+                        target_pos, quaternion=grasp_rot,
+                        max_configs=5, max_time_ms=100,
+                        ignore_collisions=True,
+                    )
+                except Exception as exc:
+                    _debug(f"DEBUG hover: candidate {idx:02d} IK exception: {exc}")
+                    continue
                 if path_configs is not None and len(path_configs) > 0:
                     q_hover = path_configs[0]
+                    _debug(f"DEBUG hover: candidate {idx:02d} IK ok q_hover={_fmt(q_hover)}")
                     # Check collision
                     self.set_robot_conf(q_hover)
                     if not self.robot.check_collision():
+                        _debug(f"DEBUG hover: candidate {idx:02d} collision-free")
                         return q_hover, grasp_rot
+                    _debug(f"DEBUG hover: candidate {idx:02d} hover collision")
+                else:
+                    _debug(f"DEBUG hover: candidate {idx:02d} IK failed")
 
             raise RuntimeError("Could not find valid hover configuration")
         finally:
@@ -1031,6 +1084,17 @@ class GrillTaskEnv:
             (grasp, q_start, q_end, (approach_traj, retreat_traj))
         """
         original_conf = self.get_robot_conf()
+        debug = os.environ.get("GRILL_PICK_DEBUG", "").strip().lower() in {"1", "true", "yes"}
+
+        def _fmt(values, digits=4):
+            try:
+                return [round(float(v), digits) for v in values]
+            except Exception:
+                return values
+
+        def _debug(*args, **kwargs):
+            if debug:
+                print(*args, **kwargs)
         
         try:
             try:
@@ -1044,17 +1108,28 @@ class GrillTaskEnv:
             obj_length = max_y - min_y
             top_z_local = max_z
             
-            print(f"DEBUG pick: Object bounding box height = {obj_height:.4f}")
+            try:
+                world_bbox = self._get_world_bounding_box(obj)
+            except Exception:
+                world_bbox = None
+            top_z_world = float(world_bbox[5]) if world_bbox is not None else float(pose[2] + top_z_local)
+            _debug(
+                "DEBUG pick: object="
+                f"{obj_name or obj} pose={_fmt(pose)} "
+                f"local_bbox=[x={obj_width:.4f}, y={obj_length:.4f}, z={obj_height:.4f}] "
+                f"top_z_world={float(top_z_world):.4f} "
+                f"world_bbox={_fmt(world_bbox) if world_bbox is not None else None}"
+            )
 
             # 2. Define Grasp Strategy (Top-Down)
             if is_plate:
                 # For plate: slightly deeper to get a good grip on the rim
                 grasp_depths = [0.025, 0.03, 0.035, 0.04, 0.045]
-                print(f"DEBUG pick: PLATE mode - grasp depths: {grasp_depths}")
+                _debug(f"DEBUG pick: PLATE mode - grasp depths: {grasp_depths}")
                 valid_depths = grasp_depths  # Use all for plate
             else:
                 is_flat_pick = (
-                    ("spam" in obj_name)
+                    ("phone" in obj_name)
                     or (obj_height < 0.03 and max(obj_width, obj_length) > 0.04)
                 )
                 if is_flat_pick:
@@ -1062,7 +1137,7 @@ class GrillTaskEnv:
                     min_depth = min(0.008, max_depth)
                     grasp_depths = list(np.linspace(min_depth, max_depth, 5))
                     grasp_depths.extend([max_depth * 0.9, obj_height * 0.5])
-                    print(f"DEBUG pick: FLAT/SPAM mode - grasp depths: {[round(d, 4) for d in grasp_depths]}")
+                    _debug(f"DEBUG pick: FLAT/PHONE mode - grasp depths: {[round(d, 4) for d in grasp_depths]}")
                     valid_depths = [
                         float(d) for d in grasp_depths
                         if 0.003 <= float(d) <= max(0.003, float(obj_height - 0.001))
@@ -1074,31 +1149,48 @@ class GrillTaskEnv:
                     valid_depths = [max(0.004, float(obj_height / 2.0))]
 
             # 3. Define Grasp Orientations
-            grasp_quats = []
+            grasp_candidates = []
             if is_plate:
                 # For plate: try 90-degree rotated orientations first
                 for angle in [np.pi/2, -np.pi/2, 0, np.pi]:
                     q = quaternion_from_euler(np.pi, 0, angle)
-                    grasp_quats.append(q)
+                    grasp_candidates.append(("plate", angle, q))
             elif preferred_orientation is not None:
-                grasp_quats.append(preferred_orientation)
+                grasp_candidates.append(("preferred", None, preferred_orientation))
             
             angles = np.linspace(0, 2 * np.pi, 16)
             for angle in angles:
                 q = quaternion_from_euler(np.pi, 0, angle)
-                grasp_quats.append(q)
+                grasp_candidates.append(("topdown_yaw", angle, q))
+
+            _debug("DEBUG pick: candidate grasp orientations:")
+            for idx, (source, angle, quat) in enumerate(grasp_candidates):
+                angle_text = "None" if angle is None else f"{float(angle):.3f}"
+                _debug(
+                    f"  cand {idx:02d}: source={source} yaw_rad={angle_text} "
+                    f"yaw_deg={('None' if angle is None else f'{np.degrees(float(angle)):.1f}')} "
+                    f"quat={_fmt(quat)}"
+                )
 
             # 4. Iterate and Solve
             for depth in valid_depths:
-                target_z = pose[2] + top_z_local - depth
+                target_z = top_z_world - depth
                 target_pos = [pose[0], pose[1], target_z]
 
                 hover_offset = 0.15
                 hover_pos = [target_pos[0], target_pos[1], target_pos[2] + hover_offset]
                 
-                print(f"DEBUG pick: Trying depth={depth:.3f}, target_z={target_z:.3f}")
+                _debug(
+                    f"DEBUG pick: Trying depth={depth:.3f}, "
+                    f"target_pos={_fmt(target_pos)}, hover_pos={_fmt(hover_pos)}"
+                )
 
-                for grasp_rot in grasp_quats:
+                for cand_idx, (source, angle, grasp_rot) in enumerate(grasp_candidates):
+                    angle_text = "None" if angle is None else f"{float(angle):.3f}"
+                    _debug(
+                        f"DEBUG pick: candidate {cand_idx:02d} "
+                        f"source={source} yaw_rad={angle_text} quat={_fmt(grasp_rot)}"
+                    )
                     try:
                         # A. Solve IK for Grasp Pose - increased sampling for plate
                         path_configs = self.robot.solve_ik_via_sampling(
@@ -1107,8 +1199,13 @@ class GrillTaskEnv:
                             ignore_collisions=True
                         )
                         if path_configs is None or len(path_configs) == 0:
+                            _debug(f"DEBUG pick: candidate {cand_idx:02d} grasp IK failed")
                             continue
                         q_grasp = path_configs[0]
+                        _debug(
+                            f"DEBUG pick: candidate {cand_idx:02d} grasp IK ok "
+                            f"q_grasp={_fmt(q_grasp)}"
+                        )
 
                         # B. Solve IK for Hover Pose
                         path_configs_hover = self.robot.solve_ik_via_sampling(
@@ -1117,18 +1214,26 @@ class GrillTaskEnv:
                             ignore_collisions=True
                         )
                         if path_configs_hover is None or len(path_configs_hover) == 0:
+                            _debug(f"DEBUG pick: candidate {cand_idx:02d} hover IK failed")
                             continue
                         q_hover = path_configs_hover[0]
+                        _debug(
+                            f"DEBUG pick: candidate {cand_idx:02d} hover IK ok "
+                            f"q_hover={_fmt(q_hover)}"
+                        )
 
                         # Validate hover is collision-free (skip for plate since it's in dish rack)
                         self.set_robot_conf(q_hover)
                         if not is_plate and self.robot.check_collision():
+                            _debug(f"DEBUG pick: candidate {cand_idx:02d} hover collision")
                             continue
 
                         # C. Plan Hover -> Grasp (Linear Approach)
                         path2 = self._get_linear_path(q_hover, target_pos, grasp_rot, ignore_collisions=True)
                         if not path2:
+                            _debug(f"DEBUG pick: candidate {cand_idx:02d} approach path failed")
                             continue
+                        _debug(f"DEBUG pick: candidate {cand_idx:02d} approach path ok")
 
                         q_grasp_actual = path2._path_points[-7:].tolist()
 
@@ -1136,7 +1241,9 @@ class GrillTaskEnv:
                         path3 = self._get_linear_path(q_grasp_actual, hover_pos, grasp_rot, ignore_collisions=True)
                         if not path3:
                             path2.remove()
+                            _debug(f"DEBUG pick: candidate {cand_idx:02d} retreat path failed")
                             continue
+                        _debug(f"DEBUG pick: candidate {cand_idx:02d} retreat path ok")
 
                         q_hover_end = path3._path_points[-7:].tolist()
 
@@ -1147,10 +1254,14 @@ class GrillTaskEnv:
                         t_retreat = get_configs(path3)
 
                         grasp = [0] * 7
-                        print(f"DEBUG pick: SUCCESS at depth={depth:.3f}")
+                        _debug(
+                            f"DEBUG pick: SUCCESS at depth={depth:.3f}, "
+                            f"candidate={cand_idx:02d}, source={source}, yaw_rad={angle_text}"
+                        )
                         return grasp, q_hover, q_hover_end, (t_approach, t_retreat)
 
-                    except Exception:
+                    except Exception as exc:
+                        _debug(f"DEBUG pick: candidate {cand_idx:02d} exception: {exc}")
                         continue
 
             print(f"DEBUG: compute_pick_trajectory failed for {obj} at {pose}")

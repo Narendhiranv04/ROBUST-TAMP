@@ -71,6 +71,11 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     success_count = sum(1 for record in records if object_region_success(record))
     raw_success_count = sum(1 for record in records if bool(record.get("raw_episode_success", False)))
     coverage = [float(record.get("subtask_completion_rate") or 0.0) for record in records]
+    partial_goal_completion = [
+        float(record.get("partial_goal_completion") or 0.0)
+        for record in records
+        if record.get("partial_goal_completion") is not None
+    ]
     times = [float(record.get("episode_time_s") or 0.0) for record in records]
     replans = [int(record.get("total_replans") or 0) for record in records]
 
@@ -95,6 +100,7 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "mean_task_success": success_count / len(records),
         "mean_raw_task_success": raw_success_count / len(records),
         "mean_subtask_coverage": mean(coverage),
+        "mean_partial_goal_completion": mean(partial_goal_completion) if partial_goal_completion else None,
         "avg_time_s": mean(times),
         "avg_replans": mean(replans),
         "failure_ids": dict(failure_ids),

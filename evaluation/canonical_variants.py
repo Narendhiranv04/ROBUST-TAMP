@@ -43,17 +43,10 @@ class VariantSpec:
 KITCHEN_GOAL_K1 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
 KITCHEN_GOAL_K2 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
 KITCHEN_GOAL_K3 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
-GRILL_GOAL_G1 = (
-    'Cook the meat using the grill, serve the cooked meat on the plate in the serving area, '
-    'and keep the spam on the table.'
-)
-GRILL_GOAL_G2 = (
-    'Serve all meats on the plate in the serving area, cooking the raw outside meats in the grill first.'
-)
-GRILL_GOAL_G3 = (
-    'Keep the spam on the table, cook the raw outside meats in the grill, '
-    'and serve all non-spam meat on the plate in the serving area.'
-)
+GRILL_GOAL = 'Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.'
+GRILL_GOAL_G1 = GRILL_GOAL
+GRILL_GOAL_G2 = GRILL_GOAL
+GRILL_GOAL_G3 = GRILL_GOAL
 
 
 VARIANTS: Dict[str, VariantSpec] = {
@@ -119,7 +112,7 @@ VARIANTS: Dict[str, VariantSpec] = {
             'plate_to_boundary': 1,
             'meat_to_plate': 1,
             'meat_to_grill': 1,
-            'meat_to_table': 1,
+            'non_target_to_table': 1,
         },
         model_eval_supported=True,
     ),
@@ -154,7 +147,7 @@ VARIANTS: Dict[str, VariantSpec] = {
             'plate_to_boundary': 1,
             'meat_to_plate': 3,
             'meat_to_grill': 2,
-            'meat_to_table': 1,
+            'non_target_to_table': 1,
         },
         model_eval_supported=True,
     ),

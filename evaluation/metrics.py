@@ -17,7 +17,7 @@ MUG_OBJECTS = {
 }
 GROCERY_OBJECTS = {'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
-GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
+GRILL_NON_TARGET_OBJECTS = {'phone'}
 PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
 PLACEMENT_REGIONS = {'placement_boundary'}
@@ -118,8 +118,8 @@ def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
         return 'meat_to_plate'
     if obj in MEAT_OBJECTS and region == 'grill':
         return 'meat_to_grill'
-    if obj in GRILL_TABLE_OBJECTS and region == 'table':
-        return 'meat_to_table'
+    if obj in GRILL_NON_TARGET_OBJECTS and region == 'table':
+        return 'non_target_to_table'
     return None
 
 
@@ -277,16 +277,23 @@ def aggregate_gt_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     variant_summaries: Dict[str, Dict[str, Any]] = {}
     success_values: List[float] = []
     completion_values: List[float] = []
+    partial_goal_values: List[float] = []
     execution_times: List[float] = []
     for variant_id in sorted(by_variant):
         rows = by_variant[variant_id]
         success = [1.0 if row.get('episode_success') else 0.0 for row in rows]
         completion = [float(row.get('subtask_completion_rate', 0.0)) for row in rows]
+        partial_goal_completion = [
+            float(row.get('partial_goal_completion', 0.0))
+            for row in rows
+            if row.get('partial_goal_completion') is not None
+        ]
         times = [float(row.get('execution_time_s', 0.0)) for row in rows if row.get('execution_time_s') is not None]
         variant_summaries[variant_id] = {
             'trials': len(rows),
             'success_rate': _safe_mean(success),
             'mean_subtask_completion_rate': _safe_mean(completion),
+            'mean_partial_goal_completion': _safe_mean(partial_goal_completion),
             'mean_execution_time_s': _safe_mean(times),
             'std_execution_time_s': _safe_std(times),
             'gt_total_subtasks': rows[0].get('gt_total_subtasks'),
@@ -294,6 +301,7 @@ def aggregate_gt_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         }
         success_values.extend(success)
         completion_values.extend(completion)
+        partial_goal_values.extend(partial_goal_completion)
         execution_times.extend(times)
 
     return {
@@ -303,6 +311,7 @@ def aggregate_gt_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         'overall': {
             'success_rate': _safe_mean(success_values),
             'mean_subtask_completion_rate': _safe_mean(completion_values),
+            'mean_partial_goal_completion': _safe_mean(partial_goal_values),
             'mean_execution_time_s': _safe_mean(execution_times),
             'std_execution_time_s': _safe_std(execution_times),
         },
@@ -318,6 +327,7 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
     success_values: List[float] = []
     raw_success_values: List[float] = []
     completion_values: List[float] = []
+    partial_goal_values: List[float] = []
     replans_values: List[float] = []
     episode_times: List[float] = []
 
@@ -326,6 +336,11 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
         success = [1.0 if row.get('episode_success') else 0.0 for row in rows]
         raw_success = [1.0 if row.get('raw_episode_success') else 0.0 for row in rows]
         completion = [float(row.get('subtask_completion_rate', 0.0)) for row in rows]
+        partial_goal_completion = [
+            float(row.get('partial_goal_completion', 0.0))
+            for row in rows
+            if row.get('partial_goal_completion') is not None
+        ]
         replans = [float(row.get('total_replans', 0)) for row in rows]
         times = [float(row.get('episode_time_s', 0.0)) for row in rows if row.get('episode_time_s') is not None]
         variant_summaries[variant_id] = {
@@ -333,6 +348,7 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
             'episode_success_rate': _safe_mean(success),
             'raw_execution_success_rate': _safe_mean(raw_success),
             'mean_subtask_completion_rate': _safe_mean(completion),
+            'mean_partial_goal_completion': _safe_mean(partial_goal_completion),
             'mean_completed_gt_subtasks': _safe_mean([float(row.get('completed_gt_subtasks', 0)) for row in rows]),
             'mean_replans': _safe_mean(replans),
             'mean_episode_time_s': _safe_mean(times),
@@ -346,6 +362,7 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
         success_values.extend(success)
         raw_success_values.extend(raw_success)
         completion_values.extend(completion)
+        partial_goal_values.extend(partial_goal_completion)
         replans_values.extend(replans)
         episode_times.extend(times)
 
@@ -357,6 +374,7 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
             'episode_success_rate': _safe_mean(success_values),
             'raw_execution_success_rate': _safe_mean(raw_success_values),
             'mean_subtask_completion_rate': _safe_mean(completion_values),
+            'mean_partial_goal_completion': _safe_mean(partial_goal_values),
             'mean_replans': _safe_mean(replans_values),
             'mean_episode_time_s': _safe_mean(episode_times),
             'std_episode_time_s': _safe_std(episode_times),

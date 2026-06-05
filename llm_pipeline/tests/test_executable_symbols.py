@@ -7,6 +7,7 @@ class GrillEnv:
         "steak": object(),
         "steak1": object(),
         "chicken": object(),
+        "phone": object(),
         "meat1": object(),
         "meat2": object(),
         "plate": object(),
@@ -45,5 +46,12 @@ def test_grill_symbol_registry_preserves_numbered_meats_without_meat_aliases() -
     assert "steak" in registry.objects
     assert "steak1" in registry.objects
     assert "chicken" in registry.objects
+    assert "phone" in registry.objects
     assert "meat1" not in registry.objects
     assert "meat2" not in registry.objects
+
+
+def test_default_kitchen_symbol_registry_still_includes_spam() -> None:
+    registry = build_runtime_symbol_registry()
+
+    assert "spam" in registry.objects

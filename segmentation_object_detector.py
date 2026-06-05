@@ -66,7 +66,7 @@ class SegmentationObjectDetector:
         default_grill_objects = {
             'steak', 'steak1', 'steak2', 'steak3',
             'chicken', 'chicken1', 'chicken2', 'chicken3',
-            'spam', 'spam1', 'spam2', 'spam3',
+            'phone',
             'plate', 'grill_lid'
         }
         env_task_objects = {
@@ -97,9 +97,7 @@ class SegmentationObjectDetector:
             'chicken1': ['chicken1', 'chicken1_visual'],
             'chicken2': ['chicken2', 'chicken2_visual'],
             'chicken3': ['chicken3', 'chicken3_visual'],
-            'spam1': ['spam1', 'spam1_visual'],
-            'spam2': ['spam2', 'spam2_visual'],
-            'spam3': ['spam3', 'spam3_visual'],
+            'phone': ['phone', 'phone_visual'],
             'plate': ['plate', 'plate_visual'],
             'grill_lid': ['grill_lid', 'lid', 'lid_visual'],
             'lid': ['lid', 'lid_visual'],
@@ -305,6 +303,8 @@ class SegmentationObjectDetector:
         grill_meat = self._canonical_grill_meat_name(n)
         if grill_meat is not None:
             return grill_meat
+        if 'phone' in n:
+            return 'phone'
         if 'lid' in n and 'box' not in n:
             return 'grill_lid'
         for name in ('can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'):
@@ -313,7 +313,7 @@ class SegmentationObjectDetector:
         return None
 
     def _canonical_grill_meat_name(self, lowered_scene_name):
-        for meat_name in ('steak', 'chicken', 'spam'):
+        for meat_name in ('steak', 'chicken'):
             match = re.search(rf'(^|[^a-z0-9])({meat_name}[0-9]*)([^a-z0-9]|$)', lowered_scene_name)
             if match:
                 return match.group(2)
@@ -498,7 +498,7 @@ class SegmentationObjectDetector:
         
         movable_objects = {
             'mug1', 'mug2', 'mug3', 'mug4',
-            'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'
+            'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers', 'phone'
         }
 
         # Add only VISIBLE objects

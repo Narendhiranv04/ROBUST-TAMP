@@ -50,14 +50,14 @@ from pddlstream.utils import read  # noqa: E402
 
 
 VARIANT_OBJECTS = {
-    "G1": ("spam", "chicken", "plate"),
+    "G1": ("phone", "chicken", "plate"),
     "G2": ("steak", "chicken", "steak1", "plate"),
-    "G3": ("spam", "steak", "chicken", "steak1", "plate"),
+    "G3": ("phone", "steak", "chicken", "steak1", "plate"),
 }
 
 VARIANT_FINAL_REGION_GOALS = {
     "G1": (
-        ("in-region", "spam", "table"),
+        ("in-region", "phone", "table"),
         ("in-region", "chicken", "plate_top"),
         ("in-region", "plate", "plate_boundary"),
     ),
@@ -68,7 +68,7 @@ VARIANT_FINAL_REGION_GOALS = {
         ("in-region", "plate", "plate_boundary"),
     ),
     "G3": (
-        ("in-region", "spam", "table"),
+        ("in-region", "phone", "table"),
         ("in-region", "steak", "plate_top"),
         ("in-region", "chicken", "plate_top"),
         ("in-region", "steak1", "plate_top"),

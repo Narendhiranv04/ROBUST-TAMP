@@ -212,7 +212,12 @@ class GrillBundlingHandler(AbstractBundlingHandler):
         self._sync_external_step_callback()
         obj_name = p_action.args[0]
         target_region = normalize_region_name(pl_action.args[1])
-        gt_target_region = "grill-top" if target_region == "inside_grill" else target_region
+        gt_region_by_canonical = {
+            "inside_grill": "grill-top",
+            "plate_top": "plate-top",
+            "serving_area": "plate_boundary",
+        }
+        gt_target_region = gt_region_by_canonical.get(target_region, target_region)
         is_plate = "plate" in obj_name.lower()
         print(f"[GRILL-BUNDLE] --- Starting GT Transfer Ritual: {obj_name} -> {target_region} ---")
         self.executor.go_home()

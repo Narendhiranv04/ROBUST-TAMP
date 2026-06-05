@@ -66,7 +66,7 @@ class TkinterSegmentationViewer:
             "grill_lid", "plate",
             "steak", "steak1", "steak2", "steak3",
             "chicken", "chicken1", "chicken2", "chicken3",
-            "spam1", "spam2", "spam3",
+            "phone",
         ]
         self.color_palette = [
             (255, 70, 70),

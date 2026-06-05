@@ -47,6 +47,7 @@ def _repo_setup(headless: bool, variant_spec) -> None:
         os.environ['GRILL_SCENE_FILE'] = variant_spec.scene_path
         os.environ['GRILL_ALLOW_SCENE_OVERRIDE'] = 'True'
         os.environ['GRILL_SCENE_FILE_OVERRIDE'] = variant_spec.scene_path
+        os.environ['GRILL_OPEN_REPLAY_VARIANT'] = 'G2'
         grill_dir = str(ROOT_DIR / 'grill_task2')
         if grill_dir not in sys.path:
             sys.path.insert(0, grill_dir)
@@ -368,6 +369,7 @@ def run_trial(
                 'observed_subtasks': completion['observed_subtasks'],
                 'extra_observed_subtasks': completion['extra_observed_subtasks'],
                 'success_validation': success_validation,
+                'partial_goal_completion': success_validation.get('partial_goal_completion'),
                 'model_alias': summary.get('model_alias', model_alias),
                 'model_type': summary.get('model_type', effective_model_type),
                 'icl_mode': icl_mode,

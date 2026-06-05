@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Mapping
 
 
-MEAT_PREFIXES = ("spam", "steak", "chicken")
+MEAT_PREFIXES = ("steak", "chicken")
 
 
 def _is_grill_meat(object_name: str) -> bool:

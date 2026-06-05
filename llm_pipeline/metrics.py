@@ -15,7 +15,7 @@ ACTION_PATTERN = re.compile(r'^\s*([A-Za-z0-9_-]+)\((.*?)\)\s*$')
 MUG_OBJECTS = {'mug1', 'mug2', 'mug3', 'mug4'}
 GROCERY_OBJECTS = {'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
-GRILL_TABLE_OBJECTS = MEAT_OBJECTS | {'spam'}
+GRILL_NON_TARGET_OBJECTS = {'phone'}
 PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'inside_box', 'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
 PLACEMENT_REGIONS = {'table_target_area', 'placement_boundary'}
@@ -44,7 +44,7 @@ GRILL_FINAL_GOALS = {
     'G1': {
         'plate_top': ('chicken',),
         'serving_area': ('plate',),
-        'table': ('spam',),
+        'table': ('phone',),
     },
     'G2': {
         'plate_top': ('steak', 'chicken', 'steak1'),
@@ -53,7 +53,7 @@ GRILL_FINAL_GOALS = {
     'G3': {
         'plate_top': ('steak', 'chicken', 'steak1'),
         'serving_area': ('plate',),
-        'table': ('spam',),
+        'table': ('phone',),
     },
 }
 
@@ -131,8 +131,8 @@ def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
         return 'meat_to_plate'
     if obj in MEAT_OBJECTS and region == 'inside_grill':
         return 'meat_to_grill'
-    if obj in GRILL_TABLE_OBJECTS and region == 'table':
-        return 'meat_to_table'
+    if obj in GRILL_NON_TARGET_OBJECTS and region == 'table':
+        return 'non_target_to_table'
     return None
 
 
@@ -225,12 +225,19 @@ def _validator_result(
     satisfied: List[str],
     details: Dict[str, Any],
 ) -> Dict[str, Any]:
+    satisfied_count = len(satisfied)
+    missing_count = len(missing)
+    required_count = satisfied_count + missing_count
     return {
         'success': not missing,
         'variant_id': variant_id,
         'validator': validator,
         'missing': missing,
         'satisfied': satisfied,
+        'required_condition_count': required_count,
+        'satisfied_condition_count': satisfied_count,
+        'missing_condition_count': missing_count,
+        'partial_goal_completion': float(satisfied_count / required_count) if required_count else 0.0,
         'details': details,
     }
 

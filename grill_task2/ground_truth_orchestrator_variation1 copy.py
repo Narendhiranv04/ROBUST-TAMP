@@ -448,35 +448,35 @@ def _scene_variant_id(scene_path=None):
 def _scene_variant_preferences(variant_id=None):
     vid = _scene_variant_id() if variant_id is None else str(variant_id).strip().upper()
     default = {
-        "remove_inside_priority": ("spam", "steak", "chicken", "meat"),
-        "plate_inside_priority": ("steak", "chicken", "spam", "meat"),
-        "outside_to_grill_priority": ("chicken", "steak", "spam", "meat"),
-        "reopen_plate_priority": ("chicken", "steak", "spam", "meat"),
-        "reopen_table_priority": ("chicken", "steak", "spam", "meat"),
+        "remove_inside_priority": ("steak", "chicken", "meat"),
+        "plate_inside_priority": ("steak", "chicken", "meat"),
+        "outside_to_grill_priority": ("chicken", "steak", "meat"),
+        "reopen_plate_priority": ("chicken", "steak", "meat"),
+        "reopen_table_priority": ("chicken", "steak", "meat"),
     }
     if vid == "G1":
         return {
-            "remove_inside_priority": ("spam", "steak", "chicken", "meat"),
-            "plate_inside_priority": ("steak", "chicken", "spam", "meat"),
-            "outside_to_grill_priority": ("chicken", "steak", "spam", "meat"),
-            "reopen_plate_priority": ("chicken", "steak", "spam", "meat"),
-            "reopen_table_priority": ("chicken", "steak", "spam", "meat"),
+            "remove_inside_priority": ("steak", "chicken", "meat"),
+            "plate_inside_priority": ("steak", "chicken", "meat"),
+            "outside_to_grill_priority": ("chicken", "steak", "meat"),
+            "reopen_plate_priority": ("chicken", "steak", "meat"),
+            "reopen_table_priority": ("chicken", "steak", "meat"),
         }
     if vid == "G2":
         return {
-            "remove_inside_priority": ("spam", "steak", "chicken", "meat"),
-            "plate_inside_priority": ("steak", "chicken", "spam", "meat"),
-            "outside_to_grill_priority": ("chicken", "steak", "spam", "meat"),
-            "reopen_plate_priority": ("chicken", "steak", "spam", "meat"),
-            "reopen_table_priority": ("chicken", "steak", "spam", "meat"),
+            "remove_inside_priority": ("steak", "chicken", "meat"),
+            "plate_inside_priority": ("steak", "chicken", "meat"),
+            "outside_to_grill_priority": ("chicken", "steak", "meat"),
+            "reopen_plate_priority": ("chicken", "steak", "meat"),
+            "reopen_table_priority": ("chicken", "steak", "meat"),
         }
     if vid == "G3":
         return {
-            "remove_inside_priority": ("spam", "steak", "chicken", "meat"),
-            "plate_inside_priority": ("steak", "chicken", "spam", "meat"),
-            "outside_to_grill_priority": ("chicken", "steak", "spam", "meat"),
-            "reopen_plate_priority": ("chicken", "steak", "spam", "meat"),
-            "reopen_table_priority": ("chicken", "steak", "spam", "meat"),
+            "remove_inside_priority": ("steak", "chicken", "meat"),
+            "plate_inside_priority": ("steak", "chicken", "meat"),
+            "outside_to_grill_priority": ("chicken", "steak", "meat"),
+            "reopen_plate_priority": ("chicken", "steak", "meat"),
+            "reopen_table_priority": ("chicken", "steak", "meat"),
         }
     return default
 
@@ -511,8 +511,7 @@ def _label_sort_key(label):
     order = {
         "chicken": 0,
         "steak": 1,
-        "spam": 2,
-        "meat": 3,
+        "meat": 2,
     }
     text = str(label or "").strip().lower()
     return (order.get(text, 99), text)
@@ -559,13 +558,13 @@ def _pick_preferred_item(items, preferred_labels=(), exclude=()):
 def _discover_meat_objects(env):
     # 1) Explicit common aliases (physical objects first, not visual-only).
     name_candidates = []
-    for base in ("steak", "steak1", "steak2", "chicken", "chicken1", "chicken2", "spam", "spam1", "spam2"):
+    for base in ("steak", "steak1", "steak2", "chicken", "chicken1", "chicken2"):
         name_candidates.extend(_candidate_names(base))
 
     # 2) Scene names containing meat aliases (best effort), excluding visuals.
     for n in _scene_shape_names():
         ln = n.lower()
-        if ("steak" in ln) or ("chicken" in ln) or ("spam" in ln):
+        if ("steak" in ln) or ("chicken" in ln):
             if all(k not in ln for k in ("boundary", "grill", "lid", "handle", "joint", "visual")):
                 name_candidates.append(n)
 
@@ -584,8 +583,6 @@ def _discover_meat_objects(env):
             label = "steak"
         elif "chicken" in ln:
             label = "chicken"
-        elif "spam" in ln:
-            label = "spam"
         else:
             label = "meat"
         if "visual" in ln:
@@ -743,7 +740,7 @@ def grasp_object(env, pr, target_obj, is_plate=False):
         obj_height = 0.05
         obj_span = 0.03
 
-    is_flat_pick = (not is_plate) and (("spam" in obj_name) or (obj_height < 0.03 and obj_span > 0.04))
+    is_flat_pick = (not is_plate) and (("phone" in obj_name) or (obj_height < 0.03 and obj_span > 0.04))
 
     try:
         target_obj.set_collidable(True)
@@ -2964,7 +2961,11 @@ def _densify_open_arc_waypoints(waypoints, steps_per_segment=None):
 
 
 def _default_open_replay_path(variant_id=None):
-    vid = _scene_variant_id() if variant_id is None else str(variant_id).strip().upper()
+    # G1/G2/G3 now share the same G2-authored grill lid geometry and should
+    # use the same recorded open trajectory. Keep an environment override for
+    # targeted replay debugging only.
+    del variant_id
+    vid = os.environ.get("GRILL_OPEN_REPLAY_VARIANT", "G2").strip().upper() or "G2"
     return os.path.join(OPEN_REPLAY_DIR, f"grill_open_{vid}.json")
 
 
@@ -5565,22 +5566,23 @@ def main():
         results.append(("Task 1: open grill", ok))
         go_home(env, pr)
 
-        # 2) Inside spam -> table staging area
-        if remove_inside_target is None:
-            print("WARNING: No inside-grill meat found for Task 2.")
+        # 2) Inside non-target phone -> table staging area
+        phone_obj = env.get_object("phone")
+        if phone_obj is None:
+            print("WARNING: No phone found for Task 2.")
             ok = False
         else:
-            table_pose = _region_slot_pose(env, remove_inside_target["obj"], "table", slot_idx=0, slot_count=1)
+            table_pose = _region_slot_pose(env, phone_obj, "table", slot_idx=0, slot_count=1)
             ok = run_pick_place_framework(
                 env,
                 pr,
-                obj_name=remove_inside_target["name"],
+                obj_name="phone",
                 target_region="table",
-                task_name=f"Task 2: {_item_label_text(remove_inside_target)} in Grill -> Table",
+                task_name="Task 2: Phone in Grill -> Table",
                 is_plate=False,
                 target_pose=table_pose,
             )
-        results.append((f"Task 2: {_result_label(remove_inside_target, '_in_grill -> table')}", ok))
+        results.append(("Task 2: phone_in_grill -> table", ok))
         go_home(env, pr)
 
         # 3) Outside meat -> grill
@@ -5773,22 +5775,23 @@ def main():
         results.append(("Task 1: open grill", ok))
         go_home(env, pr)
 
-        # 2) Inside spam -> table staging area
-        if remove_inside_target is None:
-            print("WARNING: No inside-grill spam/meat found for Task 2.")
+        # 2) Inside non-target phone -> table staging area
+        phone_obj = env.get_object("phone")
+        if phone_obj is None:
+            print("WARNING: No phone found for Task 2.")
             ok = False
         else:
-            table_pose = _region_slot_pose(env, remove_inside_target["obj"], "table", slot_idx=0, slot_count=1)
+            table_pose = _region_slot_pose(env, phone_obj, "table", slot_idx=0, slot_count=1)
             ok = run_pick_place_framework(
                 env,
                 pr,
-                obj_name=remove_inside_target["name"],
+                obj_name="phone",
                 target_region="table",
-                task_name=f"Task 2: {_item_label_text(remove_inside_target)} in Grill -> Table",
+                task_name="Task 2: Phone in Grill -> Table",
                 is_plate=False,
                 target_pose=table_pose,
             )
-        results.append((f"Task 2: {_result_label(remove_inside_target, '_in_grill -> table')}", ok))
+        results.append(("Task 2: phone_in_grill -> table", ok))
         go_home(env, pr)
 
         # 3) Plate the plate

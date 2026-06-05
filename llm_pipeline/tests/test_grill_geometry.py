@@ -21,7 +21,7 @@ def test_grill_semantic_facts_treat_grill_top_as_inside_grill() -> None:
             "steak": "inside_grill",
             "steak1": "inside_grill",
             "chicken": "table",
-            "spam": "plate_top",
+            "phone": "plate_top",
             "chicken1": "prep_area",
             "plate": "dish_rack",
         },
@@ -32,7 +32,8 @@ def test_grill_semantic_facts_treat_grill_top_as_inside_grill() -> None:
     assert "inside_grill(steak)" in facts
     assert "inside_grill(steak1)" in facts
     assert "on_table(chicken)" in facts
-    assert "on_plate(spam)" in facts
+    assert "on_plate(phone)" not in facts
+    assert not any("phone" in fact for fact in facts)
     assert "in_prep_area(chicken1)" in facts
     assert "plate_at_dish_rack" in facts
 

@@ -328,7 +328,7 @@ BUILTIN_SEQUENCES = {
         goal="Replay G1 ground-truth concrete sequence through llm_pipeline executor.",
         actions=_actions(
             _lid("open", "grill_lid"),
-            _transfer("spam", "table"),
+            _transfer("phone", "table"),
             _transfer("chicken", "inside_grill"),
             _lid("close", "grill_lid"),
             _transfer("plate", "serving_area"),
@@ -358,7 +358,7 @@ BUILTIN_SEQUENCES = {
         goal="Replay G3 ground-truth concrete sequence through llm_pipeline executor.",
         actions=_actions(
             _lid("open", "grill_lid"),
-            _transfer("spam", "table"),
+            _transfer("phone", "table"),
             _transfer("plate", "serving_area"),
             _transfer("steak", "plate_top"),
             _transfer("chicken", "inside_grill"),
@@ -481,6 +481,7 @@ def _configure_scene_env(sequence: DebugSequence, headless: bool) -> None:
         os.environ.setdefault("GRILL_LID_CLOSED_ANGLE", "0.0")
         os.environ.setdefault("GRILL_LID_OPEN_ANGLE", f"{math.radians(95.0):.6f}")
         os.environ.setdefault("GRILL_LID_AUTOCALIBRATE", "False")
+        os.environ["GRILL_OPEN_REPLAY_VARIANT"] = "G2"
         grill_dir = str(ROOT_DIR / "grill_task2")
         if grill_dir not in sys.path:
             sys.path.insert(0, grill_dir)
