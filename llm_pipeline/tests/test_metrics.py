@@ -1,4 +1,5 @@
 from llm_pipeline.metrics import (
+    KITCHEN_FINAL_GOALS,
     build_trial_metric_events,
     collapse_actions_to_subtasks,
     implicit_non_target_handling_success,
@@ -7,6 +8,7 @@ from llm_pipeline.metrics import (
     validate_grill_goal_from_scene_and_history,
     validate_kitchen_goal_from_scene,
 )
+from llm_pipeline.executable_symbols import DEFAULT_OBJECT_ORDER
 
 
 def test_open_action_counts_in_completion_metrics() -> None:
@@ -63,8 +65,8 @@ def test_k3_partial_grocery_completion_stays_incomplete() -> None:
         'open(box_lid)',
         'pick(mug3)',
         'place(mug3, inside_box)',
-        'pick(soup)',
-        'place(soup, cupboard_shelf)',
+        'pick(can_of_beans)',
+        'place(can_of_beans, cupboard_shelf)',
         'pick(mug2)',
         'place(mug2, inside_box)',
         'pick(mug1)',
@@ -88,14 +90,13 @@ def test_kitchen_validator_uses_scene_object_names() -> None:
         {
             'mug2': 'inside_box',
             'mug3': 'box_boundary',
-            'soup': 'cupboard_shelf',
             'spam': 'cupboard_boundary',
-            'can_of_beans': 'table',
+            'can_of_beans': 'cupboard_shelf',
         },
     )
 
     assert result['success'] is True
-    assert 'soup in cupboard_shelf' in result['satisfied']
+    assert 'can_of_beans in cupboard_shelf' in result['satisfied']
 
 
 def test_kitchen_validator_reports_missing_scene_object() -> None:
@@ -105,12 +106,23 @@ def test_kitchen_validator_reports_missing_scene_object() -> None:
             'mug2': 'inside_box',
             'mug3': 'inside_box',
             'sugar': 'cupboard_shelf',
-            'can_of_beans': 'cupboard_shelf',
         },
     )
 
     assert result['success'] is False
-    assert 'soup is in unknown, expected cupboard_shelf' in result['missing']
+    assert 'can_of_beans is in unknown, expected cupboard_shelf' in result['missing']
+
+
+def test_kitchen_final_goals_reference_executable_scene_objects() -> None:
+    executable = set(DEFAULT_OBJECT_ORDER)
+    for variant_goals in KITCHEN_FINAL_GOALS.values():
+        for objects in variant_goals.values():
+            assert set(objects) <= executable
+    assert all(
+        'soup' not in objects
+        for variant_goals in KITCHEN_FINAL_GOALS.values()
+        for objects in variant_goals.values()
+    )
 
 
 def test_grill_g1_validator_requires_final_state_and_cooking_sequence() -> None:

@@ -49,15 +49,15 @@ class FakePipeline:
                 'place(mug2, inside_box)',
                 'pick(mug3)',
                 'place(mug3, inside_box)',
-                'pick(soup)',
-                'place(soup, cupboard_shelf)',
+                'pick(can_of_beans)',
+                'place(can_of_beans, cupboard_shelf)',
                 'pick(spam)',
                 'place(spam, cupboard_shelf)',
             ],
             'final_object_region_map': {
                 'mug2': 'inside_box',
                 'mug3': 'inside_box',
-                'soup': 'cupboard_shelf',
+                'can_of_beans': 'cupboard_shelf',
                 'spam': 'cupboard_shelf',
             },
             'final_lid_states': {'box_lid': True},
@@ -121,7 +121,7 @@ def test_trial_runner_uses_deterministic_success_and_disables_goal_check_by_defa
     assert record['episode_success'] is True
     assert record['raw_episode_success'] is False
     assert record['success_validation']['success'] is True
-    assert record['final_object_region_map']['soup'] == 'cupboard_shelf'
+    assert record['final_object_region_map']['can_of_beans'] == 'cupboard_shelf'
 
 
 def test_trial_runner_records_vlm_metadata(monkeypatch, tmp_path):

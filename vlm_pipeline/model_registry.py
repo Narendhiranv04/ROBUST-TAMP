@@ -160,7 +160,7 @@ MODEL_SPECS: Dict[str, ModelSpec] = {
     ),
     "qwen3.6-27b": _make_spec(
         "qwen3.6-27b",
-        "Qwen/Qwen3.6-27B",
+        "Qwen/Qwen3.6-27B-FP8",
         "llm",
         "Qwen3.6 27B language model for planning",
     ),

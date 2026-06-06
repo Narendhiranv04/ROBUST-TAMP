@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
-from statistics import mean
+from statistics import mean, stdev
 from typing import Any, Dict, Iterable, List
 
 from evaluation.metrics import aggregate_model_records
@@ -48,21 +48,31 @@ def aggregate_bucket_breakdown(records: Iterable[Dict[str, Any]]) -> Dict[str, D
     return {name: dict(counter) for name, counter in sorted(buckets.items())}
 
 
-def object_region_success(record: Dict[str, Any]) -> bool:
-    validation = record.get("success_validation") or {}
-    if "success" in validation:
-        return bool(validation.get("success"))
-
+def fresh_success_validation(record: Dict[str, Any]) -> Dict[str, Any]:
     variant_id = str(record.get("variant_id") or "")
-    if variant_id:
-        validation = validate_variant_success(
+    if variant_id and ("final_object_region_map" in record or "completed_actions" in record):
+        return validate_variant_success(
             variant_id,
             record.get("final_object_region_map") or {},
             record.get("completed_actions") or [],
         )
+    return dict(record.get("success_validation") or {})
+
+
+def object_region_success(record: Dict[str, Any]) -> bool:
+    validation = fresh_success_validation(record)
+    if "success" in validation:
         return bool(validation.get("success"))
 
     return bool(record.get("episode_success", False))
+
+
+def _safe_std(values: List[float]) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return 0.0
+    return float(stdev(values))
 
 
 def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -74,10 +84,11 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     success_count = sum(1 for record in records if object_region_success(record))
     raw_success_count = sum(1 for record in records if bool(record.get("raw_episode_success", False)))
     coverage = [float(record.get("subtask_completion_rate") or 0.0) for record in records]
+    validations = [fresh_success_validation(record) for record in records]
     partial_goal_completion = [
-        float(record.get("partial_goal_completion") or 0.0)
-        for record in records
-        if record.get("partial_goal_completion") is not None
+        float(validation.get("partial_goal_completion") or 0.0)
+        for validation in validations
+        if validation.get("partial_goal_completion") is not None
     ]
     times = [float(record.get("episode_time_s") or 0.0) for record in records]
     replans = [int(record.get("total_replans") or 0) for record in records]
@@ -104,7 +115,7 @@ def aggregate_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "mean_raw_task_success": raw_success_count / len(records),
         "mean_subtask_coverage": mean(coverage),
         "mean_partial_goal_completion": mean(partial_goal_completion) if partial_goal_completion else None,
-        "std_partial_goal_completion": canonical.get("overall", {}).get("std_partial_goal_completion"),
+        "std_partial_goal_completion": _safe_std(partial_goal_completion),
         "avg_time_s": mean(times),
         "avg_replans": mean(replans),
         "mean_planner_invocations": canonical.get("overall", {}).get("mean_planner_invocations"),

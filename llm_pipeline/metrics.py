@@ -13,7 +13,7 @@ from llm_pipeline.region_aliases import BOX_STORAGE_REGION, normalize_region_nam
 
 ACTION_PATTERN = re.compile(r'^\s*([A-Za-z0-9_-]+)\((.*?)\)\s*$')
 MUG_OBJECTS = {'mug1', 'mug2', 'mug3', 'mug4'}
-GROCERY_OBJECTS = {'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
+GROCERY_OBJECTS = {'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
 GRILL_NON_TARGET_OBJECTS = {'phone'}
 PLATE_OBJECTS = {'plate'}
@@ -28,15 +28,15 @@ TABLE_REGIONS = {'table', 'prep_area'}
 KITCHEN_FINAL_GOALS = {
     'K1': {
         'inside_box': ('mug2', 'mug3'),
-        'cupboard_shelf': ('soup', 'spam'),
+        'cupboard_shelf': ('can_of_beans', 'spam'),
     },
     'K2': {
         'inside_box': ('mug2', 'mug3'),
-        'cupboard_shelf': ('sugar', 'soup'),
+        'cupboard_shelf': ('sugar', 'can_of_beans'),
     },
     'K3': {
         'inside_box': ('mug1', 'mug2', 'mug3'),
-        'cupboard_shelf': ('sugar', 'soup'),
+        'cupboard_shelf': ('sugar', 'can_of_beans'),
     },
 }
 

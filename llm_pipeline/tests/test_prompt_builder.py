@@ -113,7 +113,7 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'Respect ACCESS CONSTRAINTS' in user_prompt
     assert 'open(box_lid)' in user_prompt
     assert 'FINAL ACTIONS:' in user_prompt
-    assert 'Inside FINAL ACTIONS, return executable action lines only.' in user_prompt
+    assert 'Inside FINAL ACTIONS, return executable action lines only, using lowercase action names.' in user_prompt
     assert 'state_text' not in user_prompt
     assert 'region=inside_box' in user_prompt
     assert 'visual_mask_regions=inside_box' in user_prompt

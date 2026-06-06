@@ -15,7 +15,7 @@ MUG_OBJECTS = {
     'mug_box', 'mug_inside_box', 'mug_table', 'mug_cupboard',
     'mug1', 'mug2', 'mug3', 'mug4',
 }
-GROCERY_OBJECTS = {'soup', 'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
+GROCERY_OBJECTS = {'can_of_beans', 'mustard', 'spam', 'sugar', 'crackers'}
 MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
 GRILL_NON_TARGET_OBJECTS = {'phone'}
 PLATE_OBJECTS = {'plate'}

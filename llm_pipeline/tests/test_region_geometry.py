@@ -113,3 +113,21 @@ def test_resolve_object_regions_skips_non_region_fixtures() -> None:
 
     assert object_region_map == {'mug2': 'box_lid_top'}
     assert descriptions == {'mug2': 'on top of the box lid'}
+
+
+def test_plate_object_on_plate_footprint_resolves_to_serving_area() -> None:
+    pose_map = {
+        'plate': (0.0, 0.0, 0.08),
+        'chicken': (0.0, 0.0, 0.08),
+    }
+    region_map = {
+        'plate_top': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.08),
+        'serving_area': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.08),
+    }
+
+    object_region_map, descriptions = resolve_object_regions(pose_map, region_map)
+
+    assert object_region_map['plate'] == 'serving_area'
+    assert descriptions['plate'] == 'in serving area'
+    assert object_region_map['chicken'] == 'plate_top'
+    assert descriptions['chicken'] == 'on plate'

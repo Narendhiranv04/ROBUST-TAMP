@@ -45,6 +45,13 @@ REGION_DESCRIPTIONS = {
     "dish_rack": "at dish rack",
 }
 
+OBJECT_REGION_OVERRIDES = {
+    # The plate serving target and the plate top are geometrically colocated in
+    # the grill scenes. For meat, that footprint means "on the plate"; for the
+    # plate object itself, it means the plate has reached the serving target.
+    ("plate", "plate_top"): "serving_area",
+}
+
 REGION_PADDING = {
     "cupboard_shelf": 0.20,
     "box_lid_top": 0.06,
@@ -149,6 +156,8 @@ def resolve_object_regions(
         if object_name in NON_REGION_OBJECTS:
             continue
         region_name, description = resolve_region(tuple(pose[:3]), region_map, valid_regions)
+        region_name = OBJECT_REGION_OVERRIDES.get((object_name, region_name), region_name)
+        description = REGION_DESCRIPTIONS.get(region_name, description)
         object_region_map[object_name] = region_name
         object_region_descriptions[object_name] = description
     return object_region_map, object_region_descriptions
