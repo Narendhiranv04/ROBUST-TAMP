@@ -117,6 +117,7 @@ def test_trial_runner_uses_deterministic_success_and_disables_goal_check_by_defa
     )
 
     assert FakePipeline.instances[0].config.enable_goal_check is False
+    assert FakePipeline.instances[0].config.variant_id == 'K1'
     assert record['goal_check_enabled'] is False
     assert record['episode_success'] is True
     assert record['raw_episode_success'] is False

@@ -13,14 +13,15 @@ from llm_pipeline.catalog import resolve_llm_model, resolve_planner_model, resol
 from llm_pipeline.client import RemoteTextLLMPlanner
 from llm_pipeline.executable_symbols import build_runtime_symbol_registry
 from llm_pipeline.failure_logic import SegmentationFirstFailureChecker, GeometricFailureChecker
+from llm_pipeline.object_aliases import scene_object_for_object
 from llm_pipeline.planner import TextLLMPlanner
 from llm_pipeline.prompt_builder import TextOnlyContextBuilder
 from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
 from llm_pipeline.strict_parser import StrictActionParser
-from llm_pipeline.region_aliases import BOX_STORAGE_REGION, normalize_region_name, scene_object_for_region
+from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_region
 from llm_pipeline.region_geometry import resolve_object_regions
 from llm_pipeline.grill_geometry import derive_grill_semantic_facts, infer_grill_lid_open
-from llm_pipeline.metrics import CUPBOARD_REGIONS, GROCERY_OBJECTS, MUG_OBJECTS
+from llm_pipeline.metrics import validate_variant_success
 from llm_pipeline.pipeline_types import (
     DirectAction, FailureEvent, FailureLayer, FailureSource, FailureStage,
     GoalCheckResult, PlanResult, ICLMode, SceneState,
@@ -68,6 +69,7 @@ class LLMPipelineConfig:
     remote_planner_url: str = ''
     task_family: str = 'kitchen'
     scene_path: str = ''
+    variant_id: str = ''
     scene_state_trace: bool = False
     show_llm_output: bool = False
     enable_goal_check: bool = True
@@ -89,22 +91,6 @@ class LLMPipelineConfig:
     @property
     def effective_model_type(self) -> str:
         return 'vlm' if self.enable_vision else 'llm'
-
-
-KITCHEN_REQUIRED_OBJECTS = {
-    'K1': {
-        'mugs': {'mug2', 'mug3'},
-        'groceries': {'can_of_beans', 'spam'},
-    },
-    'K2': {
-        'mugs': {'mug2', 'mug3'},
-        'groceries': {'sugar', 'can_of_beans'},
-    },
-    'K3': {
-        'mugs': {'mug1', 'mug2', 'mug3'},
-        'groceries': {'sugar', 'can_of_beans'},
-    },
-}
 
 
 @dataclass
@@ -505,7 +491,7 @@ class LLMOnlyReplanningPipeline:
         if detector:
             # 1. Objects
             for obj_name in snapshot.visible_objects:
-                pose = detector.get_object_pose(obj_name)
+                pose = detector.get_object_pose(scene_object_for_object(obj_name, self.env))
                 if pose:
                     pose_map[obj_name] = pose
             
@@ -620,49 +606,33 @@ class LLMOnlyReplanningPipeline:
             held_object=getattr(self.executor, 'held_object', None),
         )
 
-    def _deterministic_goal_completion_from_scene(self, goal_text: str) -> Optional[GoalCheckResult]:
-        goal = (goal_text or '').lower()
-        if not all(token in goal for token in ('grocer', 'cupboard', 'mug', 'box')):
-            return None
+    def _variant_id_for_goal_check(self) -> str:
+        configured = (self.config.variant_id or '').strip().upper()
+        if configured:
+            return configured
 
+        scene_path = (self.config.scene_path or '').lower()
+        task_family = (self.config.task_family or '').strip().lower()
+        prefix = 'G' if task_family == 'grill' or 'grill' in scene_path else 'K'
+        if 'variation1' in scene_path or 'variation_1' in scene_path:
+            return f'{prefix}1'
+        if 'variation2' in scene_path or 'variation_2' in scene_path:
+            return f'{prefix}2'
+        if 'variation3' in scene_path or 'variation_3' in scene_path:
+            return f'{prefix}3'
+        return ''
+
+    def _deterministic_goal_completion_from_scene(self, goal_text: str) -> Optional[GoalCheckResult]:
+        del goal_text
+        variant_id = self._variant_id_for_goal_check()
+        if not variant_id:
+            return None
         state = self._build_scene_state()
         object_region_map = dict(getattr(state, 'object_region_map', {}) or {})
-        if not object_region_map:
-            return None
-
-        missing = []
-        variant_id = ''
-        scene_path = (self.config.scene_path or '').lower()
-        if 'variation1' in scene_path or 'variation_1' in scene_path:
-            variant_id = 'K1'
-        elif 'variation2' in scene_path or 'variation_2' in scene_path:
-            variant_id = 'K2'
-        elif 'variation3' in scene_path or 'variation_3' in scene_path:
-            variant_id = 'K3'
-        required = KITCHEN_REQUIRED_OBJECTS.get(variant_id, {})
-        relevant_groceries = sorted(required.get('groceries') or (obj for obj in GROCERY_OBJECTS if obj in object_region_map))
-        relevant_mugs = sorted(required.get('mugs') or (obj for obj in MUG_OBJECTS if obj in object_region_map))
-        if not relevant_groceries and not relevant_mugs:
-            return None
-
-        cupboard_targets = {normalize_region_name(region) for region in CUPBOARD_REGIONS}
-        for obj_name in relevant_groceries:
-            if obj_name not in object_region_map:
-                missing.append(f'{obj_name} is not visible in the scene state, expected cupboard_shelf')
-                continue
-            region = normalize_region_name(object_region_map.get(obj_name))
-            if region not in cupboard_targets:
-                missing.append(f'{obj_name} is in {region or "unknown"}, expected cupboard_shelf')
-
-        for obj_name in relevant_mugs:
-            if obj_name not in object_region_map:
-                missing.append(f'{obj_name} is not visible in the scene state, expected {BOX_STORAGE_REGION}')
-                continue
-            region = normalize_region_name(object_region_map.get(obj_name))
-            if region != BOX_STORAGE_REGION:
-                missing.append(f'{obj_name} is in {region or "unknown"}, expected {BOX_STORAGE_REGION}')
-
-        if missing:
+        completed_actions = list(getattr(self.executor, 'completed_primitive_actions', []) or [])
+        validation = validate_variant_success(variant_id, object_region_map, completed_actions)
+        if not bool(validation.get('success', False)):
+            missing = list(validation.get('missing') or [])
             return GoalCheckResult(
                 success=True,
                 goal_satisfied=False,
@@ -676,7 +646,7 @@ class LLMOnlyReplanningPipeline:
             goal_satisfied=True,
             raw_output='DETERMINISTIC_GOAL_COMPLETE',
             inference_time=0.0,
-            reason='scene_state_satisfies_kitchen_goal',
+            reason=f'scene_state_satisfies_{variant_id}_goal',
         )
 
     def _goal_check_failure_event(self, goal_check: GoalCheckResult) -> FailureEvent:
@@ -1094,6 +1064,7 @@ if __name__ == '__main__':
         remote_planner_url=args.remote_url,
         task_family=task_family,
         scene_path=scene_path,
+        variant_id=variant_spec.variant_id if variant_spec is not None else "",
         live_segmentation_view=not args.no_live_masks and not headless,
         scene_state_trace=args.scene_state_trace,
         enable_goal_check=not args.no_goal_check,

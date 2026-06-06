@@ -332,6 +332,38 @@ class FakeExecutor:
         )
 
 
+class RegionUpdatingSuccessExecutor(FakeExecutor):
+    def __init__(self, snapshot):
+        super().__init__()
+        self.snapshot = snapshot
+
+    def execute_actions(self, actions, failure_checker, pre_action_checks_enabled=True, post_action_checks_enabled=True):
+        del failure_checker, pre_action_checks_enabled, post_action_checks_enabled
+        rendered = [str(action) for action in actions]
+        self.calls.append(rendered)
+        if self.action_start_callback is not None and actions:
+            self.action_start_callback(actions, 0)
+        if self.step_callback is not None:
+            self.step_callback()
+
+        for action in actions:
+            if action.action_name == 'place' and len(action.args) >= 2:
+                object_name, region_name = action.args[:2]
+                self.snapshot.object_region_map[object_name] = region_name
+        self.completed_primitive_actions.extend(rendered)
+        self.remaining_actions = []
+        self.held_object = None
+        self.last_failure_event = None
+        return PrimitiveExecutionOutcome(
+            success=True,
+            completed_actions=list(self.completed_primitive_actions),
+            remaining_actions=[],
+            held_object=None,
+            last_failure_event=None,
+            error_message=None,
+        )
+
+
 class FakeEnv:
     class PR:
         def step(self):
@@ -356,6 +388,12 @@ class FakeEnv:
     def hold_startup_lid_pose(self):
         self.startup_lid_hold_calls += 1
         return True
+
+
+class FakeGrillEnv(FakeEnv):
+    def __init__(self):
+        super().__init__()
+        self.grill_boundary = object()
 
 
 class FakeCamera:
@@ -453,6 +491,33 @@ def _kitchen_snapshot_missing_required_mug() -> SegmentationSnapshot:
             'mug2': 'inside the box',
             'can_of_beans': 'on lower cupboard shelf',
             'spam': 'on lower cupboard shelf',
+        },
+    )
+
+
+def _grill_g1_snapshot_phone_in_grill() -> SegmentationSnapshot:
+    return SegmentationSnapshot(
+        frame_index=1,
+        visible_objects=['grill_lid', 'phone', 'chicken', 'plate'],
+        newly_visible_objects=[],
+        object_evidence={
+            'grill_lid': SegmentationObjectEvidence(name='grill_lid', visible=True, mask_regions=['inside_grill']),
+            'phone': SegmentationObjectEvidence(name='phone', visible=True, mask_regions=['inside_grill']),
+            'chicken': SegmentationObjectEvidence(name='chicken', visible=True, mask_regions=['prep_area']),
+            'plate': SegmentationObjectEvidence(name='plate', visible=True, mask_regions=['serving_area']),
+        },
+        gripper_evidence={},
+        supported_regions=['table', 'prep_area', 'inside_grill', 'plate_top', 'serving_area', 'dish_rack'],
+        visible_regions=['inside_grill', 'prep_area', 'serving_area'],
+        object_region_map={
+            'phone': 'inside_grill',
+            'chicken': 'prep_area',
+            'plate': 'serving_area',
+        },
+        object_region_descriptions={
+            'phone': 'inside the grill cooking area',
+            'chicken': 'in prep area',
+            'plate': 'in serving area',
         },
     )
 
@@ -579,6 +644,139 @@ def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
     assert 'Goal check failed' in planner.requests[2]['user_prompt']
 
 
+def test_pipeline_replans_when_grill_deterministic_goal_is_incomplete() -> None:
+    planner = BundleCapturingPlanner(
+        action_batches=[
+            [
+                DirectAction('pick', ('chicken',)),
+                DirectAction('place', ('chicken', 'plate_top')),
+            ],
+            [
+                DirectAction('pick', ('phone',)),
+                DirectAction('place', ('phone', 'table')),
+                DirectAction('pick', ('chicken',)),
+                DirectAction('place', ('chicken', 'inside_grill')),
+                DirectAction('close', ('grill_lid',)),
+                DirectAction('open', ('grill_lid',)),
+                DirectAction('pick', ('chicken',)),
+                DirectAction('place', ('chicken', 'plate_top')),
+            ],
+        ]
+    )
+    snapshot = _grill_g1_snapshot_phone_in_grill()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = RegionUpdatingSuccessExecutor(snapshot)
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            icl_mode='zero_shot',
+            max_replans=2,
+            task_family='grill',
+            scene_path='grill_task2/grill.variation1.ttt',
+            variant_id='G1',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeGrillEnv()) is True
+    summary = pipeline.run('Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.')
+
+    assert summary['success'] is True
+    assert summary['total_replans'] == 1
+    assert summary['cycles'][0]['failure_event']['failure_id'] == 'goal_not_satisfied'
+    assert summary['cycles'][0]['failure_event']['source'] == 'goal_check'
+    assert 'phone is in inside_grill, expected table' in summary['cycles'][0]['failure_event']['message']
+    assert 'chicken missing ordered cooking sequence' in summary['cycles'][0]['failure_event']['message']
+    replan_prompt = planner.bundles[1].user_prompt
+    assert 'checkpoint_type: replanning' in replan_prompt
+    assert 'event_id: goal_not_satisfied' in replan_prompt
+    assert 'event_source: goal_check' in replan_prompt
+    assert 'failed_action: (none)' in replan_prompt
+    assert '- pick(chicken)' in replan_prompt
+    assert '- place(chicken, plate_top)' in replan_prompt
+    assert 'phone is in inside_grill, expected table' in replan_prompt
+
+
+def test_pipeline_without_goal_check_stops_after_grill_execution_even_if_goal_incomplete() -> None:
+    planner = BundleCapturingPlanner(
+        action_batches=[
+            [
+                DirectAction('pick', ('chicken',)),
+                DirectAction('place', ('chicken', 'plate_top')),
+            ],
+        ]
+    )
+    snapshot = _grill_g1_snapshot_phone_in_grill()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = RegionUpdatingSuccessExecutor(snapshot)
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            icl_mode='zero_shot',
+            max_replans=2,
+            enable_goal_check=False,
+            task_family='grill',
+            scene_path='grill_task2/grill.variation1.ttt',
+            variant_id='G1',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeGrillEnv()) is True
+    summary = pipeline.run('Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.')
+
+    assert summary['success'] is True
+    assert summary['goal_check_enabled'] is False
+    assert summary['total_replans'] == 0
+    assert summary['last_failure_event'] is None
+    assert len(planner.bundles) == 1
+
+
+def test_grill_goal_check_respects_replan_budget() -> None:
+    planner = BundleCapturingPlanner(
+        action_batches=[
+            [
+                DirectAction('pick', ('chicken',)),
+                DirectAction('place', ('chicken', 'plate_top')),
+            ],
+        ]
+    )
+    snapshot = _grill_g1_snapshot_phone_in_grill()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = RegionUpdatingSuccessExecutor(snapshot)
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            icl_mode='zero_shot',
+            max_replans=0,
+            task_family='grill',
+            scene_path='grill_task2/grill.variation1.ttt',
+            variant_id='G1',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeGrillEnv()) is True
+    summary = pipeline.run('Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.')
+
+    assert summary['success'] is False
+    assert summary['total_replans'] == 0
+    assert summary['last_failure_event']['failure_id'] == 'goal_not_satisfied'
+    assert len(planner.bundles) == 1
+
+
 def test_pipeline_allows_no_actions_when_goal_already_satisfied() -> None:
     planner = GoalCheckingQueuePlanner(
         ['NO_ACTIONS'],
@@ -640,7 +838,7 @@ def test_no_actions_does_not_succeed_when_scene_state_goal_is_incomplete() -> No
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=0),
+        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=0, variant_id='K1'),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=failure_checker,
@@ -652,7 +850,7 @@ def test_no_actions_does_not_succeed_when_scene_state_goal_is_incomplete() -> No
 
     assert summary['success'] is False
     assert summary['last_goal_check']['goal_satisfied'] is False
-    assert 'can_of_beans is in inside_box' in summary['last_goal_check']['reason']
+    assert 'can_of_beans is in inside_box, expected cupboard_shelf' in summary['last_goal_check']['reason']
     assert summary['last_failure_event']['failure_id'] == 'goal_not_satisfied'
 
 
@@ -680,7 +878,7 @@ def test_no_actions_does_not_succeed_when_required_k1_object_is_missing() -> Non
 
     assert summary['success'] is False
     assert summary['last_goal_check']['goal_satisfied'] is False
-    assert 'mug3 is not visible in the scene state' in summary['last_goal_check']['reason']
+    assert 'mug3 is in unknown, expected inside_box' in summary['last_goal_check']['reason']
 
 
 def test_goal_check_parser_accepts_token_after_reasoning() -> None:

@@ -10,6 +10,7 @@ from llm_pipeline.region_aliases import (
     CANONICAL_KITCHEN_REGION_ORDER,
     normalize_region_names,
 )
+from llm_pipeline.object_aliases import canonical_object_name
 
 
 ACTION_SYMBOLS: Tuple[str, ...] = ("pick", "place", "open")
@@ -105,7 +106,7 @@ def _objects_from_env(env) -> Tuple[str, ...]:
 
     names = []
     for name in (getattr(env, "name_to_obj", {}) or {}).keys():
-        token = str(name).strip()
+        token = canonical_object_name(name)
         if _is_grill_env(env) and token in {"meat1", "meat2"}:
             continue
         if token:
@@ -126,7 +127,7 @@ def _objects_from_detected(detected_objects=None, env=None) -> Tuple[str, ...]:
     if detected_objects is None:
         candidates.extend(_objects_from_env(env))
     else:
-        candidates.extend(detected_objects)
+        candidates.extend(canonical_object_name(name) for name in detected_objects)
         candidates.extend(_objects_from_env(env))
 
     known_order = DEFAULT_OBJECT_ORDER + tuple(

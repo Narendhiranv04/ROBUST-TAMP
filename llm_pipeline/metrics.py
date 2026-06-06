@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from evaluation.canonical_variants import get_variant_spec
 from evaluation.metrics import aggregate_model_records, collect_failure_occurrences
+from llm_pipeline.object_aliases import canonical_object_name
 from llm_pipeline.region_aliases import BOX_STORAGE_REGION, normalize_region_name
 
 
@@ -112,12 +113,12 @@ def parse_action_string(action: Any) -> Optional[Dict[str, Any]]:
     raw_args = match.group(2).strip()
     args = []
     if raw_args:
-        args = [_normalize_token(part) for part in raw_args.split(',') if part.strip()]
+        args = [canonical_object_name(_normalize_token(part)) for part in raw_args.split(',') if part.strip()]
     return {'action': name, 'args': args, 'raw': text}
 
 
 def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
-    obj = _normalize_token(object_name)
+    obj = canonical_object_name(_normalize_token(object_name))
     region = _normalize_region(region_name)
     if obj in MUG_OBJECTS and region in {'table_target_area', 'table'}:
         return 'mug_to_placement'
@@ -212,7 +213,7 @@ def score_variant_completion(variant_id: str, completed_actions: Sequence[Any]) 
 
 def _normalized_object_region_map(object_region_map: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return {
-        _normalize_token(obj_name): _normalize_region(str(region_name))
+        canonical_object_name(_normalize_token(obj_name)): _normalize_region(str(region_name))
         for obj_name, region_name in (object_region_map or {}).items()
         if str(obj_name).strip()
     }

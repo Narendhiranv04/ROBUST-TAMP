@@ -99,6 +99,21 @@ def test_kitchen_validator_uses_scene_object_names() -> None:
     assert 'can_of_beans in cupboard_shelf' in result['satisfied']
 
 
+def test_kitchen_validator_accepts_legacy_soup_scene_name() -> None:
+    result = validate_kitchen_goal_from_scene(
+        'K1',
+        {
+            'mug2': 'inside_box',
+            'mug3': 'box_boundary',
+            'soup': 'cupboard_shelf',
+            'spam': 'cupboard_boundary',
+        },
+    )
+
+    assert result['success'] is True
+    assert 'can_of_beans in cupboard_shelf' in result['satisfied']
+
+
 def test_kitchen_validator_reports_missing_scene_object() -> None:
     result = validate_kitchen_goal_from_scene(
         'K2',

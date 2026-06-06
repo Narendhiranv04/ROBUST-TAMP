@@ -68,7 +68,7 @@ Fields:
 
 **Examples:**
 
-- Kitchen: `mug2 -> inside_box`, `soup -> cupboard_shelf`.
+- Kitchen: `mug2 -> inside_box`, `can_of_beans -> cupboard_shelf`.
 - Grill: `chicken -> plate_top`, `plate -> serving_area`, `phone -> table`.
 
 **Why they matter:** They expose whether the model achieved the final spatial arrangement of task objects.

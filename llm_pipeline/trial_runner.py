@@ -287,6 +287,7 @@ def run_trial(
         post_action_checks_enabled=replanning_enabled,
         task_family=variant_spec.task_family,
         scene_path=variant_spec.scene_path,
+        variant_id=variant_spec.variant_id,
         live_segmentation_view=bool(live_masks and not headless),
         scene_state_trace=bool(scene_state_trace),
         show_llm_output=bool(show_llm_output),

@@ -55,3 +55,26 @@ def test_default_kitchen_symbol_registry_still_includes_spam() -> None:
     registry = build_runtime_symbol_registry()
 
     assert "spam" in registry.objects
+
+
+class KitchenEnvWithLegacySoup:
+    name_to_obj = {
+        "mug2": object(),
+        "mug3": object(),
+        "soup": object(),
+        "spam": object(),
+        "box_lid": object(),
+    }
+
+    regions = {
+        "box_boundary": object(),
+        "cupboard_boundary": object(),
+        "placement_boundary": object(),
+    }
+
+
+def test_kitchen_symbol_registry_exposes_can_of_beans_for_legacy_soup_scene() -> None:
+    registry = build_runtime_symbol_registry(env=KitchenEnvWithLegacySoup())
+
+    assert "can_of_beans" in registry.objects
+    assert "soup" not in registry.objects

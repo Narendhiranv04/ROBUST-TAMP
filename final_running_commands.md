@@ -32,6 +32,8 @@ Use:
 - `zero_shot` for no in-context examples.
 - `few_shot_shared_1` for in-context examples.
 
+Main measured runs use `--goal-check`, which enables deterministic in-run goal checking. If a physically executed plan leaves the task objective incomplete and replan budget remains, the planner receives a `goal_not_satisfied` replanning prompt from the current checkpoint.
+
 ## Optional Preflight Checks
 
 Preflight is only for prompt/backend validation. It is not part of measured experiments.
@@ -106,7 +108,7 @@ for VARIANT in $VARIANTS; do
     --remote \
     --remote-url "$REMOTE_URL" \
     --headless \
-    --no-goal-check \
+    --goal-check \
     --output-root "$OUT_ROOT/llm_zero_shot"
 done
 ```
@@ -136,7 +138,7 @@ for VARIANT in $VARIANTS; do
     --remote \
     --remote-url "$REMOTE_URL" \
     --headless \
-    --no-goal-check \
+    --goal-check \
     --output-root "$OUT_ROOT/llm_few_shot_shared_1"
 done
 ```
@@ -166,7 +168,7 @@ for VARIANT in $VARIANTS; do
     --remote \
     --remote-url "$REMOTE_URL" \
     --headless \
-    --no-goal-check \
+    --goal-check \
     --output-root "$OUT_ROOT/vlm_zero_shot"
 done
 ```
@@ -196,7 +198,7 @@ for VARIANT in $VARIANTS; do
     --remote \
     --remote-url "$REMOTE_URL" \
     --headless \
-    --no-goal-check \
+    --goal-check \
     --output-root "$OUT_ROOT/vlm_few_shot_shared_1"
 done
 ```
@@ -231,7 +233,7 @@ Use these as:
 
 - Task success: `mean_task_success`
 - Partial success: `mean_partial_goal_completion`
-- Planner-call cost: `mean_total_planner_time_s`, `mean_planner_time_per_invocation_s`
+- Planner-call cost: `mean_total_planner_time_s`, `mean_planner_time_per_invocation_s`; these include any additional planner calls caused by deterministic `goal_not_satisfied` replanning.
 - End-to-end runtime: `avg_time_s`
 - Replanning behavior: `avg_replans`, `discovery_triggered_replans`, `failure_triggered_replans`, `other_triggered_replans`
 - G1/G3 non-target capability: `implicit_non_target_handling_rate`

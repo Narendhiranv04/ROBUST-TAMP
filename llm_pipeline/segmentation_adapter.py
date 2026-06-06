@@ -9,6 +9,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 
 from llm_pipeline.executable_symbols import RuntimeSymbolRegistry, build_runtime_symbol_registry
+from llm_pipeline.object_aliases import canonical_object_name, scene_object_for_object
 from llm_pipeline.pipeline_types import SegmentationObjectEvidence, SegmentationSnapshot
 from llm_pipeline.region_geometry import resolve_object_regions
 from llm_pipeline.region_aliases import (
@@ -108,11 +109,19 @@ class SegmentationEvidenceAdapter:
             current_visible = set(self.detector.update())
             detector_snapshot = self._get_detector_snapshot()
             visible_now = self._ordered_tokens(
-                [name for name in detector_snapshot.get('visible_objects', current_visible) if name in valid_objects],
+                [
+                    canonical_object_name(name)
+                    for name in detector_snapshot.get('visible_objects', current_visible)
+                    if canonical_object_name(name) in valid_objects
+                ],
                 self.symbol_registry.objects,
             )
             newly_visible = self._ordered_tokens(
-                [name for name in detector_snapshot.get('newly_visible_objects', []) if name in valid_objects],
+                [
+                    canonical_object_name(name)
+                    for name in detector_snapshot.get('newly_visible_objects', [])
+                    if canonical_object_name(name) in valid_objects
+                ],
                 self.symbol_registry.objects,
             )
             visible_regions = self._ordered_tokens(
@@ -250,7 +259,7 @@ class SegmentationEvidenceAdapter:
                         handle_mask.shape,
                     )
 
-            object_stats = self._extract_mask_stats(handle_mask, handle_map)
+            object_stats = self._canonicalize_stats(self._extract_mask_stats(handle_mask, handle_map))
             region_stats = self._extract_mask_stats(handle_mask, region_map)
             region_stats = {
                 normalize_region_name(region_name): stats
@@ -284,11 +293,19 @@ class SegmentationEvidenceAdapter:
 
         if detector_snapshot:
             visible_now = self._ordered_tokens(
-                [name for name in detector_snapshot.get('visible_objects', []) if name in valid_objects],
+                [
+                    canonical_object_name(name)
+                    for name in detector_snapshot.get('visible_objects', [])
+                    if canonical_object_name(name) in valid_objects
+                ],
                 self.symbol_registry.objects,
             )
             newly_visible = self._ordered_tokens(
-                [name for name in detector_snapshot.get('newly_visible_objects', []) if name in valid_objects],
+                [
+                    canonical_object_name(name)
+                    for name in detector_snapshot.get('newly_visible_objects', [])
+                    if canonical_object_name(name) in valid_objects
+                ],
                 self.symbol_registry.objects,
             )
         else:
@@ -298,9 +315,9 @@ class SegmentationEvidenceAdapter:
         self.known_visible.update(visible_now)
 
         object_evidence = {}
-        detector_object_regions = detector_snapshot.get('object_regions', {}) if detector_snapshot else {}
-        detector_camera_hits = detector_snapshot.get('camera_hits', {}) if detector_snapshot else {}
-        detector_pixel_totals = detector_snapshot.get('pixel_totals', {}) if detector_snapshot else {}
+        detector_object_regions = self._canonicalize_mapping_keys(detector_snapshot.get('object_regions', {})) if detector_snapshot else {}
+        detector_camera_hits = self._canonicalize_mapping_keys(detector_snapshot.get('camera_hits', {})) if detector_snapshot else {}
+        detector_pixel_totals = self._canonicalize_mapping_keys(detector_snapshot.get('pixel_totals', {})) if detector_snapshot else {}
 
         for object_name in visible_now:
             vote_items = sorted(
@@ -363,7 +380,7 @@ class SegmentationEvidenceAdapter:
         pose_map = {}
         for object_name in visible_objects:
             try:
-                pose = self.detector.get_object_pose(object_name)
+                pose = self.detector.get_object_pose(scene_object_for_object(object_name, self.env))
             except Exception:
                 pose = None
             if pose:
@@ -382,6 +399,20 @@ class SegmentationEvidenceAdapter:
                 region_map[canonical] = (np.array(bb[0]), np.array(bb[1]))
 
         return resolve_object_regions(pose_map, region_map, valid_regions)
+
+    @staticmethod
+    def _canonicalize_mapping_keys(values):
+        result = {}
+        for key, value in (values or {}).items():
+            result[canonical_object_name(key)] = value
+        return result
+
+    @staticmethod
+    def _canonicalize_stats(values):
+        result = {}
+        for key, value in (values or {}).items():
+            result[canonical_object_name(key)] = value
+        return result
 
     def is_lid_open(self, snapshot: SegmentationSnapshot, lid_name: str = 'box_lid') -> bool:
         lid_name = lid_name or 'box_lid'

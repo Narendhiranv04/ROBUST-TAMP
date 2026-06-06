@@ -21,6 +21,7 @@ from pddlstream.algorithms.meta import solve
 from pddlstream.language.constants import And, PDDLProblem
 
 from llm_pipeline.pipeline_types import DirectAction, FailureEvent, FailureLayer, FailureStage, FailureSource
+from llm_pipeline.object_aliases import scene_object_for_object
 from llm_pipeline.region_aliases import (
     BOX_STORAGE_REGION,
     CUPBOARD_TARGET_REGIONS,
@@ -104,6 +105,7 @@ class KitchenBundlingHandler(AbstractBundlingHandler):
     """Bundling rituals for the Kitchen scene."""
     def create_transfer_executor(self, p_action: DirectAction, pl_action: DirectAction):
         obj_name = p_action.args[0]
+        scene_obj_name = scene_object_for_object(obj_name, self.env)
         target_region = normalize_region_name(pl_action.args[1])
         gt_target_region = scene_object_for_region(target_region)
         print(f"[KITCHEN-BUNDLE] --- Starting GT Transfer Ritual: {obj_name} -> {target_region} ---")
@@ -116,7 +118,7 @@ class KitchenBundlingHandler(AbstractBundlingHandler):
         if create_primitive_transfer_executor is None:
             return None, target_region, gt_target_region, "GT executors not available. Check ground_truth_orchestrator imports."
 
-        gt_executor = create_primitive_transfer_executor(self.env, obj_name, gt_target_region, task_name=task_label)
+        gt_executor = create_primitive_transfer_executor(self.env, scene_obj_name, gt_target_region, task_name=task_label)
         return gt_executor, target_region, gt_target_region, ""
 
     def execute_transfer(self, p_action: DirectAction, pl_action: DirectAction) -> Tuple[bool, str]:
