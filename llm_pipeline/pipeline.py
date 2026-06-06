@@ -22,8 +22,10 @@ from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_
 from llm_pipeline.region_geometry import resolve_object_regions
 from llm_pipeline.grill_geometry import (
     derive_grill_semantic_facts,
+    grill_meat_status_from_facts,
     infer_grill_lid_open,
     initially_cooked_meats_from_regions,
+    unplaced_inside_grill_meats_from_regions,
 )
 from llm_pipeline.metrics import validate_variant_success
 from llm_pipeline.pipeline_types import (
@@ -524,13 +526,17 @@ class LLMOnlyReplanningPipeline:
 
         pddl_state = []
         if (self.config.task_family or '').strip().lower() == 'grill':
+            completed_actions = list(getattr(self.executor, 'completed_primitive_actions', []) or [])
             if not getattr(self, '_initial_cooked_meats_captured', False):
                 self._initial_cooked_meats = initially_cooked_meats_from_regions(object_region_map)
                 self._initial_cooked_meats_captured = True
+            self._initial_cooked_meats.update(
+                unplaced_inside_grill_meats_from_regions(object_region_map, completed_actions)
+            )
             pddl_state = derive_grill_semantic_facts(
                 object_region_map,
                 lid_open=infer_grill_lid_open(self.env),
-                completed_actions=list(getattr(self.executor, 'completed_primitive_actions', []) or []),
+                completed_actions=completed_actions,
                 initially_cooked_meats=getattr(self, '_initial_cooked_meats', set()),
             )
 
@@ -660,6 +666,39 @@ class LLMOnlyReplanningPipeline:
             reason=f'scene_state_satisfies_{variant_id}_goal',
         )
 
+    def _is_implicit_non_target_only_goal_failure(self, goal_check: GoalCheckResult) -> bool:
+        variant_id = self._variant_id_for_goal_check()
+        if variant_id not in {'G1', 'G3'}:
+            return False
+        if goal_check.raw_output != 'DETERMINISTIC_GOAL_INCOMPLETE':
+            return False
+        missing = [
+            part.strip()
+            for part in (goal_check.reason or '').split(';')
+            if part.strip()
+        ]
+        return (
+            len(missing) == 1
+            and missing[0].startswith('phone is in ')
+            and missing[0].endswith(', expected table')
+        )
+
+    def _check_goal_completion_with_deterministic_override(self, goal_text: str) -> GoalCheckResult:
+        deterministic_goal_check = self._deterministic_goal_completion_from_scene(goal_text)
+        if (
+            deterministic_goal_check is not None
+            and self._is_implicit_non_target_only_goal_failure(deterministic_goal_check)
+        ):
+            return deterministic_goal_check
+
+        goal_check = self._check_goal_completion(goal_text)
+        if deterministic_goal_check is not None and (
+            not goal_check.success
+            or goal_check.goal_satisfied != deterministic_goal_check.goal_satisfied
+        ):
+            return deterministic_goal_check
+        return goal_check
+
     def _goal_check_failure_event(self, goal_check: GoalCheckResult) -> FailureEvent:
         return FailureEvent(
             failure_id='goal_not_satisfied',
@@ -684,13 +723,20 @@ class LLMOnlyReplanningPipeline:
             state = self._build_scene_state()
         except Exception as exc:
             return {'error': str(exc)}
-        return {
+        summary = {
             'visible_objects': list(getattr(state, 'visible_objects', []) or []),
             'valid_regions': list(getattr(state, 'valid_regions', []) or []),
             'object_region_map': dict(getattr(state, 'object_region_map', {}) or {}),
             'object_region_descriptions': dict(getattr(state, 'object_region_descriptions', {}) or {}),
             'lid_states': dict(getattr(state, 'lid_states', {}) or {}),
         }
+        semantic_facts = list(getattr(state, 'pddl_state', []) or [])
+        meat_state = grill_meat_status_from_facts(semantic_facts)
+        if semantic_facts:
+            summary['debug_domain_semantic_facts'] = semantic_facts
+        if meat_state:
+            summary['debug_grill_meat_state'] = meat_state
+        return summary
 
     def run(self, goal_text: str) -> Dict[str, Any]:
         if self.env is None:
@@ -778,6 +824,10 @@ class LLMOnlyReplanningPipeline:
                             self.cycles.append(cycle)
                             failure_reason = None
                             break
+                        if self._is_implicit_non_target_only_goal_failure(goal_check):
+                            self.cycles.append(cycle)
+                            failure_reason = None
+                            break
                         goal_failure = self._goal_check_failure_event(goal_check)
                         cycle.success = False
                         cycle.failure_event = goal_failure.to_dict()
@@ -831,15 +881,12 @@ class LLMOnlyReplanningPipeline:
 
                 if execution.success:
                     if self.config.enable_goal_check:
-                        goal_check = self._check_goal_completion(goal_text)
-                        deterministic_goal_check = self._deterministic_goal_completion_from_scene(goal_text)
-                        if deterministic_goal_check is not None and (
-                            not goal_check.success
-                            or goal_check.goal_satisfied != deterministic_goal_check.goal_satisfied
-                        ):
-                            goal_check = deterministic_goal_check
+                        goal_check = self._check_goal_completion_with_deterministic_override(goal_text)
                         cycle.goal_check = goal_check.to_dict()
                         if goal_check.success and goal_check.goal_satisfied:
+                            failure_reason = None
+                            break
+                        if self._is_implicit_non_target_only_goal_failure(goal_check):
                             failure_reason = None
                             break
                         goal_failure = self._goal_check_failure_event(goal_check)

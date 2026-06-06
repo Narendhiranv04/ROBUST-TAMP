@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from llm_pipeline.executable_symbols import RuntimeSymbolRegistry, build_runtime_symbol_registry
 from llm_pipeline.pipeline_types import (
@@ -14,6 +14,7 @@ from llm_pipeline.pipeline_types import (
     SegmentationSnapshot,
     TextPromptBundle,
 )
+from llm_pipeline.grill_geometry import grill_meat_status_from_facts
 from llm_pipeline.region_aliases import PLANNER_HIDDEN_REGIONS, normalize_region_name, region_semantics
 
 
@@ -53,16 +54,19 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             or getattr(snapshot, 'object_region_descriptions', {})
             or {}
         )
+        semantic_facts = list(getattr(state, 'pddl_state', []) or ())
 
         observation_text = self._build_observation_text(
             snapshot=snapshot,
             held_object=held_object,
             object_region_map=object_region_map,
             object_region_descriptions=object_region_descriptions,
+            semantic_facts=semantic_facts,
         )
         visible_text = self._build_visible_text(
             snapshot=snapshot,
             object_region_map=object_region_map,
+            semantic_facts=semantic_facts,
         )
 
         # 2. Create the intermediate text bundle
@@ -122,7 +126,8 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         lines.append('Use only object and region names that appear in the observation above.')
         lines.append('Respect ACCESS CONSTRAINTS: do not place into a blocked container region until its lid has been opened.')
         if 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
-            lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Raw meat outside the grill becomes cooked after place inside_grill, close(grill_lid), then open(grill_lid). Any visible non-meat object inside_grill is a foreign object and should be moved to table before the grill task is complete.')
+            lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Multiple raw meats can be cooked together by placing all of them inside_grill before one close(grill_lid) and one open(grill_lid).')
+            lines.append('Cooking status and serving location are separate: cooked meat still must be physically placed on the serving target named by the goal.')
         lines.append('Executable action formats for this run:')
         for action_name in self.symbol_registry.actions:
             lines.append(self._action_format_line(action_name))
@@ -152,10 +157,13 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         held_object: Optional[str],
         object_region_map: Optional[dict] = None,
         object_region_descriptions: Optional[dict] = None,
+        semantic_facts: Optional[Iterable[str]] = None,
     ) -> str:
         visible_objects = list(snapshot.visible_objects) if snapshot is not None else []
         visible_regions = self._planner_visible_regions(snapshot.visible_regions) if snapshot is not None else []
         supported_regions = self._planner_visible_regions(snapshot.supported_regions) if snapshot is not None else self._planner_visible_regions(self.symbol_registry.regions)
+        semantic_lines = list(semantic_facts or ())
+        cook_status_by_object = grill_meat_status_from_facts(semantic_lines)
 
         lines = ['CURRENT SEGMENTATION SNAPSHOT:', '']
         lines.append(f'- frame_index: {snapshot.frame_index if snapshot is not None else 0}')
@@ -186,12 +194,25 @@ class TextOnlyContextBuilder(BaseContextBuilder):
         for name in visible_objects:
             evidence = snapshot.object_evidence.get(name) if snapshot is not None else None
             if evidence is None:
-                lines.append(f'- {name}: visible=true')
+                facts = []
+                region_name = (object_region_map or {}).get(name)
+                if region_name and normalize_region_name(region_name) not in set(PLANNER_HIDDEN_REGIONS):
+                    facts.append(f'region={region_name}')
+                    cook_status = cook_status_by_object.get(self._object_status_key(name))
+                    if cook_status:
+                        facts.append(f'cook_status={cook_status}')
+                    description = (object_region_descriptions or {}).get(name)
+                    if description:
+                        facts.append(f'region_description={description}')
+                lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
                 continue
             facts = []
             region_name = (object_region_map or {}).get(name)
             if region_name and normalize_region_name(region_name) not in set(PLANNER_HIDDEN_REGIONS):
                 facts.append(f'region={region_name}')
+                cook_status = cook_status_by_object.get(self._object_status_key(name))
+                if cook_status:
+                    facts.append(f'cook_status={cook_status}')
                 description = (object_region_descriptions or {}).get(name)
                 if description:
                     facts.append(f'region_description={description}')
@@ -214,12 +235,23 @@ class TextOnlyContextBuilder(BaseContextBuilder):
                 facts.append(f'gripper_proximity={evidence.gripper_proximity:.4f}')
             lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
 
+        if semantic_lines:
+            lines.extend(['', 'DOMAIN SEMANTIC STATE:'])
+            lines.extend(f'- {fact}' for fact in semantic_lines)
+
         return '\n'.join(lines)
 
-    def _build_visible_text(self, snapshot: Optional[SegmentationSnapshot], object_region_map: Optional[dict] = None) -> str:
+    def _build_visible_text(
+        self,
+        snapshot: Optional[SegmentationSnapshot],
+        object_region_map: Optional[dict] = None,
+        semantic_facts: Optional[Iterable[str]] = None,
+    ) -> str:
         visible_objects = list(snapshot.visible_objects) if snapshot is not None else []
         newly_visible = list(snapshot.newly_visible_objects) if snapshot is not None else []
         visible_regions = self._planner_visible_regions(snapshot.visible_regions) if snapshot is not None else []
+        semantic_lines = list(semantic_facts or ())
+        cook_status_by_object = grill_meat_status_from_facts(semantic_lines)
         lines = ['COMPACT SEGMENTATION SUMMARY:', '']
         lines.append('visible_objects=' + (', '.join(visible_objects) if visible_objects else '(none)'))
         lines.append('newly_visible_objects=' + (', '.join(newly_visible) if newly_visible else '(none)'))
@@ -234,6 +266,9 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             region_name = (object_region_map or {}).get(name)
             if region_name and normalize_region_name(region_name) not in set(PLANNER_HIDDEN_REGIONS):
                 facts.append(f'region={region_name}')
+                cook_status = cook_status_by_object.get(self._object_status_key(name))
+                if cook_status:
+                    facts.append(f'cook_status={cook_status}')
             mask_regions = self._planner_visible_regions(evidence.mask_regions)
             if mask_regions:
                 facts.append(f'visual_mask_regions={"|".join(mask_regions)}')
@@ -244,6 +279,8 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             if evidence.gripper_proximity is not None:
                 facts.append(f'gripper_proximity={evidence.gripper_proximity:.4f}')
             lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
+        if semantic_lines:
+            lines.append('domain_semantic_state=' + ' | '.join(semantic_lines))
         return '\n'.join(lines)
 
     def _build_access_constraints(self, snapshot: Optional[SegmentationSnapshot]) -> List[str]:
@@ -280,6 +317,10 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             for region in regions
             if normalize_region_name(region) not in hidden
         ]
+
+    @staticmethod
+    def _object_status_key(object_name: str) -> str:
+        return str(object_name or '').strip().lower().replace(' ', '_').replace('-', '_')
 
     @staticmethod
     def _format_camera_pixels(camera_pixels) -> str:

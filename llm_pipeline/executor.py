@@ -28,7 +28,12 @@ from llm_pipeline.region_aliases import (
     normalize_region_name,
     scene_object_for_region,
 )
-from llm_pipeline.grill_geometry import derive_grill_semantic_facts, infer_grill_lid_open
+from llm_pipeline.grill_geometry import (
+    derive_grill_semantic_facts,
+    grill_meat_status_from_facts,
+    infer_grill_lid_open,
+    unplaced_inside_grill_meats_from_regions,
+)
 from vlm_pipeline.vlm_executor_v2 import (
     VLMExecutorV2,
     _normalize_segments,
@@ -377,6 +382,9 @@ class UnifiedActionBundler:
         last_action_name = self.executor._last_action_name
         deferred_visibility_failure: Optional[FailureEvent] = None
 
+        def completed_for_trace() -> List[str]:
+            return list(self.executor.completed_primitive_actions) + list(completed)
+
         self.executor._trace_bundle_state(
             failure_checker,
             event=f'before-bundle-transfer-{obj_name}',
@@ -386,6 +394,7 @@ class UnifiedActionBundler:
             current_action_label=str(bundle_actions[0]),
             completed_action_count=start_index,
             total_action_count=total_action_count,
+            completed_actions_override=completed_for_trace(),
         )
 
         gt_executor, _, _, err = self.handler.create_transfer_executor(pick_action, place_action)
@@ -403,6 +412,7 @@ class UnifiedActionBundler:
                 label='final failure event',
                 desired=f'{obj_name} -> {target_region}',
                 failure_event=failure,
+                completed_actions_override=completed_for_trace(),
             )
             return BundleExecutionOutcome(4, False, failure.message, failure, completed, held_object)
 
@@ -421,6 +431,7 @@ class UnifiedActionBundler:
                         current_action_label=str(stage_action),
                         completed_action_count=start_index + stage_index,
                         total_action_count=total_action_count,
+                        completed_actions_override=completed_for_trace(),
                     )
                     pre_failure = None
                     if pre_snapshot is not None:
@@ -443,6 +454,7 @@ class UnifiedActionBundler:
                             current_action_label=str(stage_action),
                             completed_action_count=start_index + len(completed),
                             total_action_count=total_action_count,
+                            completed_actions_override=completed_for_trace(),
                         )
                         return BundleExecutionOutcome(2, False, pre_failure.message, pre_failure, completed, held_object)
 
@@ -476,6 +488,7 @@ class UnifiedActionBundler:
                             current_action_label=str(stage_action),
                             completed_action_count=start_index + len(completed),
                             total_action_count=total_action_count,
+                            completed_actions_override=completed_for_trace(),
                         )
                         return BundleExecutionOutcome(2, False, failure.message, failure, completed, held_object)
                     if not ok:
@@ -502,6 +515,7 @@ class UnifiedActionBundler:
                             current_action_label=str(stage_action),
                             completed_action_count=start_index + len(completed),
                             total_action_count=total_action_count,
+                            completed_actions_override=completed_for_trace(),
                         )
                         return BundleExecutionOutcome(2, False, failure.message, failure, completed, held_object)
 
@@ -524,6 +538,7 @@ class UnifiedActionBundler:
                         current_action_label=str(stage_action),
                         completed_action_count=start_index + stage_index + 1,
                         total_action_count=total_action_count,
+                        completed_actions_override=completed_for_trace(),
                     )
                     post_failure = None
                     if post_snapshot is not None:
@@ -545,6 +560,7 @@ class UnifiedActionBundler:
                                 current_action_label=str(stage_action),
                                 completed_action_count=start_index + stage_index + 1,
                                 total_action_count=total_action_count,
+                                completed_actions_override=completed_for_trace(),
                             )
                             return BundleExecutionOutcome(2, False, post_failure.message, post_failure, completed, held_object)
 
@@ -558,6 +574,7 @@ class UnifiedActionBundler:
                 current_action_label=None,
                 completed_action_count=start_index + len(bundle_actions),
                 total_action_count=total_action_count,
+                completed_actions_override=completed_for_trace(),
             )
         finally:
             try:
@@ -576,6 +593,7 @@ class UnifiedActionBundler:
                 current_action_label=None,
                 completed_action_count=start_index + len(completed),
                 total_action_count=total_action_count,
+                completed_actions_override=completed_for_trace(),
             )
             return BundleExecutionOutcome(
                 2,
@@ -605,6 +623,9 @@ class UnifiedActionBundler:
         desired = f'{lid_action.args[0]} {lid_action.action_name}'
         deferred_visibility_failure: Optional[FailureEvent] = None
 
+        def completed_for_trace() -> List[str]:
+            return list(self.executor.completed_primitive_actions) + list(completed)
+
         self.executor._trace_bundle_state(
             failure_checker,
             event=f'before-bundle-{lid_action.action_name}',
@@ -614,6 +635,7 @@ class UnifiedActionBundler:
             current_action_label=str(bundle_actions[0]),
             completed_action_count=start_index,
             total_action_count=total_action_count,
+            completed_actions_override=completed_for_trace(),
         )
 
         for stage_index, stage_action in enumerate(bundle_actions):
@@ -628,6 +650,7 @@ class UnifiedActionBundler:
                     current_action_label=str(stage_action),
                     completed_action_count=start_index + stage_index,
                     total_action_count=total_action_count,
+                    completed_actions_override=completed_for_trace(),
                 )
                 last_action_name = self.executor._last_action_name if stage_index == 0 else bundle_actions[stage_index - 1].action_name
                 pre_failure = None
@@ -651,6 +674,7 @@ class UnifiedActionBundler:
                         current_action_label=str(stage_action),
                         completed_action_count=start_index + len(completed),
                         total_action_count=total_action_count,
+                        completed_actions_override=completed_for_trace(),
                     )
                     return BundleExecutionOutcome(2, False, pre_failure.message, pre_failure, completed, held_object)
 
@@ -678,6 +702,7 @@ class UnifiedActionBundler:
                         current_action_label=str(stage_action),
                         completed_action_count=start_index + len(completed),
                         total_action_count=total_action_count,
+                        completed_actions_override=completed_for_trace(),
                     )
                 return BundleExecutionOutcome(1, False, failure.message, failure, completed, held_object)
 
@@ -693,6 +718,7 @@ class UnifiedActionBundler:
                     current_action_label=str(stage_action),
                     completed_action_count=start_index + stage_index + 1,
                     total_action_count=total_action_count,
+                    completed_actions_override=completed_for_trace(),
                 )
                 post_failure = None
                 if post_snapshot is not None:
@@ -710,6 +736,7 @@ class UnifiedActionBundler:
                         current_action_label=str(stage_action),
                         completed_action_count=start_index + stage_index + 1,
                         total_action_count=total_action_count,
+                        completed_actions_override=completed_for_trace(),
                     )
                     return BundleExecutionOutcome(1, False, post_failure.message, post_failure, completed, held_object)
 
@@ -722,6 +749,7 @@ class UnifiedActionBundler:
             current_action_label=None,
             completed_action_count=start_index + len(bundle_actions),
             total_action_count=total_action_count,
+            completed_actions_override=completed_for_trace(),
         )
         if deferred_visibility_failure is not None:
             self.executor._trace_bundle_state(
@@ -734,6 +762,7 @@ class UnifiedActionBundler:
                 current_action_label=None,
                 completed_action_count=start_index + len(completed),
                 total_action_count=total_action_count,
+                completed_actions_override=completed_for_trace(),
             )
             return BundleExecutionOutcome(
                 1,
@@ -780,6 +809,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         self.completed_primitive_actions: List[str] = []
         self.remaining_actions: List[str] = []
         self.last_failure_event: Optional[FailureEvent] = None
+        self._debug_cooked_meats: set[str] = set()
         self._manual_hold_context: Optional[dict] = None
         self._last_action_name: Optional[str] = None
         self._pending_pddl_segments: Optional[dict] = None
@@ -815,6 +845,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         self.completed_primitive_actions = []
         self.remaining_actions = []
         self.last_failure_event = None
+        self._debug_cooked_meats = set()
         self._manual_hold_context = None
         self._last_action_name = None
         self._pending_pddl_segments = None
@@ -831,6 +862,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         current_action_label: Optional[str] = None,
         completed_action_count: Optional[int] = None,
         total_action_count: Optional[int] = None,
+        completed_actions_override: Optional[List[str]] = None,
     ):
         if failure_checker is None:
             return None
@@ -841,7 +873,11 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                 print(f'[SCENE-STATE] {label}: capture failed: {exc}')
             return None
         adapter = getattr(failure_checker, 'adapter', None)
-        scene_state_info = self._build_live_scene_state_info(failure_checker, snapshot)
+        scene_state_info = self._build_live_scene_state_info(
+            failure_checker,
+            snapshot,
+            completed_actions_override=completed_actions_override,
+        )
         if adapter is not None:
             if hasattr(adapter, 'set_live_action_progress'):
                 adapter.set_live_action_progress(
@@ -880,6 +916,14 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         else:
             print('  object_region_map: (unresolved)')
 
+        meat_state = dict(scene_state_info.get('debug_grill_meat_state') or {})
+        if meat_state:
+            meat_items = [
+                f'{name}={status}'
+                for name, status in sorted(meat_state.items())
+            ]
+            print(f'  debug_grill_meat_state: {", ".join(meat_items)}')
+
         gripper_evidence = dict(getattr(snapshot, 'gripper_evidence', {}) or {})
         if gripper_evidence:
             holding = self.held_object or '(none)'
@@ -896,7 +940,12 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             )
         return snapshot
 
-    def _build_live_scene_state_info(self, failure_checker, snapshot) -> dict:
+    def _build_live_scene_state_info(
+        self,
+        failure_checker,
+        snapshot,
+        completed_actions_override: Optional[List[str]] = None,
+    ) -> dict:
         adapter = getattr(failure_checker, 'adapter', None)
         detector = getattr(adapter, 'detector', None)
         visible_objects = list(getattr(snapshot, 'visible_objects', []) or [])
@@ -913,12 +962,25 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         object_region_map = dict(getattr(snapshot, 'object_region_map', {}) or {})
         lid_info = self._live_lid_info(failure_checker, snapshot)
         pddl_state = []
+        completed_actions = (
+            list(completed_actions_override)
+            if completed_actions_override is not None
+            else list(self.completed_primitive_actions)
+        )
         if 'grill_lid' in visible_objects or any(region == 'inside_grill' for region in object_region_map.values()):
+            self._debug_cooked_meats.update(
+                unplaced_inside_grill_meats_from_regions(
+                    object_region_map,
+                    completed_actions=completed_actions,
+                )
+            )
             pddl_state = derive_grill_semantic_facts(
                 object_region_map,
                 lid_open=lid_info.get('open') if lid_info.get('name') == 'grill_lid' else None,
-                completed_actions=list(self.completed_primitive_actions),
+                completed_actions=completed_actions,
+                initially_cooked_meats=set(self._debug_cooked_meats),
             )
+        debug_grill_meat_state = grill_meat_status_from_facts(pddl_state)
 
         return {
             'visible_objects': visible_objects,
@@ -931,6 +993,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             'gripper': self._live_gripper_info(),
             'lid': lid_info,
             'pddl_state': pddl_state,
+            'debug_grill_meat_state': debug_grill_meat_state,
         }
 
     def _live_gripper_info(self) -> dict:

@@ -1,3 +1,4 @@
+from llm_pipeline.executable_symbols import GRILL_ACTION_SYMBOLS, GRILL_OBJECT_ORDER, GRILL_REGION_ORDER, RuntimeSymbolRegistry
 from llm_pipeline.prompt_builder import TextOnlyContextBuilder
 from llm_pipeline.pipeline_types import (
     FailureEvent,
@@ -138,9 +139,84 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     assert 'Do not output robot motions, grasp poses, trajectories, coordinates, PDDL predicates' in system_prompt
     assert 'For grill tasks, keep the same object name before and after cooking' in system_prompt
     assert 'chicken, steak, steak1, or other listed meat names' in system_prompt
-    assert 'any visible non-meat object inside_grill is a foreign object' in system_prompt
+    assert 'Multiple raw meat objects may be cooked together' not in system_prompt
+    assert 'Multiple raw meats can be cooked together' not in system_prompt
     assert 'EXECUTABLE ACTION SEQUENCE' not in system_prompt
     assert 'mug_box' not in system_prompt
+
+
+def test_grill_batch_cooking_hint_is_user_prompt_only() -> None:
+    builder = TextOnlyContextBuilder(
+        symbol_registry=RuntimeSymbolRegistry(
+            actions=GRILL_ACTION_SYMBOLS,
+            objects=GRILL_OBJECT_ORDER,
+            regions=GRILL_REGION_ORDER,
+        )
+    )
+    snapshot = SegmentationSnapshot(
+        frame_index=1,
+        visible_objects=['chicken', 'steak', 'plate', 'grill_lid'],
+        newly_visible_objects=[],
+        object_evidence={},
+        gripper_evidence={},
+        supported_regions=['table', 'inside_grill', 'plate_top'],
+        visible_regions=['table', 'inside_grill', 'plate_top'],
+        object_region_map={'chicken': 'table', 'steak': 'table', 'plate': 'table'},
+        object_region_descriptions={
+            'chicken': 'on the table surface',
+            'steak': 'on the table surface',
+            'plate': 'on the table surface',
+        },
+    )
+
+    bundle = builder.build_bundle(
+        state=_state(snapshot),
+        goal_text='Cook all meat and serve it on the plate.',
+        icl_mode='zero_shot',
+    )
+
+    assert 'Multiple raw meats can be cooked together' in bundle.user_prompt
+    assert 'placing all of them inside_grill before one close(grill_lid) and one open(grill_lid)' in bundle.user_prompt
+    assert 'Cooking status and serving location are separate' in bundle.user_prompt
+    assert 'Multiple raw meats can be cooked together' not in bundle.system_prompt
+    assert 'Cooking status and serving location are separate' not in bundle.system_prompt
+
+
+def test_text_prompt_repeats_cooked_status_for_fallen_meat() -> None:
+    builder = TextOnlyContextBuilder(
+        symbol_registry=RuntimeSymbolRegistry(
+            actions=GRILL_ACTION_SYMBOLS,
+            objects=GRILL_OBJECT_ORDER,
+            regions=GRILL_REGION_ORDER,
+        )
+    )
+    snapshot = SegmentationSnapshot(
+        frame_index=7,
+        visible_objects=['steak1', 'grill_lid'],
+        newly_visible_objects=[],
+        object_evidence={},
+        gripper_evidence={},
+        supported_regions=['table', 'inside_grill', 'plate_top'],
+        visible_regions=['table', 'inside_grill', 'plate_top'],
+        object_region_map={'steak1': 'table'},
+        object_region_descriptions={'steak1': 'on the table surface'},
+    )
+    state = _state(snapshot)
+    state.pddl_state = [
+        'grill_lid_open',
+        'on_table(steak1)',
+        'cooked(steak1)',
+    ]
+
+    bundle = builder.build_bundle(
+        state=state,
+        goal_text='Serve all cooked meat on the plate.',
+        icl_mode='zero_shot',
+    )
+
+    assert '- steak1: region=table, cook_status=cooked' in bundle.user_prompt
+    assert '- cooked(steak1)' in bundle.user_prompt
+    assert 'raw(steak1)' not in bundle.user_prompt
 
 
 def test_fallback_regions_are_hidden_from_llm_prompt() -> None:

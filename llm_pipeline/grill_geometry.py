@@ -8,6 +8,7 @@ from typing import Iterable, Mapping, Sequence
 
 MEAT_PREFIXES = ("steak", "chicken")
 ACTION_PATTERN = re.compile(r"^\s*([A-Za-z0-9_-]+)\((.*?)\)\s*$")
+MEAT_STATUS_PATTERN = re.compile(r"^(raw|cooked)\(([A-Za-z0-9_-]+)\)$")
 
 
 def _is_grill_meat(object_name: str) -> bool:
@@ -114,6 +115,24 @@ def initially_cooked_meats_from_regions(object_region_map: Mapping[str, str]) ->
     }
 
 
+def unplaced_inside_grill_meats_from_regions(
+    object_region_map: Mapping[str, str],
+    completed_actions: Iterable[object] | None = None,
+) -> set[str]:
+    """Return meats found inside the grill that the robot did not place there."""
+    parsed_actions = _parsed_actions(completed_actions)
+    meats = set()
+    for object_name, region_name in (object_region_map or {}).items():
+        object_name = _normalize_token(object_name)
+        if (
+            _is_grill_meat(object_name)
+            and _normalize_region(region_name) == "inside_grill"
+            and _place_to_region_after(parsed_actions, 0, object_name, "inside_grill") is None
+        ):
+            meats.add(object_name)
+    return meats
+
+
 def derive_grill_semantic_facts(
     object_region_map: Mapping[str, str],
     *,
@@ -156,6 +175,18 @@ def derive_grill_semantic_facts(
                 facts.append("plate_at_boundary")
 
     return facts
+
+
+def grill_meat_status_from_facts(facts: Iterable[str]) -> dict[str, str]:
+    """Return a compact debug view like {'chicken': 'cooked'} from semantic facts."""
+    status_by_object: dict[str, str] = {}
+    for fact in facts or ():
+        match = MEAT_STATUS_PATTERN.match(str(fact).strip())
+        if not match:
+            continue
+        status, object_name = match.groups()
+        status_by_object[_normalize_token(object_name)] = status
+    return dict(sorted(status_by_object.items()))
 
 
 def infer_grill_lid_open(env) -> bool | None:

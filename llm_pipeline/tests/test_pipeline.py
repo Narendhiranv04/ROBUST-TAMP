@@ -332,6 +332,16 @@ class FakeExecutor:
         )
 
 
+class PrecompletedFakeExecutor(FakeExecutor):
+    def __init__(self, completed_actions):
+        super().__init__()
+        self._precompleted_actions = list(completed_actions)
+
+    def reset_episode(self):
+        super().reset_episode()
+        self.completed_primitive_actions = list(self._precompleted_actions)
+
+
 class RegionUpdatingSuccessExecutor(FakeExecutor):
     def __init__(self, snapshot):
         super().__init__()
@@ -517,6 +527,33 @@ def _grill_g1_snapshot_phone_in_grill() -> SegmentationSnapshot:
         object_region_descriptions={
             'phone': 'inside the grill cooking area',
             'chicken': 'in prep area',
+            'plate': 'in serving area',
+        },
+    )
+
+
+def _grill_g1_snapshot_only_phone_missing() -> SegmentationSnapshot:
+    return SegmentationSnapshot(
+        frame_index=1,
+        visible_objects=['grill_lid', 'phone', 'chicken', 'plate'],
+        newly_visible_objects=[],
+        object_evidence={
+            'grill_lid': SegmentationObjectEvidence(name='grill_lid', visible=True, mask_regions=['inside_grill']),
+            'phone': SegmentationObjectEvidence(name='phone', visible=True, mask_regions=['inside_grill']),
+            'chicken': SegmentationObjectEvidence(name='chicken', visible=True, mask_regions=['plate_top']),
+            'plate': SegmentationObjectEvidence(name='plate', visible=True, mask_regions=['serving_area']),
+        },
+        gripper_evidence={},
+        supported_regions=['table', 'prep_area', 'inside_grill', 'plate_top', 'serving_area', 'dish_rack'],
+        visible_regions=['inside_grill', 'plate_top', 'serving_area'],
+        object_region_map={
+            'phone': 'inside_grill',
+            'chicken': 'plate_top',
+            'plate': 'serving_area',
+        },
+        object_region_descriptions={
+            'phone': 'inside the grill cooking area',
+            'chicken': 'on the plate top',
             'plate': 'in serving area',
         },
     )
@@ -740,6 +777,50 @@ def test_pipeline_without_goal_check_stops_after_grill_execution_even_if_goal_in
     assert summary['goal_check_enabled'] is False
     assert summary['total_replans'] == 0
     assert summary['last_failure_event'] is None
+    assert len(planner.bundles) == 1
+
+
+def test_grill_phone_only_goal_mismatch_does_not_trigger_goal_check_replan() -> None:
+    planner = BundleCapturingPlanner(action_batches=[[]])
+    snapshot = _grill_g1_snapshot_only_phone_missing()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = PrecompletedFakeExecutor(
+        [
+            'open(grill_lid)',
+            'pick(chicken)',
+            'place(chicken, inside_grill)',
+            'close(grill_lid)',
+            'open(grill_lid)',
+            'pick(plate)',
+            'place(plate, serving_area)',
+            'pick(chicken)',
+            'place(chicken, plate_top)',
+        ]
+    )
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            icl_mode='zero_shot',
+            max_replans=2,
+            task_family='grill',
+            scene_path='grill_task2/grill.variation1.ttt',
+            variant_id='G1',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeGrillEnv()) is True
+    summary = pipeline.run('Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.')
+
+    assert summary['success'] is True
+    assert summary['total_replans'] == 0
+    assert summary['last_failure_event'] is None
+    assert summary['last_goal_check']['goal_satisfied'] is False
+    assert summary['last_goal_check']['reason'] == 'phone is in inside_grill, expected table'
     assert len(planner.bundles) == 1
 
 
@@ -1070,14 +1151,15 @@ def test_geometric_prompt_renders_grill_semantics_without_phone_meat_fact() -> N
     assert '- grill_lid_closed' in bundle.user_prompt
     assert '- inside_grill(chicken)' in bundle.user_prompt
     assert '- cooked(chicken)' in bundle.user_prompt
+    assert '- chicken: region=inside_grill, cook_status=cooked' in bundle.user_prompt
     assert 'inside_grill(phone)' not in bundle.user_prompt
     assert '- phone: region=inside_grill' in bundle.user_prompt
-    assert '- table: table surface for placing non-target objects that should be removed from the grill' in bundle.user_prompt
+    assert '- table: table surface' in bundle.user_prompt
     assert 'keep object names unchanged; use raw(object) and cooked(object) facts' in bundle.user_prompt
     assert 'such as chicken, steak, or steak1' in bundle.user_prompt
-    assert 'Raw meat outside the grill becomes cooked after place inside_grill, close(grill_lid), then open(grill_lid)' in bundle.user_prompt
-    assert 'Any visible non-meat object inside_grill is a foreign object' in bundle.user_prompt
-    assert 'should be moved to table before the grill task is complete' in bundle.user_prompt
+    assert 'Multiple raw meats can be cooked together' in bundle.user_prompt
+    assert 'placing all of them inside_grill before one close(grill_lid) and one open(grill_lid)' in bundle.user_prompt
+    assert 'Cooking status and serving location are separate' in bundle.user_prompt
     assert 'DO NOT place objects here' not in bundle.user_prompt
     assert 'pose=' not in bundle.user_prompt
 

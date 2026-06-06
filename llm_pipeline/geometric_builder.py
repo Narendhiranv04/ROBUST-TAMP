@@ -9,6 +9,7 @@ from llm_pipeline.pipeline_types import (
 )
 from llm_pipeline.executable_symbols import ACTION_SYMBOLS
 from llm_pipeline.geometric_utils import resolve_region
+from llm_pipeline.grill_geometry import grill_meat_status_from_facts
 from llm_pipeline.region_aliases import PLANNER_HIDDEN_REGIONS, normalize_region_name, region_semantics
 from llm_pipeline.prompt_builder import PROMPTS_DIR
 
@@ -102,6 +103,7 @@ class GeometricContextBuilder(BaseContextBuilder):
         )
 
         relational_lines = ['### Visible-Object Relational State']
+        cook_status_by_object = grill_meat_status_from_facts(getattr(state, 'pddl_state', []) or [])
         lid_objects = set(getattr(state, 'lid_states', {}).keys()) | {'box_lid', 'grill_lid', 'lid'}
         rendered_objects = [obj_name for obj_name in state.visible_objects if obj_name not in lid_objects]
         if not rendered_objects:
@@ -114,7 +116,12 @@ class GeometricContextBuilder(BaseContextBuilder):
                 r_id, r_desc = resolve_region(pos, region_map, state.valid_regions)
             r_id = r_id or 'unresolved'
             r_desc = r_desc or '(none)'
-            relational_lines.append(f"- {obj_name}: region={r_id}, description={r_desc}")
+            facts = [f"region={r_id}"]
+            cook_status = cook_status_by_object.get(self._object_status_key(obj_name))
+            if cook_status:
+                facts.append(f"cook_status={cook_status}")
+            facts.append(f"description={r_desc}")
+            relational_lines.append(f"- {obj_name}: {', '.join(facts)}")
 
         region_lines = ['### Valid Target Regions']
         if valid_regions:
@@ -233,7 +240,8 @@ class GeometricContextBuilder(BaseContextBuilder):
         lines.append('Do not output move, grasp, trajectory, coordinate, PDDL, or implementation steps.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
         if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
-            lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Raw meat outside the grill becomes cooked after place inside_grill, close(grill_lid), then open(grill_lid). Any visible non-meat object inside_grill is a foreign object and should be moved to table before the grill task is complete.')
+            lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Multiple raw meats can be cooked together by placing all of them inside_grill before one close(grill_lid) and one open(grill_lid).')
+            lines.append('Cooking status and serving location are separate: cooked meat still must be physically placed on the serving target named by the goal.')
         lines.append('Prefer FINAL ACTIONS immediately; do not write step-by-step analysis or repeated alternatives.')
         lines.append('If a rationale is necessary, write at most two short lines before FINAL ACTIONS.')
         lines.append('End every response with a block headed exactly: FINAL ACTIONS:')
@@ -269,5 +277,9 @@ class GeometricContextBuilder(BaseContextBuilder):
             and self.symbol_registry is not None
             and 'grill_lid' in getattr(self.symbol_registry, 'objects', ())
         ):
-            return 'table surface for placing non-target objects that should be removed from the grill'
+            return 'table surface'
         return region_semantics(region)
+
+    @staticmethod
+    def _object_status_key(object_name: str) -> str:
+        return str(object_name or '').strip().lower().replace(' ', '_').replace('-', '_')

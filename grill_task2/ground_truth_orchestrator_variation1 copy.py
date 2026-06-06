@@ -272,6 +272,65 @@ def _target_is_grasped(env, target_obj):
     return any(_obj_handle(o) == target_h for o in grabbed)
 
 
+def _tip_object_delta(env, target_obj):
+    try:
+        tip_pos = np.array(env.robot.get_tip().get_position(), dtype=float)
+        obj_pos = np.array(target_obj.get_position(), dtype=float)
+    except Exception:
+        return float("inf"), float("inf"), float("inf")
+    delta = tip_pos - obj_pos
+    return (
+        float(np.linalg.norm(delta)),
+        float(np.linalg.norm(delta[:2])),
+        float(delta[2]),
+    )
+
+
+def _manual_attach_if_close(env, pr, target_obj, obj_name, obj_height=0.05, obj_span=0.03):
+    """Fallback for thin grill objects when PyRep proximity grasp refuses attach."""
+    total_dist, xy_dist, dz = _tip_object_delta(env, target_obj)
+    detected = _gripper_detects(env, target_obj)
+    max_xy = max(0.035, min(0.09, float(obj_span) * 0.75))
+    max_abs_dz = max(0.055, min(0.12, float(obj_height) + 0.06))
+
+    if not detected and (xy_dist > max_xy or abs(dz) > max_abs_dz):
+        print(
+            "[GrillGrasp] manual attach rejected "
+            f"object={obj_name or '<unknown>'} "
+            f"tip_obj_dist={total_dist:.4f} tip_obj_xy={xy_dist:.4f} "
+            f"tip_obj_dz={dz:.4f} max_xy={max_xy:.4f} max_abs_dz={max_abs_dz:.4f}"
+        )
+        return False
+
+    try:
+        target_obj.set_dynamic(False)
+    except Exception:
+        pass
+    try:
+        target_obj.set_collidable(False)
+        target_obj.set_respondable(False)
+    except Exception:
+        pass
+
+    try:
+        target_obj.set_parent(env.robot.get_tip(), keep_in_place=True)
+    except Exception:
+        try:
+            target_obj.set_parent(env.robot.get_tip())
+        except Exception as exc:
+            print(f"[GrillGrasp] manual attach failed object={obj_name or '<unknown>'}: {exc}")
+            return False
+
+    step(pr, 8)
+    print(
+        "[GrillGrasp] manual attach accepted "
+        f"object={obj_name or '<unknown>'} "
+        f"detected={detected} tip_obj_dist={total_dist:.4f} "
+        f"tip_obj_xy={xy_dist:.4f} tip_obj_dz={dz:.4f}"
+    )
+    return True
+
+
 def _get_world_bounds(env, obj):
     return env._get_world_bounding_box(obj)
 
@@ -741,6 +800,7 @@ def grasp_object(env, pr, target_obj, is_plate=False):
         obj_span = 0.03
 
     is_flat_pick = (not is_plate) and (("phone" in obj_name) or (obj_height < 0.03 and obj_span > 0.04))
+    is_meat_pick = (not is_plate) and any(label in obj_name for label in ("chicken", "steak", "meat"))
 
     try:
         target_obj.set_collidable(True)
@@ -769,13 +829,20 @@ def grasp_object(env, pr, target_obj, is_plate=False):
         _plate_debug_state(env, target_obj, "after-initial-close")
 
     grasped = False
-    attempts = 5 if is_flat_pick else 3
+    attempts = 5 if (is_flat_pick or is_meat_pick) else 3
     if is_plate:
         attempts = int(os.environ.get("GRILL_PLATE_GRASP_ATTACH_ATTEMPTS", "6"))
     for attempt in range(attempts):
-        if not is_plate or attempt > 0:
+        if is_plate and attempt > 0:
             try:
                 target_obj.set_dynamic(True)
+            except Exception:
+                pass
+        elif not is_plate:
+            # Match the stable GUI grasp path: keep light/flat objects kinematic
+            # while PyRep attaches them, then re-enable dynamics after success.
+            try:
+                target_obj.set_dynamic(False)
             except Exception:
                 pass
         if is_plate:
@@ -799,6 +866,13 @@ def grasp_object(env, pr, target_obj, is_plate=False):
             pass
         step(pr, 10 if (is_flat_pick or is_plate) else 6)
         grasped = _target_is_grasped(env, target_obj)
+        if grasped and not is_plate:
+            try:
+                target_obj.set_dynamic(True)
+            except Exception:
+                pass
+            step(pr, 10 if is_flat_pick else 6)
+            grasped = _target_is_grasped(env, target_obj)
         if is_plate:
             detected_after = _gripper_detects(env, target_obj)
             try:
@@ -834,6 +908,27 @@ def grasp_object(env, pr, target_obj, is_plate=False):
                     _plate_debug_state(env, target_obj, f"attempt-{attempt + 1}-after-retry-close")
 
     if not is_plate and not grasped:
+        grasped = _manual_attach_if_close(
+            env,
+            pr,
+            target_obj,
+            obj_name=obj_name,
+            obj_height=obj_height,
+            obj_span=obj_span,
+        )
+
+    if not is_plate and not grasped:
+        try:
+            grasped_names = [str(o.get_name()) for o in env.gripper.get_grasped_objects()]
+        except Exception:
+            grasped_names = []
+        print(
+            "[GrillGrasp] attach failed "
+            f"object={obj_name or '<unknown>'} "
+            f"flat={is_flat_pick} meat={is_meat_pick} "
+            f"detected={_gripper_detects(env, target_obj)} "
+            f"grasped_objects={grasped_names}"
+        )
         try:
             target_obj.set_dynamic(True)
         except Exception:
