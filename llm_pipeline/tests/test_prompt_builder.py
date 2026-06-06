@@ -136,6 +136,7 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     assert 'Plan only from the current scene evidence' in system_prompt
     assert 'Do not invent hidden objects' in system_prompt
     assert 'Do not output robot motions, grasp poses, trajectories, coordinates, PDDL predicates' in system_prompt
+    assert 'For grill tasks, "cook" has a specific executable meaning' in system_prompt
     assert 'EXECUTABLE ACTION SEQUENCE' not in system_prompt
     assert 'mug_box' not in system_prompt
 

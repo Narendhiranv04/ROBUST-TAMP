@@ -650,11 +650,6 @@ class LLMOnlyReplanningPipeline:
         )
 
     def _goal_check_failure_event(self, goal_check: GoalCheckResult) -> FailureEvent:
-        reason = (
-            goal_check.reason
-            or goal_check.error_message
-            or 'The LLM goal-completion check reported that the goal is not complete.'
-        )
         return FailureEvent(
             failure_id='goal_not_satisfied',
             stage=FailureStage.AFTER_EXECUTION,
@@ -667,7 +662,10 @@ class LLMOnlyReplanningPipeline:
             },
             failure_layer=FailureLayer.LAYER_2,
             should_replan=True,
-            message=f'Goal check failed: {reason}',
+            message=(
+                'Goal check failed: the goal is not fully satisfied in the current scene. '
+                'Review the current object states, completed actions, and original goal, then produce a corrective plan.'
+            ),
         )
 
     def _final_scene_state_summary(self) -> Dict[str, Any]:

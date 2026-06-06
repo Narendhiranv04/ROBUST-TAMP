@@ -689,8 +689,9 @@ def test_pipeline_replans_when_grill_deterministic_goal_is_incomplete() -> None:
     assert summary['total_replans'] == 1
     assert summary['cycles'][0]['failure_event']['failure_id'] == 'goal_not_satisfied'
     assert summary['cycles'][0]['failure_event']['source'] == 'goal_check'
-    assert 'phone is in inside_grill, expected table' in summary['cycles'][0]['failure_event']['message']
-    assert 'chicken missing ordered cooking sequence' in summary['cycles'][0]['failure_event']['message']
+    assert 'the goal is not fully satisfied' in summary['cycles'][0]['failure_event']['message']
+    assert 'phone is in inside_grill, expected table' in summary['cycles'][0]['failure_event']['evidence']['reason']
+    assert 'chicken missing ordered cooking sequence' in summary['cycles'][0]['failure_event']['evidence']['reason']
     replan_prompt = planner.bundles[1].user_prompt
     assert 'checkpoint_type: replanning' in replan_prompt
     assert 'event_id: goal_not_satisfied' in replan_prompt
@@ -698,7 +699,9 @@ def test_pipeline_replans_when_grill_deterministic_goal_is_incomplete() -> None:
     assert 'failed_action: (none)' in replan_prompt
     assert '- pick(chicken)' in replan_prompt
     assert '- place(chicken, plate_top)' in replan_prompt
-    assert 'phone is in inside_grill, expected table' in replan_prompt
+    assert 'the goal is not fully satisfied' in replan_prompt
+    assert 'expected table' not in replan_prompt
+    assert 'missing ordered cooking sequence' not in replan_prompt
 
 
 def test_pipeline_without_goal_check_stops_after_grill_execution_even_if_goal_incomplete() -> None:
@@ -1069,6 +1072,8 @@ def test_geometric_prompt_renders_grill_semantics_without_phone_meat_fact() -> N
     assert 'inside_grill(phone)' not in bundle.user_prompt
     assert '- phone: region=inside_grill' in bundle.user_prompt
     assert '- table: table surface for placing non-target objects that should be removed from the grill' in bundle.user_prompt
+    assert 'meat already reported inside_grill is considered cooked' in bundle.user_prompt
+    assert 'raw meat outside the grill must be placed inside_grill, followed by close(grill_lid) and open(grill_lid)' in bundle.user_prompt
     assert 'DO NOT place objects here' not in bundle.user_prompt
     assert 'pose=' not in bundle.user_prompt
 

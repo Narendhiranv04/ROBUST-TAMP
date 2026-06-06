@@ -121,6 +121,8 @@ class TextOnlyContextBuilder(BaseContextBuilder):
             lines.append('available_actions=' + ', '.join(self.symbol_registry.actions))
         lines.append('Use only object and region names that appear in the observation above.')
         lines.append('Respect ACCESS CONSTRAINTS: do not place into a blocked container region until its lid has been opened.')
+        if 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
+            lines.append('For grill tasks, meat already reported inside_grill is considered cooked; raw meat outside the grill must be placed inside_grill, followed by close(grill_lid) and open(grill_lid), before serving.')
         lines.append('Executable action formats for this run:')
         for action_name in self.symbol_registry.actions:
             lines.append(self._action_format_line(action_name))
