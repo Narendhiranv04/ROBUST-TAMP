@@ -20,7 +20,11 @@ from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
 from llm_pipeline.strict_parser import StrictActionParser
 from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_region
 from llm_pipeline.region_geometry import resolve_object_regions
-from llm_pipeline.grill_geometry import derive_grill_semantic_facts, infer_grill_lid_open
+from llm_pipeline.grill_geometry import (
+    derive_grill_semantic_facts,
+    infer_grill_lid_open,
+    initially_cooked_meats_from_regions,
+)
 from llm_pipeline.metrics import validate_variant_success
 from llm_pipeline.pipeline_types import (
     DirectAction, FailureEvent, FailureLayer, FailureSource, FailureStage,
@@ -286,6 +290,8 @@ class LLMOnlyReplanningPipeline:
         self.cycles = []
         self.last_prompt_trace = {}
         self._sim_step_counter = 0
+        self._initial_cooked_meats = set()
+        self._initial_cooked_meats_captured = False
         if self.executor is not None and hasattr(self.executor, 'reset_episode'):
             self.executor.reset_episode()
         if self.segmentation_adapter is not None and hasattr(self.segmentation_adapter, 'reset_tracking'):
@@ -518,9 +524,14 @@ class LLMOnlyReplanningPipeline:
 
         pddl_state = []
         if (self.config.task_family or '').strip().lower() == 'grill':
+            if not getattr(self, '_initial_cooked_meats_captured', False):
+                self._initial_cooked_meats = initially_cooked_meats_from_regions(object_region_map)
+                self._initial_cooked_meats_captured = True
             pddl_state = derive_grill_semantic_facts(
                 object_region_map,
                 lid_open=infer_grill_lid_open(self.env),
+                completed_actions=list(getattr(self.executor, 'completed_primitive_actions', []) or []),
+                initially_cooked_meats=getattr(self, '_initial_cooked_meats', set()),
             )
 
         # Resolve lid open/closed states for all lid objects

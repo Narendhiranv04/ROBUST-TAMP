@@ -1069,11 +1069,15 @@ def test_geometric_prompt_renders_grill_semantics_without_phone_meat_fact() -> N
     assert '### Domain Semantic State' in bundle.user_prompt
     assert '- grill_lid_closed' in bundle.user_prompt
     assert '- inside_grill(chicken)' in bundle.user_prompt
+    assert '- cooked(chicken)' in bundle.user_prompt
     assert 'inside_grill(phone)' not in bundle.user_prompt
     assert '- phone: region=inside_grill' in bundle.user_prompt
     assert '- table: table surface for placing non-target objects that should be removed from the grill' in bundle.user_prompt
-    assert 'meat already reported inside_grill is considered cooked' in bundle.user_prompt
-    assert 'raw meat outside the grill must be placed inside_grill, followed by close(grill_lid) and open(grill_lid)' in bundle.user_prompt
+    assert 'keep object names unchanged; use raw(object) and cooked(object) facts' in bundle.user_prompt
+    assert 'such as chicken, steak, or steak1' in bundle.user_prompt
+    assert 'Raw meat outside the grill becomes cooked after place inside_grill, close(grill_lid), then open(grill_lid)' in bundle.user_prompt
+    assert 'Any visible non-meat object inside_grill is a foreign object' in bundle.user_prompt
+    assert 'should be moved to table before the grill task is complete' in bundle.user_prompt
     assert 'DO NOT place objects here' not in bundle.user_prompt
     assert 'pose=' not in bundle.user_prompt
 

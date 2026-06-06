@@ -917,6 +917,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             pddl_state = derive_grill_semantic_facts(
                 object_region_map,
                 lid_open=lid_info.get('open') if lid_info.get('name') == 'grill_lid' else None,
+                completed_actions=list(self.completed_primitive_actions),
             )
 
         return {

@@ -233,7 +233,7 @@ class GeometricContextBuilder(BaseContextBuilder):
         lines.append('Do not output move, grasp, trajectory, coordinate, PDDL, or implementation steps.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
         if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
-            lines.append('For grill tasks, meat already reported inside_grill is considered cooked; raw meat outside the grill must be placed inside_grill, followed by close(grill_lid) and open(grill_lid), before serving.')
+            lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Raw meat outside the grill becomes cooked after place inside_grill, close(grill_lid), then open(grill_lid). Any visible non-meat object inside_grill is a foreign object and should be moved to table before the grill task is complete.')
         lines.append('Prefer FINAL ACTIONS immediately; do not write step-by-step analysis or repeated alternatives.')
         lines.append('If a rationale is necessary, write at most two short lines before FINAL ACTIONS.')
         lines.append('End every response with a block headed exactly: FINAL ACTIONS:')
