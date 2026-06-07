@@ -9,6 +9,7 @@ from llm_pipeline.planner import MockTextLLMPlanner, TextLLMPlanner
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import (
     FailureEvent,
+    FailureLayer,
     FailureSource,
     FailureStage,
     DirectAction,
@@ -615,6 +616,49 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert segmentation_adapter.live_updates >= 1
 
 
+def test_parser_failure_replan_prompt_includes_structural_repair_rule() -> None:
+    builder = GeometricContextBuilder()
+    builder.symbol_registry = RuntimeSymbolRegistry(
+        actions=('pick', 'place', 'open', 'close'),
+        objects=('steak1', 'plate', 'grill_lid'),
+        regions=('prep_area', 'inside_grill', 'plate_top', 'serving_area'),
+    )
+    state = SceneState(
+        frame_index=2,
+        visible_objects=['steak1', 'plate', 'grill_lid'],
+        valid_regions=['prep_area', 'inside_grill', 'plate_top', 'serving_area'],
+        pddl_state=['raw(steak1)', 'grill_lid_open'],
+        gripper_state={'status': 'empty'},
+        object_region_map={'steak1': 'prep_area', 'plate': 'dish_rack'},
+        object_region_descriptions={'steak1': 'in prep area', 'plate': 'at dish rack'},
+        lid_states={'grill_lid': True},
+    )
+    failure_event = FailureEvent(
+        failure_id='invalid_action_sequence',
+        stage=FailureStage.BEFORE_EXECUTION,
+        source=FailureSource.VALIDATION,
+        action=None,
+        evidence={'line_number': 2},
+        should_replan=True,
+        message="Line 2: Cannot place 'steak1' without first picking it",
+        failure_layer=FailureLayer.LAYER_1,
+    )
+
+    bundle = builder.build_bundle(
+        state=state,
+        goal_text='Cook all raw meat using the grill and serve all cooked meat on the plate.',
+        failure_event=failure_event,
+        previous_actions=[],
+        icl_mode='zero_shot',
+    )
+
+    assert 'checkpoint_type: replanning' in bundle.user_prompt
+    assert "event_message: Line 2: Cannot place 'steak1' without first picking it" in bundle.user_prompt
+    assert 'repair_constraint: the previous output was not executable' in bundle.user_prompt
+    assert 'repair_rule: every place(object, region) must be immediately preceded by pick(object)' in bundle.user_prompt
+    assert 'A place(object, region) action is executable only immediately after pick(object)' in bundle.user_prompt
+
+
 def test_pipeline_can_print_raw_llm_output_for_debugging(capsys) -> None:
     planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_target_area)'])
     snapshot = _snapshot()
@@ -975,6 +1019,22 @@ def test_goal_check_parser_accepts_token_after_reasoning() -> None:
 
     assert result.success is True
     assert result.goal_satisfied is True
+
+
+def test_text_planner_prompt_text_does_not_prefill_planning_by_default() -> None:
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            del messages, kwargs
+            return '<assistant>'
+
+    planner = TextLLMPlanner(model_name='mock-llm', model_alias='mock-llm')
+    planner.tokenizer = FakeTokenizer()
+
+    plan_prompt = planner._build_prompt_text('system', 'user')
+    prefixed_prompt = planner._build_prompt_text('system', 'user', assistant_prefix='CHECK 1: ')
+
+    assert plan_prompt == '<assistant>'
+    assert prefixed_prompt.endswith('CHECK 1: ')
 
 
 def test_initialize_holds_startup_lid_pose_during_settle() -> None:

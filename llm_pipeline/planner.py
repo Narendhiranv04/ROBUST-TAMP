@@ -183,7 +183,7 @@ class TextLLMPlanner:
             error_message="Goal check output must include GOAL_COMPLETE or GOAL_INCOMPLETE.",
         )
 
-    def _build_prompt_text(self, system_prompt: str, user_prompt: str) -> str:
+    def _build_prompt_text(self, system_prompt: str, user_prompt: str, assistant_prefix: str = "") -> str:
         if hasattr(self.tokenizer, "apply_chat_template"):
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -200,11 +200,12 @@ class TextLLMPlanner:
             except (TypeError, ValueError):
                 pass
             try:
-                return self.tokenizer.apply_chat_template(messages, **template_kwargs)
+                prompt_text = self.tokenizer.apply_chat_template(messages, **template_kwargs)
             except TypeError:
                 template_kwargs.pop("enable_thinking", None)
-                return self.tokenizer.apply_chat_template(messages, **template_kwargs)
-        return f"{system_prompt}\n\n{user_prompt}\n"
+                prompt_text = self.tokenizer.apply_chat_template(messages, **template_kwargs)
+            return f"{prompt_text}{assistant_prefix}"
+        return f"{system_prompt}\n\n{user_prompt}\n{assistant_prefix}"
 
     def _decode_generation(self, prompt_text: str, max_new_tokens: int, temperature: float) -> str:
         inputs = self.tokenizer(prompt_text, return_tensors="pt", padding=True)

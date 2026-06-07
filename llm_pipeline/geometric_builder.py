@@ -194,6 +194,11 @@ class GeometricContextBuilder(BaseContextBuilder):
             else:
                 replan_lines.append(f'failed_action: {failure_event.action or "(none)"}')
             replan_lines.append(f'event_message: {failure_event.message}')
+            if event_stage == 'before_execution' and event_layer == 'layer_1':
+                replan_lines.extend([
+                    'repair_constraint: the previous output was not executable; fix the structural error before changing the task strategy',
+                    'repair_rule: every place(object, region) must be immediately preceded by pick(object) for the same object unless the checkpoint says the gripper is already holding that object',
+                ])
 
         # 3. Assemble Prompts
         system_prompt = self.system_prompt_template
@@ -238,15 +243,17 @@ class GeometricContextBuilder(BaseContextBuilder):
         lines.append('Choose the task-level action order needed to satisfy the goal from the current checkpoint.')
         lines.append('Use only visible object names and target-region names listed above.')
         lines.append('Do not output move, grasp, trajectory, coordinate, PDDL, or implementation steps.')
+        lines.append('A place(object, region) action is executable only immediately after pick(object) for the same object, unless the checkpoint says the gripper is already holding that object.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
         if self.symbol_registry is not None and 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
             lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Multiple raw meats can be cooked together by placing all of them inside_grill before one close(grill_lid) and one open(grill_lid).')
             lines.append('Cooking status and serving location are separate: cooked meat still must be physically placed on the serving target named by the goal.')
-        lines.append('Prefer FINAL ACTIONS immediately; do not write step-by-step analysis or repeated alternatives.')
-        lines.append('If a rationale is necessary, write at most two short lines before FINAL ACTIONS.')
-        lines.append('End every response with a block headed exactly: FINAL ACTIONS:')
-        lines.append('Inside FINAL ACTIONS, return one raw action per line with lowercase action names and no numbering, prose, markdown, or commentary.')
-        lines.append('Do not include any text after the FINAL ACTIONS block.')
+        lines.append('Start the response with exactly two short checks, then FINAL ACTIONS:.')
+        lines.append('CHECK 1 must map goal object categories to target regions using the visible object names.')
+        lines.append('CHECK 2 must identify blockers, access constraints, or already-satisfied objects.')
+        lines.append('Do not write additional reasoning, analysis, alternatives, prose, markdown, bullets, numbering, or commentary.')
+        lines.append('Inside FINAL ACTIONS, return one raw action per line with lowercase action names.')
+        lines.append('Do not include any text after the action lines.')
         lines.append('If the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.')
         lines.append('')
         lines.append('### Actions')

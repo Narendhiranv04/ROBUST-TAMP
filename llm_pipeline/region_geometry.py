@@ -45,11 +45,11 @@ REGION_DESCRIPTIONS = {
     "dish_rack": "at dish rack",
 }
 
-OBJECT_REGION_OVERRIDES = {
-    # The plate serving target and the plate top are geometrically colocated in
-    # the grill scenes. For meat, that footprint means "on the plate"; for the
-    # plate object itself, it means the plate has reached the serving target.
-    ("plate", "plate_top"): "serving_area",
+OBJECT_REGION_EXCLUSIONS = {
+    # plate_top is the live surface of the plate. The plate object itself should
+    # never be classified as being "on plate"; it must resolve against external
+    # regions such as serving_area or dish_rack.
+    ("plate", "plate_top"),
 }
 
 REGION_PADDING = {
@@ -150,14 +150,25 @@ def resolve_object_regions(
     valid_regions: Iterable[str] | None = None,
 ) -> tuple[Dict[str, str], Dict[str, str]]:
     """Resolve every object pose to canonical object-region maps."""
+    normalized_map = _normalize_region_map(region_map)
+    ordered_regions = _ordered_regions(valid_regions or normalized_map.keys(), normalized_map)
     object_region_map = {}
     object_region_descriptions = {}
     for object_name, pose in (pose_map or {}).items():
         if object_name in NON_REGION_OBJECTS:
             continue
-        region_name, description = resolve_region(tuple(pose[:3]), region_map, valid_regions)
-        region_name = OBJECT_REGION_OVERRIDES.get((object_name, region_name), region_name)
-        description = REGION_DESCRIPTIONS.get(region_name, description)
+        region_name = None
+        description = None
+        for candidate in ordered_regions:
+            if (object_name, candidate) in OBJECT_REGION_EXCLUSIONS:
+                continue
+            if point_matches_region(tuple(pose[:3]), candidate, normalized_map[candidate]):
+                region_name = candidate
+                description = REGION_DESCRIPTIONS.get(candidate, candidate)
+                break
+        if region_name is None:
+            region_name = "table"
+            description = REGION_DESCRIPTIONS["table"]
         object_region_map[object_name] = region_name
         object_region_descriptions[object_name] = description
     return object_region_map, object_region_descriptions

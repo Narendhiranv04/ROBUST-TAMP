@@ -59,7 +59,7 @@ CANONICAL_REGION_SCENE_OBJECTS = {
     "pantry_area": "groceries_boundary",
     "table_target_area": "placement_boundary",
     "inside_grill": "grill_boundary",
-    "plate_top": "plate_boundary",
+    "plate_top": "plate",
     "serving_area": "plate_boundary",
 }
 

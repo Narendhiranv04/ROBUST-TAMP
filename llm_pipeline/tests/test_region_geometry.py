@@ -131,3 +131,22 @@ def test_plate_object_on_plate_footprint_resolves_to_serving_area() -> None:
     assert descriptions['plate'] == 'in serving area'
     assert object_region_map['chicken'] == 'plate_top'
     assert descriptions['chicken'] == 'on plate'
+
+
+def test_plate_top_live_plate_does_not_make_plate_served_at_rack() -> None:
+    pose_map = {
+        'plate': (1.0, 1.0, 0.08),
+        'chicken': (1.0, 1.0, 0.10),
+    }
+    region_map = {
+        'plate_top': _bounds(0.9, 0.9, 0.0, 1.1, 1.1, 0.08),
+        'dish_rack': _bounds(0.85, 0.85, 0.0, 1.15, 1.15, 0.12),
+        'serving_area': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.08),
+    }
+
+    object_region_map, descriptions = resolve_object_regions(pose_map, region_map)
+
+    assert object_region_map['plate'] == 'dish_rack'
+    assert descriptions['plate'] == 'at dish rack'
+    assert object_region_map['chicken'] == 'plate_top'
+    assert descriptions['chicken'] == 'on plate'

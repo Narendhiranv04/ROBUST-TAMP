@@ -43,7 +43,7 @@ class VariantSpec:
 KITCHEN_GOAL_K1 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
 KITCHEN_GOAL_K2 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
 KITCHEN_GOAL_K3 = 'move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box'
-GRILL_GOAL = 'Cook all raw meat using the grill and serve all cooked meat on the plate in the serving area.'
+GRILL_GOAL = 'COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.'
 GRILL_GOAL_G1 = GRILL_GOAL
 GRILL_GOAL_G2 = GRILL_GOAL
 GRILL_GOAL_G3 = GRILL_GOAL

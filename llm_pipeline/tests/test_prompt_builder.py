@@ -114,7 +114,10 @@ def test_prompt_bundle_stays_text_only() -> None:
     assert 'Respect ACCESS CONSTRAINTS' in user_prompt
     assert 'open(box_lid)' in user_prompt
     assert 'FINAL ACTIONS:' in user_prompt
-    assert 'Inside FINAL ACTIONS, return executable action lines only, using lowercase action names.' in user_prompt
+    assert 'Start the response with exactly two short checks, then FINAL ACTIONS:.' in user_prompt
+    assert 'CHECK 1 must map goal object categories to target regions using the visible object names.' in user_prompt
+    assert 'CHECK 2 must identify blockers, access constraints, or already-satisfied objects.' in user_prompt
+    assert 'Do not write additional reasoning, analysis, alternatives, prose, markdown, bullets, numbering, or commentary.' in user_prompt
     assert 'state_text' not in user_prompt
     assert 'region=inside_box' in user_prompt
     assert 'visual_mask_regions=inside_box' in user_prompt
@@ -134,6 +137,8 @@ def test_zero_shot_system_prompt_has_no_shared_exemplar() -> None:
     assert 'SHARED FEW-SHOT EXEMPLAR' not in system_prompt
     assert 'Valid action lines:' not in system_prompt
     assert 'FINAL ACTIONS:' in system_prompt
+    assert 'CHECK 1:' in system_prompt
+    assert 'CHECK 2:' in system_prompt
     assert 'Plan only from the current scene evidence' in system_prompt
     assert 'Do not invent hidden objects' in system_prompt
     assert 'Do not output robot motions, grasp poses, trajectories, coordinates, PDDL predicates' in system_prompt

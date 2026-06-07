@@ -34,5 +34,5 @@ def test_grill_regions_map_to_scene_objects() -> None:
     assert scene_object_for_region("inside_grill") == "grill_boundary"
     assert scene_object_for_region("grill-top") == "grill_boundary"
     assert scene_object_for_region("prep_area") == "prep_area"
-    assert scene_object_for_region("plate_top") == "plate_boundary"
+    assert scene_object_for_region("plate_top") == "plate"
     assert scene_object_for_region("serving_area") == "plate_boundary"

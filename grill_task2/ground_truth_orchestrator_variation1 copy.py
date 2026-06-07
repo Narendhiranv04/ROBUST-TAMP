@@ -347,8 +347,23 @@ def _validation_region_name(env, region_name):
     return region_name
 
 
+def _is_plate_region(region_name):
+    return region_name in {"plate-top", "plate_top"}
+
+
+def _is_plate_object(obj):
+    try:
+        return str(obj.get_name()).lower() == "plate"
+    except Exception:
+        return False
+
+
 def _is_in_region(env, obj, region_name, tol_xy=0.02, tol_z=0.05):
     region = _region_object(env, region_name)
+    if _is_plate_region(region_name) and not _is_plate_object(obj):
+        live_plate = _region_object(env, "plate")
+        if live_plate is not None:
+            region = live_plate
     if region is None or obj is None:
         return False
     x, y, z = obj.get_position()
@@ -358,6 +373,31 @@ def _is_in_region(env, obj, region_name, tol_xy=0.02, tol_z=0.05):
         and (min_y - tol_xy) <= y <= (max_y + tol_xy)
         and (min_z - tol_z) <= z <= (max_z + tol_z)
     )
+
+
+def _attach_to_plate_after_place(env, pr, target_obj, target_region):
+    if not _is_plate_region(target_region) or target_obj is None or _is_plate_object(target_obj):
+        return False
+    plate = _region_object(env, "plate")
+    if plate is None:
+        return False
+    try:
+        target_obj.set_parent(plate, keep_in_place=True)
+    except TypeError:
+        target_obj.set_parent(plate)
+    try:
+        target_obj.set_dynamic(False)
+        target_obj.set_collidable(True)
+        target_obj.set_respondable(True)
+    except Exception:
+        pass
+    step(pr, 4)
+    try:
+        obj_name = target_obj.get_name()
+    except Exception:
+        obj_name = "<unknown>"
+    print(f"[plate-top] Attached {obj_name} to live plate after placement.")
+    return True
 
 
 def _round_list(values, digits=4, max_items=None):
@@ -693,6 +733,10 @@ def _classify_meats(env, meats):
 
 def _region_slot_pose(env, obj, region_name, slot_idx=0, slot_count=1):
     region = _region_object(env, region_name)
+    if _is_plate_region(region_name) and not _is_plate_object(obj):
+        live_plate = _region_object(env, "plate")
+        if live_plate is not None:
+            region = live_plate
     if region is None:
         return env.sample_stable_pose(obj, region_name)
 
@@ -801,6 +845,14 @@ def grasp_object(env, pr, target_obj, is_plate=False):
 
     is_flat_pick = (not is_plate) and (("phone" in obj_name) or (obj_height < 0.03 and obj_span > 0.04))
     is_meat_pick = (not is_plate) and any(label in obj_name for label in ("chicken", "steak", "meat"))
+
+    try:
+        target_obj.set_parent(None, keep_in_place=True)
+    except Exception:
+        try:
+            target_obj.set_parent(None)
+        except Exception:
+            pass
 
     try:
         target_obj.set_collidable(True)
@@ -4820,8 +4872,9 @@ class GrillPrimitiveTransferExecutor(GrillPrimitiveExecutorBase):
                 self.pr,
                 self.target_obj,
                 drop_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_DROP_STEPS", "30")),
-                    settle_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_SETTLE_STEPS", "14")),
+                settle_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_SETTLE_STEPS", "14")),
             )
+            _attach_to_plate_after_place(self.env, self.pr, self.target_obj, self.target_region)
         step(self.pr, 10)
         self._move_back_home("place->home")
         return self._validate_transfer_complete()
