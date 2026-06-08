@@ -244,8 +244,10 @@ class RemoteTextLLMPlanner:
         max_new_tokens: int = 64,
         temperature: float = 0.0,
         held_object: Optional[str] = None,
+        image: Optional[Any] = None,
     ) -> GoalCheckResult:
         started_at = time.time()
+        image_b64 = self._encode_image_base64(image)
         request_data = {
             'system_prompt': system_prompt,
             'user_prompt': user_prompt,
@@ -254,6 +256,8 @@ class RemoteTextLLMPlanner:
             'temperature': float(temperature),
             'held_object': held_object,
         }
+        if image_b64 is not None:
+            request_data['image_base64'] = image_b64
         try:
             response = requests.post(
                 f'{self.server_url}/check-goal',

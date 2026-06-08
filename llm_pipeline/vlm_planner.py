@@ -153,6 +153,7 @@ class VLMPlanner(BasePlanner):
         max_new_tokens: int = 64,
         temperature: float = 0.0,
         held_object: str | None = None,
+        image=None,
     ) -> GoalCheckResult:
         del icl_mode, held_object
         if not self.loaded:
@@ -168,17 +169,27 @@ class VLMPlanner(BasePlanner):
         self.last_request_summary = {
             "model_type": "vlm",
             "request_type": "goal_check",
-            "text_only": True,
-            "use_vision": False,
-            "image_present": False,
+            "text_only": image is None,
+            "use_vision": image is not None,
+            "image_present": image is not None,
+            "image_shape": list(getattr(image, "shape", ())) if image is not None else [],
         }
         try:
-            raw_output = self.legacy_planner._generate_text_output(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-            )
+            if image is not None:
+                raw_output = self.legacy_planner._generate_multimodal_output(
+                    image=image,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                )
+            else:
+                raw_output = self.legacy_planner._generate_text_output(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                )
             result = self._parse_goal_check_output(raw_output)
             result.inference_time = time.time() - start_time
             return result

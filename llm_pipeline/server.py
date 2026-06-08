@@ -84,6 +84,7 @@ class GoalCheckRequest(BaseModel):
     max_new_tokens: int = 64
     temperature: float = 0.0
     held_object: Optional[str] = None
+    image_base64: Optional[str] = None
 
 
 class GoalCheckResponse(BaseModel):
@@ -200,6 +201,10 @@ class LLMServer:
         )
 
     def check_goal_completion(self, request: GoalCheckRequest) -> GoalCheckResponse:
+        image = self._decode_image_base64(request.image_base64) if request.image_base64 else None
+        kwargs = {}
+        if image is not None:
+            kwargs['image'] = image
         result = self.planner.check_goal_completion(
             system_prompt=request.system_prompt,
             user_prompt=request.user_prompt,
@@ -207,6 +212,7 @@ class LLMServer:
             max_new_tokens=request.max_new_tokens,
             temperature=request.temperature,
             held_object=request.held_object,
+            **kwargs,
         )
         if hasattr(self.planner, 'get_debug_info'):
             debug = self.planner.get_debug_info()

@@ -626,14 +626,17 @@ class LLMOnlyReplanningPipeline:
             )
 
         system_prompt, user_prompt = self._build_goal_check_prompts(goal_text)
-        return checker(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            icl_mode=self.config.icl_mode,
-            max_new_tokens=self.config.goal_check_max_new_tokens,
-            temperature=self.config.goal_check_temperature,
-            held_object=getattr(self.executor, 'held_object', None),
-        )
+        kwargs = {
+            'system_prompt': system_prompt,
+            'user_prompt': user_prompt,
+            'icl_mode': self.config.icl_mode,
+            'max_new_tokens': self.config.goal_check_max_new_tokens,
+            'temperature': self.config.goal_check_temperature,
+            'held_object': getattr(self.executor, 'held_object', None),
+        }
+        if self.config.enable_vision:
+            kwargs['image'] = self._capture_composite_image()
+        return checker(**kwargs)
 
     def _variant_id_for_goal_check(self) -> str:
         configured = (self.config.variant_id or '').strip().upper()
