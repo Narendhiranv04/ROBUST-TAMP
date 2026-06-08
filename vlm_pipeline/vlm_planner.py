@@ -466,8 +466,6 @@ class VLMPlanner:
         kwargs: Dict[str, Any] = {
             "max_new_tokens": capped_tokens,
             "do_sample": temperature > 0,
-            "repetition_penalty": 1.2,
-            "no_repeat_ngram_size": 3,
         }
         if temperature > 0:
             kwargs["temperature"] = temperature
@@ -785,6 +783,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                 return "place"
             if n in {"open", "open_lid", "openlid", "open_box_lid", "open_boxlid", "open_box"}:
                 return "open-lid"
+            if n in {"close", "close_lid", "closelid", "close_grill_lid", "close_grill"}:
+                return "close-lid"
             if n in {"move_object_to", "move_to", "move_object", "move"}:
                 return "move"
             return n.replace("_", "-")
@@ -820,6 +820,15 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                     print(f"Warning: {action_name} expects 1 arg, got {len(args)}")
                     return False
                 _append_action("open-lid", args)
+                return len(actions) >= 25
+
+            if action_name == "close-lid":
+                if len(args) == 0:
+                    args = ["box_lid"]
+                elif len(args) != 1:
+                    print(f"Warning: {action_name} expects 1 arg, got {len(args)}")
+                    return False
+                _append_action("close-lid", args)
                 return len(actions) >= 25
 
             if action_name == "move":

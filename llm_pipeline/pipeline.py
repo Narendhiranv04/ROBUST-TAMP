@@ -45,6 +45,13 @@ except ImportError:
 PROMPT_MODE_SEGMENTATION_TEXT = 'segmentation_text_only'
 PROMPT_MODE_VLM_MULTIMODAL = 'segmentation_text_image'
 VLM_CAMERA_NAMES = ('left', 'right', 'overhead', 'wrist', 'front')
+VLM_CAMERA_ALIASES = {
+    'left': ('left', 'cam_over_shoulder_left'),
+    'right': ('right', 'cam_over_shoulder_right'),
+    'overhead': ('overhead', 'cam_overhead'),
+    'wrist': ('wrist', 'cam_wrist'),
+    'front': ('front', 'cam_front'),
+}
 
 
 @dataclass
@@ -453,7 +460,12 @@ class LLMOnlyReplanningPipeline:
         frames: Dict[str, np.ndarray] = {}
         cameras = getattr(self.env, 'cams', {}) or {}
         for camera_name in VLM_CAMERA_NAMES:
-            camera = cameras.get(camera_name) if isinstance(cameras, dict) else None
+            camera = None
+            if isinstance(cameras, dict):
+                for candidate_name in VLM_CAMERA_ALIASES.get(camera_name, (camera_name,)):
+                    camera = cameras.get(candidate_name)
+                    if camera is not None:
+                        break
             if camera is None:
                 continue
             try:

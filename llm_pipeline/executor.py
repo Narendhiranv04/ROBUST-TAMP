@@ -276,6 +276,14 @@ class GrillBundlingHandler(AbstractBundlingHandler):
         return self._execute_lid_motion("close", "Close")
 
     def _execute_lid_motion(self, direction: str, label: str) -> Tuple[bool, str]:
+        current_open = infer_grill_lid_open(self.env)
+        if direction == "open" and current_open is True:
+            print("[GRILL-BUNDLE] Grill lid is already open; skipping open ritual.")
+            return True, ""
+        if direction == "close" and current_open is False:
+            print("[GRILL-BUNDLE] Grill lid is already closed; skipping close ritual.")
+            return True, ""
+
         print(f"[GRILL-BUNDLE] --- Starting GT {label} Ritual ---")
         self.executor.go_home()
         self._sync_external_step_callback()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time
 from typing import Any, Dict
-from llm_pipeline.pipeline_types import BasePlanner, PromptBundle, PlanResult, DirectAction
+from llm_pipeline.pipeline_types import BasePlanner, PromptBundle, PlanResult, DirectAction, GoalCheckResult
 
 
 class VLMPlanner(BasePlanner):
@@ -77,7 +77,12 @@ class VLMPlanner(BasePlanner):
         actions = []
         if legacy_result.success:
             for skeleton in legacy_result.skeleton:
-                action_name = "open" if skeleton.action_name == "open-lid" else skeleton.action_name
+                if skeleton.action_name == "open-lid":
+                    action_name = "open"
+                elif skeleton.action_name == "close-lid":
+                    action_name = "close"
+                else:
+                    action_name = skeleton.action_name
                 actions.append(DirectAction(
                     action_name=action_name,
                     args=tuple(skeleton.args)
@@ -90,6 +95,101 @@ class VLMPlanner(BasePlanner):
             inference_time=time.time() - start_time,
             error_message=legacy_result.error_message
         )
+
+    def _parse_goal_check_output(self, raw_output: str) -> GoalCheckResult:
+        text = (raw_output or "").strip()
+        normalized = text.upper()
+        if normalized.startswith("GOAL_COMPLETE"):
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=True,
+                raw_output=raw_output,
+                inference_time=0.0,
+            )
+        if normalized.startswith("GOAL_INCOMPLETE"):
+            reason = text.split(":", 1)[1].strip() if ":" in text else "Goal is not complete."
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=False,
+                raw_output=raw_output,
+                inference_time=0.0,
+                reason=reason or "Goal is not complete.",
+            )
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for line in lines:
+            cleaned = line.lstrip("-*0123456789. )").strip()
+            upper_line = cleaned.upper()
+            if "GOAL_INCOMPLETE" in upper_line:
+                reason = cleaned.split(":", 1)[1].strip() if ":" in cleaned else "Goal is not complete."
+                return GoalCheckResult(
+                    success=True,
+                    goal_satisfied=False,
+                    raw_output=raw_output,
+                    inference_time=0.0,
+                    reason=reason or "Goal is not complete.",
+                )
+            if "GOAL_COMPLETE" in upper_line:
+                return GoalCheckResult(
+                    success=True,
+                    goal_satisfied=True,
+                    raw_output=raw_output,
+                    inference_time=0.0,
+                )
+
+        return GoalCheckResult(
+            success=False,
+            goal_satisfied=False,
+            raw_output=raw_output,
+            inference_time=0.0,
+            error_message="Goal check output must include GOAL_COMPLETE or GOAL_INCOMPLETE.",
+        )
+
+    def check_goal_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 64,
+        temperature: float = 0.0,
+        held_object: str | None = None,
+    ) -> GoalCheckResult:
+        del icl_mode, held_object
+        if not self.loaded:
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
+                raw_output="",
+                inference_time=0.0,
+                error_message="Model not loaded. Call load_model() first.",
+            )
+
+        start_time = time.time()
+        self.last_request_summary = {
+            "model_type": "vlm",
+            "request_type": "goal_check",
+            "text_only": True,
+            "use_vision": False,
+            "image_present": False,
+        }
+        try:
+            raw_output = self.legacy_planner._generate_text_output(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+            )
+            result = self._parse_goal_check_output(raw_output)
+            result.inference_time = time.time() - start_time
+            return result
+        except Exception as exc:
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
+                raw_output="",
+                inference_time=time.time() - start_time,
+                error_message=str(exc),
+            )
 
     def get_debug_info(self) -> Dict[str, Any]:
         return {
