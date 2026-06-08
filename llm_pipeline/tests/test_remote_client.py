@@ -214,7 +214,7 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
             visible_objects=['mug2'],
             valid_regions=['table_target_area'],
             icl_mode='zero_shot',
-            metadata={'held_object': 'mug2'},
+            metadata={'held_object': 'mug2', 'max_new_tokens': 777, 'temperature': 0.2},
         )
         result = planner.plan(bundle)
 
@@ -223,6 +223,8 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
             'place(mug2, table_target_area)',
         ]
         assert fake_requests.post_calls[0][1]['held_object'] == 'mug2'
+        assert fake_requests.post_calls[0][1]['max_new_tokens'] == 777
+        assert fake_requests.post_calls[0][1]['temperature'] == 0.2
     finally:
         client_module.requests = old_requests
         client_module.HAS_REQUESTS = old_has_requests
@@ -259,6 +261,41 @@ def test_remote_planner_checks_goal_completion() -> None:
         assert result.reason == 'one mug remains outside the box'
         assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/check-goal'
         assert fake_requests.post_calls[0][1]['max_new_tokens'] == 64
+    finally:
+        client_module.requests = old_requests
+        client_module.HAS_REQUESTS = old_has_requests
+
+
+def test_remote_planner_sends_goal_check_image_payload() -> None:
+    fake_requests = _FakeRequests(
+        health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen-vl', 'model_name': 'qwen-vl', 'model_type': 'vlm', 'prompt_mode': 'segmentation_text_image', 'gpu_available': True},
+        plan_payload={},
+        goal_check_payload={
+            'success': True,
+            'goal_satisfied': True,
+            'raw_output': 'GOAL_COMPLETE',
+            'inference_time': 0.05,
+            'reason': '',
+            'error_message': None,
+        },
+    )
+    old_requests = client_module.requests
+    old_has_requests = client_module.HAS_REQUESTS
+    client_module.requests = fake_requests
+    client_module.HAS_REQUESTS = True
+    try:
+        planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
+        result = planner.check_goal_completion(
+            system_prompt='system',
+            user_prompt='user',
+            icl_mode='zero_shot',
+            held_object=None,
+            image=np.zeros((2, 3, 3), dtype=np.uint8),
+        )
+
+        assert result.goal_satisfied is True
+        payload = fake_requests.post_calls[0][1]
+        assert payload['image_base64']
     finally:
         client_module.requests = old_requests
         client_module.HAS_REQUESTS = old_has_requests

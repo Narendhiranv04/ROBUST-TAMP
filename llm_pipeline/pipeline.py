@@ -6,7 +6,7 @@ import os
 import sys
 import time
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from llm_pipeline.catalog import resolve_llm_model, resolve_planner_model, resolve_vlm_model
@@ -404,6 +404,13 @@ class LLMOnlyReplanningPipeline:
             ],
             icl_mode=self.config.icl_mode
         )
+        bundle_metadata = dict(getattr(bundle, 'metadata', {}) or {})
+        bundle_metadata.update({
+            'held_object': getattr(self.executor, 'held_object', None),
+            'max_new_tokens': int(self.config.planner_max_new_tokens),
+            'temperature': float(self.config.planner_temperature),
+        })
+        bundle = replace(bundle, metadata=bundle_metadata)
 
         is_replan = failure_event is not None
         cycle_num = len(self.cycles) + 1
@@ -581,8 +588,11 @@ class LLMOnlyReplanningPipeline:
         state._original_snapshot = snapshot
         return state
 
-    def _build_goal_check_prompts(self, goal_text: str) -> Tuple[str, str]:
+    def _build_goal_check_prompts(self, goal_text: str) -> Tuple[str, str, Optional[np.ndarray]]:
         state = self._build_scene_state()
+        goal_check_image = None
+        if self.config.enable_vision and state.images:
+            goal_check_image = state.images[0]
         bundle = self.context_builder.build_bundle(
             state=state,
             goal_text=goal_text,
@@ -612,7 +622,7 @@ class LLMOnlyReplanningPipeline:
             f'GOAL:\n{goal_text}\n\n'
             'Is the goal fully complete in the current state?'
         )
-        return system_prompt, user_prompt
+        return system_prompt, user_prompt, goal_check_image
 
     def _check_goal_completion(self, goal_text: str) -> GoalCheckResult:
         checker = getattr(self.planner, 'check_goal_completion', None)
@@ -625,7 +635,7 @@ class LLMOnlyReplanningPipeline:
                 reason='goal_check_not_supported_by_planner',
             )
 
-        system_prompt, user_prompt = self._build_goal_check_prompts(goal_text)
+        system_prompt, user_prompt, goal_check_image = self._build_goal_check_prompts(goal_text)
         kwargs = {
             'system_prompt': system_prompt,
             'user_prompt': user_prompt,
@@ -635,7 +645,15 @@ class LLMOnlyReplanningPipeline:
             'held_object': getattr(self.executor, 'held_object', None),
         }
         if self.config.enable_vision:
-            kwargs['image'] = self._capture_composite_image()
+            if goal_check_image is None:
+                return GoalCheckResult(
+                    success=False,
+                    goal_satisfied=False,
+                    raw_output='',
+                    inference_time=0.0,
+                    error_message='VLM goal check requires an image, but no image was captured.',
+                )
+            kwargs['image'] = goal_check_image
         return checker(**kwargs)
 
     def _variant_id_for_goal_check(self) -> str:

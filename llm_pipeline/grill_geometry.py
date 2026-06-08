@@ -27,8 +27,10 @@ def _normalize_region(region_name: object) -> str:
     token = _normalize_token(region_name)
     if token in {"grill", "grill_top", "grill_boundary"}:
         return "inside_grill"
-    if token in {"plate", "plate_top", "plate_boundary"}:
+    if token in {"plate", "plate_top"}:
         return "plate_top"
+    if token in {"plate_boundary", "serving_area"}:
+        return "serving_area"
     return token
 
 

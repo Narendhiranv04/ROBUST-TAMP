@@ -47,6 +47,28 @@ def test_grill_semantic_facts_treat_grill_top_as_inside_grill() -> None:
     assert "plate_at_dish_rack" in facts
 
 
+def test_grill_semantic_facts_treat_plate_boundary_as_serving_area() -> None:
+    facts = derive_grill_semantic_facts(
+        {
+            "plate": "plate_boundary",
+            "chicken": "plate_top",
+        },
+        lid_open=True,
+        completed_actions=[
+            "open(grill_lid)",
+            "pick(chicken)",
+            "place(chicken, inside_grill)",
+            "close(grill_lid)",
+            "open(grill_lid)",
+            "pick(chicken)",
+            "place(chicken, plate_top)",
+        ],
+    )
+
+    assert "plate_at_boundary" in facts
+    assert "on_plate(chicken)" in facts
+
+
 def test_grill_semantic_facts_mark_newly_placed_meat_raw_until_lid_cycle() -> None:
     facts = derive_grill_semantic_facts(
         {"chicken": "inside_grill"},

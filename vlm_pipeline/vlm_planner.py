@@ -9,6 +9,7 @@ import os
 import sys
 import re
 import time
+import inspect
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
@@ -106,6 +107,7 @@ class VLMPlanner:
         'pick': 1,      # pick(object)
         'place': 2,     # place(object, region)
         'open-lid': 1,  # open-lid(lid)
+        'close-lid': 1, # close-lid(lid)
         'open_lid': 1,  # alternate format
     }
 
@@ -483,11 +485,29 @@ Your previous answer was not parseable as executable actions:
 
 Rewrite the answer so it ends with this exact block:
 FINAL ACTIONS:
-pick(object)
-place(object, region)
-open-lid(box_lid)
+<one executable action per line>
 
+Allowed forms are pick(object), place(object, region), open(lid_object), and close(lid_object).
+Use only the visible object names and target-region names listed in the prompt.
+Do not copy placeholder names such as object, region, or lid_object.
 Use only the needed actions. Do not include any text after the FINAL ACTIONS block."""
+
+    def _apply_chat_template(self, messages) -> str:
+        template_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        try:
+            signature = inspect.signature(self.processor.apply_chat_template)
+            if "enable_thinking" in signature.parameters:
+                template_kwargs["enable_thinking"] = False
+        except (TypeError, ValueError):
+            pass
+        try:
+            return self.processor.apply_chat_template(messages, **template_kwargs)
+        except TypeError:
+            template_kwargs.pop("enable_thinking", None)
+            return self.processor.apply_chat_template(messages, **template_kwargs)
 
     def _generate_multimodal_output(self,
                                     image: np.ndarray,
@@ -515,11 +535,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                 }
             ]
 
-            text = self.processor.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            text = self._apply_chat_template(messages)
             print(f"[VLM Planner] Input text length: {len(text)}")
             print(f"[VLM Planner] Input text preview: {text[:200]}...")
 
@@ -574,11 +590,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
             {"role": "user", "content": user_prompt}
         ]
         if hasattr(self.processor, "apply_chat_template"):
-            text = self.processor.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            text = self._apply_chat_template(messages)
         else:
             text = f"{system_prompt}\n\n{user_prompt}\n"
 
@@ -928,12 +940,12 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                     errors.append(f"Step {i+1}: Cannot place {obj}, currently holding {holding}")
                 holding = None
 
-            elif action.action_name == 'open-lid':
+            elif action.action_name in {'open-lid', 'close-lid'}:
                 if len(action.args) != 1:
-                    errors.append(f"Step {i+1}: open-lid expects 1 argument")
+                    errors.append(f"Step {i+1}: {action.action_name} expects 1 argument")
                     continue
                 if holding is not None:
-                    errors.append(f"Step {i+1}: Cannot open lid while holding {holding}")
+                    errors.append(f"Step {i+1}: Cannot operate lid while holding {holding}")
 
         return len(errors) == 0, errors
 

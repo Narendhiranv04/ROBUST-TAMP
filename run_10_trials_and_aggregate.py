@@ -264,7 +264,9 @@ def parse_args() -> argparse.Namespace:
     display.add_argument("--gui", action="store_false", dest="headless")
     parser.add_argument("--aggregate-only", action="store_true", help="Skip running trials and aggregate existing records.")
     parser.add_argument("--show-llm-output", action="store_true", help="Print raw LLM/VLM planner output for debugging")
-    parser.add_argument("--no-goal-check", dest="goal_check", action="store_false", help="Disable LLM goal-completion verification.")
+    goal_check = parser.add_mutually_exclusive_group()
+    goal_check.add_argument("--goal-check", dest="goal_check", action="store_true", help="Enable goal-completion verification during execution.")
+    goal_check.add_argument("--no-goal-check", dest="goal_check", action="store_false", help="Disable goal-completion verification during execution.")
     parser.set_defaults(goal_check=False)
     return parser.parse_args()
 

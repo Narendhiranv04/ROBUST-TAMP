@@ -179,6 +179,37 @@ class BundleCapturingPlanner:
         }
 
 
+class VisionGoalCheckPlanner:
+    def __init__(self):
+        self.model_alias = 'mock-vlm'
+        self.model_name = 'mock-vlm'
+        self.loaded = True
+        self.goal_check_images = []
+
+    def load_model(self):
+        self.loaded = True
+        return True
+
+    def check_goal_completion(
+        self,
+        system_prompt,
+        user_prompt,
+        icl_mode,
+        max_new_tokens=64,
+        temperature=0.0,
+        held_object=None,
+        image=None,
+    ):
+        del system_prompt, user_prompt, icl_mode, max_new_tokens, temperature, held_object
+        self.goal_check_images.append(image)
+        return GoalCheckResult(
+            success=True,
+            goal_satisfied=True,
+            raw_output='GOAL_COMPLETE',
+            inference_time=0.01,
+        )
+
+
 class FakeSegmentationAdapter:
     def __init__(self, snapshot):
         self.snapshot = snapshot
@@ -685,6 +716,63 @@ def test_pipeline_can_print_raw_llm_output_for_debugging(capsys) -> None:
     assert '[LLM] Raw output text:' in output
     assert 'pick(mug2)' in output
     assert 'place(mug2, table_target_area)' in output
+
+
+def test_plan_bundle_carries_generation_settings_for_plan_interface() -> None:
+    planner = BundleCapturingPlanner()
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            icl_mode='zero_shot',
+            planner_max_new_tokens=777,
+            planner_temperature=0.2,
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=FakeEnv()) is True
+    pipeline.plan_once('Open the lid.', failure_event=None, silent=True)
+
+    metadata = planner.bundles[0].metadata
+    assert metadata['max_new_tokens'] == 777
+    assert metadata['temperature'] == 0.2
+    assert 'held_object' in metadata
+
+
+def test_vlm_goal_check_uses_image_from_same_scene_capture() -> None:
+    planner = VisionGoalCheckPlanner()
+    snapshot = _snapshot()
+    segmentation_adapter = FakeSegmentationAdapter(snapshot)
+    failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
+    executor = FakeExecutor()
+    env = FakeVisionEnv()
+    pipeline = LLMOnlyReplanningPipeline(
+        config=LLMPipelineConfig(
+            model_alias='mock-vlm',
+            icl_mode='zero_shot',
+            enable_vision=True,
+            model_type='vlm',
+        ),
+        planner=planner,
+        segmentation_adapter=segmentation_adapter,
+        failure_checker=failure_checker,
+        executor=executor,
+    )
+
+    assert pipeline.initialize(env=env) is True
+    result = pipeline._check_goal_completion('Move mug2 to the table target area.')
+
+    assert result.goal_satisfied is True
+    assert planner.goal_check_images
+    assert planner.goal_check_images[0].shape == (8, 15, 3)
+    assert all(camera.capture_calls == 1 for camera in env.cams.values())
 
 
 def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:

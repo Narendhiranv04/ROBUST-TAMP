@@ -51,6 +51,35 @@ def test_repeated_runner_can_enable_raw_llm_output() -> None:
     assert "--show-llm-output" in command
 
 
+def test_repeated_runner_parse_args_can_enable_goal_check(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_10_trials_and_aggregate.py",
+            "--model",
+            "qwen",
+            "--variant",
+            "K1",
+            "--goal-check",
+        ],
+    )
+
+    args = runner.parse_args()
+
+    assert args.goal_check is True
+
+
+def test_repeated_runner_emits_goal_check_flag_when_enabled() -> None:
+    args = _args()
+    args.goal_check = True
+
+    command = runner._trial_command(args, 1, Path("trial_001"))
+
+    assert "--goal-check" in command
+    assert "--no-goal-check" not in command
+
+
 def test_aggregate_separates_object_region_success_from_raw_success() -> None:
     records = [
         {

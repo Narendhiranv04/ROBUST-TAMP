@@ -203,7 +203,7 @@ class LLMServer:
     def check_goal_completion(self, request: GoalCheckRequest) -> GoalCheckResponse:
         image = self._decode_image_base64(request.image_base64) if request.image_base64 else None
         kwargs = {}
-        if image is not None:
+        if image is not None and self.model_spec.model_type == 'vlm':
             kwargs['image'] = image
         result = self.planner.check_goal_completion(
             system_prompt=request.system_prompt,
@@ -282,7 +282,10 @@ def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda'
     async def check_goal_completion(request: GoalCheckRequest):
         if not server.loaded:
             raise HTTPException(status_code=503, detail='Model not loaded')
-        return server.check_goal_completion(request)
+        try:
+            return server.check_goal_completion(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get('/')
     async def root():

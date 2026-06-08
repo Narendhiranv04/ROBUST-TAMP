@@ -120,11 +120,15 @@ class RemoteTextLLMPlanner:
         held_object = metadata.get('held_object')
         if held_object is None and hasattr(bundle, 'state'):
             held_object = bundle.state.gripper_state.get('holding')
+        max_new_tokens = int(metadata.get('max_new_tokens', 4096) or 4096)
+        temperature = float(metadata.get('temperature', 0.0) or 0.0)
         return self.generate_plan(
             system_prompt=bundle.system_prompt,
             user_prompt=bundle.user_prompt,
             icl_mode=bundle.icl_mode,
             held_object=held_object,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
             bundle=bundle # Pass bundle for image extraction
         )
 
