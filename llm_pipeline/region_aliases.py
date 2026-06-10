@@ -18,7 +18,8 @@ KITCHEN_REGION_ALIASES = {
     "shelf-lower": "cupboard_shelf",
     "shelf_lower": "cupboard_shelf",
     "groceries_boundary": "pantry_area",
-    "placement_boundary": "table_target_area",
+    "table_target_area": "table_staging_area",
+    "placement_boundary": "table_staging_area",
 }
 
 GRILL_REGION_ALIASES = {
@@ -32,7 +33,7 @@ GRILL_REGION_ALIASES = {
 
 CANONICAL_KITCHEN_REGION_ORDER = (
     "table",
-    "table_target_area",
+    "table_staging_area",
     "cupboard_shelf",
     "inside_box",
     "pantry_area",
@@ -57,15 +58,15 @@ CANONICAL_REGION_SCENE_OBJECTS = {
     "box_lid_top": "box_lid",
     "cupboard_shelf": "cupboard_boundary",
     "pantry_area": "groceries_boundary",
-    "table_target_area": "placement_boundary",
+    "table_staging_area": "placement_boundary",
     "inside_grill": "grill_boundary",
     "plate_top": "plate",
     "serving_area": "plate_boundary",
 }
 
 REGION_SEMANTICS = {
-    "table": "broad table surface; DO NOT place objects here (use table_target_area instead)",
-    "table_target_area": "specific target area on the table for objects that should be moved onto the table",
+    "table": "broad table surface; DO NOT place objects here (use table_staging_area instead)",
+    "table_staging_area": "specific staging area on the table for objects that should be temporarily placed on the table",
     "cupboard_shelf": "shelf inside the cupboard for storing groceries",
     "inside_box": "interior storage area of the box for objects that should be put inside the box",
     "pantry_area": "source area on the table where groceries start",
@@ -90,7 +91,7 @@ def regions_match_for_target(observed_region: str | None, target_region: str | N
     target = normalize_region_name(target_region)
     if observed == target:
         return True
-    if target == "table_target_area" and observed in {"table", "pantry_area"}:
+    if target == "table_staging_area" and observed in {"table", "pantry_area"}:
         return True
     return False
 

@@ -98,6 +98,15 @@ class GeometricContextBuilder(BaseContextBuilder):
         checkpoint_lines.append(
             'visible_objects: ' + (', '.join(state.visible_objects) if state.visible_objects else '(none)')
         )
+        tracked_objects = [
+            obj_name
+            for obj_name in object_region_map
+            if obj_name not in set(state.visible_objects)
+        ]
+        if tracked_objects:
+            checkpoint_lines.append(
+                'tracked_non_visible_objects: ' + ', '.join(sorted(tracked_objects))
+            )
         checkpoint_lines.append(
             'newly_visible_objects: ' + (', '.join(newly_visible) if newly_visible else '(none)')
         )
@@ -105,7 +114,13 @@ class GeometricContextBuilder(BaseContextBuilder):
         relational_lines = ['### Visible-Object Relational State']
         cook_status_by_object = grill_meat_status_from_facts(getattr(state, 'pddl_state', []) or [])
         lid_objects = set(getattr(state, 'lid_states', {}).keys()) | {'box_lid', 'grill_lid', 'lid'}
-        rendered_objects = [obj_name for obj_name in state.visible_objects if obj_name not in lid_objects]
+        rendered_objects = []
+        for obj_name in state.visible_objects:
+            if obj_name not in lid_objects and obj_name not in rendered_objects:
+                rendered_objects.append(obj_name)
+        for obj_name in sorted(object_region_map):
+            if obj_name not in lid_objects and obj_name not in rendered_objects:
+                rendered_objects.append(obj_name)
         if not rendered_objects:
             relational_lines.append('- (none)')
         for obj_name in rendered_objects:
@@ -116,10 +131,12 @@ class GeometricContextBuilder(BaseContextBuilder):
                 r_id, r_desc = resolve_region(pos, region_map, state.valid_regions)
             r_id = r_id or 'unresolved'
             r_desc = r_desc or '(none)'
+            visibility = 'visible' if obj_name in set(state.visible_objects) else 'tracked_not_mask_visible'
             facts = [f"region={r_id}"]
             cook_status = cook_status_by_object.get(self._object_status_key(obj_name))
             if cook_status:
                 facts.append(f"cook_status={cook_status}")
+            facts.append(f"visibility={visibility}")
             facts.append(f"description={r_desc}")
             relational_lines.append(f"- {obj_name}: {', '.join(facts)}")
 
@@ -152,7 +169,7 @@ class GeometricContextBuilder(BaseContextBuilder):
                     blockers = ', '.join(box_lid_blockers)
                     access_lines.append(
                         f'- box_lid is OBSTRUCTED by {blockers}; before open(box_lid), move '
-                        f'{blockers} to table_target_area'
+                        f'{blockers} to table_staging_area'
                     )
             if lid_states.get('grill_lid') is False:
                 access_lines.append('- inside_grill is BLOCKED until open(grill_lid) is completed')
@@ -241,7 +258,8 @@ class GeometricContextBuilder(BaseContextBuilder):
         actions = tuple(getattr(self.symbol_registry, 'actions', ()) or ACTION_SYMBOLS)
         lines = ['### Executable Interface']
         lines.append('Choose the task-level action order needed to satisfy the goal from the current checkpoint.')
-        lines.append('Use only visible object names and target-region names listed above.')
+        lines.append('Use only object names and target-region names listed above.')
+        lines.append('Only pick objects whose visibility is visible; tracked_not_mask_visible objects are included only so you can judge whether the goal is already satisfied.')
         lines.append('Do not output move, grasp, trajectory, coordinate, PDDL, or implementation steps.')
         lines.append('A place(object, region) action is executable only immediately after pick(object) for the same object, unless the checkpoint says the gripper is already holding that object.')
         lines.append('Respect Access Constraints: do not place into a blocked container region until its lid has been opened.')
@@ -249,7 +267,7 @@ class GeometricContextBuilder(BaseContextBuilder):
             lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Multiple raw meats can be cooked together by placing all of them inside_grill before one close(grill_lid) and one open(grill_lid).')
             lines.append('Cooking status and serving location are separate: cooked meat still must be physically placed on the serving target named by the goal.')
         lines.append('Start the response with exactly two short checks, then FINAL ACTIONS:.')
-        lines.append('CHECK 1 must map goal object categories to target regions using the visible object names.')
+        lines.append('CHECK 1 must map goal object categories to target regions using the listed object names.')
         lines.append('CHECK 2 must identify blockers, access constraints, or already-satisfied objects.')
         lines.append('Do not write additional reasoning, analysis, alternatives, prose, markdown, bullets, numbering, or commentary.')
         lines.append('Inside FINAL ACTIONS, return one raw action per line with lowercase action names.')

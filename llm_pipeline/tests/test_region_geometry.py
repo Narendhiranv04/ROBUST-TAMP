@@ -89,6 +89,16 @@ def test_box_fallback_used_only_when_primary_absent() -> None:
     assert resolve_region((0.0, 0.0, 0.34), with_primary)[0] == 'box_lid_top'
 
 
+def test_inside_box_does_not_capture_nearby_table_fall() -> None:
+    region_map = {
+        'table': _bounds(-1, -1, 0.0, 1, 1, 0.05),
+        'inside_box': _bounds(-0.2, -0.2, 0.0, 0.2, 0.2, 0.25),
+    }
+
+    assert resolve_region((0.0, 0.0, 0.12), region_map)[0] == 'inside_box'
+    assert resolve_region((0.27, 0.0, 0.12), region_map)[0] == 'table'
+
+
 def test_resolve_object_regions_returns_maps() -> None:
     pose_map = {'mug3': (0.6, 0.0, 0.45)}
     region_map = {'cupboard_shelf': _bounds(0.45, -0.15, 0.35, 0.85, 0.15, 0.38)}

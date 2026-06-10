@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -19,6 +20,16 @@ except ImportError:  # pragma: no cover
 
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
+
+
+def _qwen_thinking_mode() -> str:
+    legacy_no_think = os.environ.get("QWEN_NO_THINK_PROMPT", "").strip().lower() in {"1", "true", "yes", "on"}
+    mode = os.environ.get("QWEN_THINKING_MODE", "").strip().lower()
+    if mode in {"off", "no_think", "nothink", "false", "0"} or legacy_no_think:
+        return "off"
+    if mode in {"default", "on", "think", "thinking", "true", "1"}:
+        return "default"
+    return "off"
 
 
 class TextLLMPlanner:
@@ -184,6 +195,17 @@ class TextLLMPlanner:
         )
 
     def _build_prompt_text(self, system_prompt: str, user_prompt: str, assistant_prefix: str = "") -> str:
+        thinking_mode = _qwen_thinking_mode()
+        no_think_prompt = thinking_mode == "off"
+        if no_think_prompt and "/no_think" not in user_prompt:
+            user_prompt = f"/no_think\n\n{user_prompt}"
+        self.last_request_summary.update({
+            "qwen_thinking_mode": thinking_mode,
+            "qwen_no_think_prompt": no_think_prompt,
+            "effective_user_prompt": user_prompt,
+            "effective_user_prompt_length": len(user_prompt),
+        })
+
         if hasattr(self.tokenizer, "apply_chat_template"):
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -195,7 +217,7 @@ class TextLLMPlanner:
             }
             try:
                 signature = inspect.signature(self.tokenizer.apply_chat_template)
-                if "enable_thinking" in signature.parameters:
+                if no_think_prompt and "enable_thinking" in signature.parameters:
                     template_kwargs["enable_thinking"] = False
             except (TypeError, ValueError):
                 pass

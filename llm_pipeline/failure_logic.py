@@ -217,7 +217,7 @@ class SegmentationFirstFailureChecker:
                     failure_layer=FailureLayer.LAYER_2,
                     message=(
                         f'Cannot open box_lid because {", ".join(blockers)} is on box_lid_top; '
-                        f'move {", ".join(blockers)} to table_target_area first'
+                        f'move {", ".join(blockers)} to table_staging_area first'
                     ),
                 )
         return None
@@ -248,6 +248,11 @@ class SegmentationFirstFailureChecker:
         if action.action_name == 'place':
             object_name, target_region = action.args
             target_region = normalize_region_name(target_region)
+            object_region_map = getattr(snapshot, 'object_region_map', {}) or {}
+            observed_region = normalize_region_name(object_region_map.get(object_name))
+            if observed_region and regions_match_for_target(observed_region, target_region):
+                return self._maybe_new_visibility_failure(action, snapshot)
+
             evidence = snapshot.object_evidence.get(object_name)
             if evidence is None or not evidence.visible:
                 return FailureEvent(
@@ -260,10 +265,6 @@ class SegmentationFirstFailureChecker:
                     message=f'{object_name} is no longer visible after place execution',
                 )
 
-            object_region_map = getattr(snapshot, 'object_region_map', {}) or {}
-            observed_region = normalize_region_name(object_region_map.get(object_name))
-            if observed_region and regions_match_for_target(observed_region, target_region):
-                return self._maybe_new_visibility_failure(action, snapshot)
             return FailureEvent(
                 failure_id='placement_failed',
                 stage=FailureStage.AFTER_EXECUTION,

@@ -76,9 +76,9 @@ def test_remote_planner_returns_server_actions() -> None:
             'success': True,
             'actions': [
                 {'action_name': 'pick', 'args': ['mug2']},
-                {'action_name': 'place', 'args': ['mug2', 'table_target_area']},
+                {'action_name': 'place', 'args': ['mug2', 'table_staging_area']},
             ],
-            'raw_output': 'pick(mug2)\nplace(mug2, table_target_area)',
+            'raw_output': 'pick(mug2)\nplace(mug2, table_staging_area)',
             'inference_time': 0.12,
             'error_message': None,
             'failure_event': None,
@@ -98,7 +98,7 @@ def test_remote_planner_returns_server_actions() -> None:
         assert result.success is True
         assert [str(action) for action in result.actions] == [
             'pick(mug2)',
-            'place(mug2, table_target_area)',
+            'place(mug2, table_staging_area)',
         ]
         assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/plan'
         assert fake_requests.post_calls[0][1]['icl_mode'] == 'zero_shot'
@@ -158,7 +158,7 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         plan_payload={
             'success': False,
             'actions': [],
-            'raw_output': 'pick(mug2)\nplace(mug2, table_target_area)',
+            'raw_output': 'pick(mug2)\nplace(mug2, table_staging_area)',
             'inference_time': 0.08,
             'error_message': None,
             'failure_event': None,
@@ -178,7 +178,7 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         assert result.success is True
         assert [str(action) for action in result.actions] == [
             'pick(mug2)',
-            'place(mug2, table_target_area)',
+            'place(mug2, table_staging_area)',
         ]
     finally:
         client_module.requests = old_requests
@@ -191,9 +191,9 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
         plan_payload={
             'success': True,
             'actions': [
-                {'action_name': 'place', 'args': ['mug2', 'table_target_area']},
+                {'action_name': 'place', 'args': ['mug2', 'table_staging_area']},
             ],
-            'raw_output': 'place(mug2, table_target_area)',
+            'raw_output': 'place(mug2, table_staging_area)',
             'inference_time': 0.08,
             'error_message': None,
             'failure_event': None,
@@ -206,13 +206,13 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
     try:
         planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
         planner.parser.valid_objects.update({'mug2'})
-        planner.parser.valid_regions.update({'table_target_area'})
+        planner.parser.valid_regions.update({'table_staging_area'})
         bundle = PromptBundle(
             goal_text='Place the held mug.',
             system_prompt='system',
             user_prompt='user',
             visible_objects=['mug2'],
-            valid_regions=['table_target_area'],
+            valid_regions=['table_staging_area'],
             icl_mode='zero_shot',
             metadata={'held_object': 'mug2', 'max_new_tokens': 777, 'temperature': 0.2},
         )
@@ -220,7 +220,7 @@ def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
 
         assert result.success is True
         assert [str(action) for action in result.actions] == [
-            'place(mug2, table_target_area)',
+            'place(mug2, table_staging_area)',
         ]
         assert fake_requests.post_calls[0][1]['held_object'] == 'mug2'
         assert fake_requests.post_calls[0][1]['max_new_tokens'] == 777

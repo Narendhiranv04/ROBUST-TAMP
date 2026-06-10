@@ -302,7 +302,7 @@ class TextOnlyContextBuilder(BaseContextBuilder):
                     joined = ', '.join(blockers)
                     constraints.append(
                         f'box_lid is OBSTRUCTED by {joined}; before open(box_lid), move '
-                        f'{joined} to table_target_area'
+                        f'{joined} to table_staging_area'
                     )
         if 'grill_lid' in snapshot.visible_objects:
             evidence = snapshot.object_evidence.get('grill_lid')

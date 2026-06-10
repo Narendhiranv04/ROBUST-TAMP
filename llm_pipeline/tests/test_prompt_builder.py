@@ -39,7 +39,7 @@ def _snapshot() -> SegmentationSnapshot:
             ),
         },
         gripper_evidence={},
-        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        supported_regions=['table', 'table_staging_area', 'cupboard_shelf', 'inside_box'],
         visible_regions=['inside_box'],
         object_region_map={'mug2': 'inside_box'},
         object_region_descriptions={'mug2': 'inside the box storage target'},
@@ -65,13 +65,13 @@ def test_prompt_bundle_stays_text_only() -> None:
         failure_id='placement_failed',
         stage=FailureStage.AFTER_EXECUTION,
         source=FailureSource.SEGMENTATION,
-        action='place(mug2, table_target_area)',
+        action='place(mug2, table_staging_area)',
         evidence={},
         message='failure_id=placement_failed',
     )
     bundle = builder.build_bundle(
         state=_state(_snapshot(), held_object='mug2'),
-        goal_text='Move mug2 to table_target_area.',
+        goal_text='Move mug2 to table_staging_area.',
         icl_mode='few_shot_shared_1',
         failure_event=failure,
         previous_actions=['pick(mug2)'],
@@ -96,11 +96,11 @@ def test_prompt_bundle_stays_text_only() -> None:
     user_prompt = bundle.user_prompt
 
     assert 'SHARED FEW-SHOT EXEMPLAR' in system_prompt
-    assert 'Move mug2 to table_target_area.' not in system_prompt
+    assert 'Move mug2 to table_staging_area.' not in system_prompt
     assert 'failure_id=placement_failed' not in system_prompt
     assert 'CURRENT SEGMENTATION SNAPSHOT:' in user_prompt
     assert 'REGION MEANINGS:' in user_prompt
-    assert 'table_target_area: specific target area on the table for objects that should be moved onto the table' in user_prompt
+    assert 'table_staging_area: specific staging area on the table for objects that should be temporarily placed on the table' in user_prompt
     assert 'inside_box: interior storage area of the box for objects that should be put inside the box' in user_prompt
     assert 'VISIBLE OBJECT EVIDENCE:' in user_prompt
     assert 'COMPACT SEGMENTATION SUMMARY:' in user_prompt
@@ -257,4 +257,4 @@ def test_prompt_marks_box_lid_obstruction_when_object_is_on_lid() -> None:
         icl_mode='zero_shot',
     )
 
-    assert 'box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_target_area' in bundle.user_prompt
+    assert 'box_lid is OBSTRUCTED by mug2; before open(box_lid), move mug2 to table_staging_area' in bundle.user_prompt

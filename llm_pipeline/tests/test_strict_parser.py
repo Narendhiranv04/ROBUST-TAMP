@@ -7,19 +7,19 @@ parser = StrictActionParser()
 def test_parses_direct_ground_truth_actions() -> None:
     actions = parser.parse(
         'pick(mug2)\n'
-        'place(mug2, table_target_area)\n'
+        'place(mug2, table_staging_area)\n'
         'open(box_lid)\n'
     )
     assert [str(action) for action in actions] == [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
         'open(box_lid)',
     ]
 
 
 def test_parses_replan_while_already_holding_object() -> None:
-    actions = parser.parse('place(mug2, table_target_area)', held_object='mug2')
-    assert [str(action) for action in actions] == ['place(mug2, table_target_area)']
+    actions = parser.parse('place(mug2, table_staging_area)', held_object='mug2')
+    assert [str(action) for action in actions] == ['place(mug2, table_staging_area)']
 
 
 def test_normalizes_legacy_region_names() -> None:
@@ -40,11 +40,11 @@ def test_prefers_final_actions_block_after_reasoning() -> None:
         'Reasoning: I might mention pick(mug3), but this should not execute.\n'
         'FINAL ACTIONS:\n'
         'pick(mug2)\n'
-        'place(mug2, table_target_area)\n'
+        'place(mug2, table_staging_area)\n'
     )
     assert [str(action) for action in actions] == [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
     ]
 
 
@@ -64,7 +64,7 @@ def test_rejects_mixed_no_actions_and_actions() -> None:
 
 def test_rejects_orphan_place() -> None:
     try:
-        parser.parse('place(mug2, table_target_area)')
+        parser.parse('place(mug2, table_staging_area)')
     except StrictParseError as exc:
         assert "Cannot place 'mug2' without first picking it" in str(exc)
         assert exc.failure_id == 'orphan_place'
@@ -74,7 +74,7 @@ def test_rejects_orphan_place() -> None:
 
 def test_rejects_pick_place_mismatch() -> None:
     try:
-        parser.parse('pick(mug2)\nplace(mug3, table_target_area)')
+        parser.parse('pick(mug2)\nplace(mug3, table_staging_area)')
     except StrictParseError as exc:
         assert "Cannot place 'mug3' while holding 'mug2'" in str(exc)
         assert exc.failure_id == 'pick_place_mismatch'

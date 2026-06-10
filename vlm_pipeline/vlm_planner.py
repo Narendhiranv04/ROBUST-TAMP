@@ -72,6 +72,16 @@ except ImportError:
     HAS_QWEN_VL_UTILS = False
 
 
+def _qwen_thinking_mode() -> str:
+    legacy_no_think = os.environ.get("QWEN_NO_THINK_PROMPT", "").strip().lower() in {"1", "true", "yes", "on"}
+    mode = os.environ.get("QWEN_THINKING_MODE", "").strip().lower()
+    if mode in {"off", "no_think", "nothink", "false", "0"} or legacy_no_think:
+        return "off"
+    if mode in {"default", "on", "think", "thinking", "true", "1"}:
+        return "default"
+    return "off"
+
+
 @dataclass
 class ActionSkeleton:
     """Represents a single action in the plan skeleton."""
@@ -124,7 +134,7 @@ class VLMPlanner:
     KNOWN_REGIONS = {
         'table', 'box_boundary', 'placement_boundary',
         'cupboard_boundary', 'cupboard_boundary_top', 'groceries_boundary',
-        'inside_box', 'table_target_area', 'cupboard_shelf', 'pantry_area',
+        'inside_box', 'table_staging_area', 'cupboard_shelf', 'pantry_area',
         'inside_grill', 'plate_top', 'serving_area', 'prep_area', 'dish_rack'
     }
     
@@ -493,13 +503,43 @@ Do not copy placeholder names such as object, region, or lid_object.
 Use only the needed actions. Do not include any text after the FINAL ACTIONS block."""
 
     def _apply_chat_template(self, messages) -> str:
+        thinking_mode = _qwen_thinking_mode()
+        no_think_prompt = thinking_mode == "off"
+        effective_user_content = None
+        if no_think_prompt:
+            messages = [dict(message) for message in messages]
+            for message in messages:
+                if message.get("role") != "user":
+                    continue
+                content = message.get("content")
+                if isinstance(content, str):
+                    if "/no_think" not in content:
+                        message["content"] = f"/no_think\n\n{content}"
+                    effective_user_content = message["content"]
+                    break
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text = str(item.get("text") or "")
+                            if "/no_think" not in text:
+                                item["text"] = f"/no_think\n\n{text}"
+                            effective_user_content = item["text"]
+                            break
+                    break
+        self.last_request_summary.update({
+            "qwen_thinking_mode": thinking_mode,
+            "qwen_no_think_prompt": no_think_prompt,
+            "effective_user_prompt": effective_user_content,
+            "effective_user_prompt_length": len(effective_user_content or ""),
+        })
+
         template_kwargs = {
             "tokenize": False,
             "add_generation_prompt": True,
         }
         try:
             signature = inspect.signature(self.processor.apply_chat_template)
-            if "enable_thinking" in signature.parameters:
+            if no_think_prompt and "enable_thinking" in signature.parameters:
                 template_kwargs["enable_thinking"] = False
         except (TypeError, ValueError):
             pass

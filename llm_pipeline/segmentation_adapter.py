@@ -11,7 +11,7 @@ import numpy as np
 from llm_pipeline.executable_symbols import RuntimeSymbolRegistry, build_runtime_symbol_registry
 from llm_pipeline.object_aliases import canonical_object_name, scene_object_for_object
 from llm_pipeline.pipeline_types import SegmentationObjectEvidence, SegmentationSnapshot
-from llm_pipeline.region_geometry import resolve_object_regions
+from llm_pipeline.region_geometry import REGION_DESCRIPTIONS, resolve_object_regions
 from llm_pipeline.region_aliases import (
     BOX_LID_TOP_REGION,
     BOX_STORAGE_REGION,
@@ -353,8 +353,12 @@ class SegmentationEvidenceAdapter:
                 gripper_proximity=gripper_proximity,
             )
 
+        geometry_targets = self._ordered_tokens(
+            set(visible_now) | set(self.known_visible),
+            self.symbol_registry.objects,
+        )
         object_region_map, object_region_descriptions = self._resolve_geometric_regions(
-            visible_now,
+            geometry_targets,
             valid_regions,
         )
 
@@ -398,7 +402,70 @@ class SegmentationEvidenceAdapter:
             if bb:
                 region_map[canonical] = (np.array(bb[0]), np.array(bb[1]))
 
-        return resolve_object_regions(pose_map, region_map, valid_regions)
+        object_region_map, object_region_descriptions = resolve_object_regions(pose_map, region_map, valid_regions)
+        self._apply_container_bbox_overrides(
+            object_region_map,
+            object_region_descriptions,
+            visible_objects,
+            region_map,
+            valid_regions,
+        )
+        return object_region_map, object_region_descriptions
+
+    def _apply_container_bbox_overrides(
+        self,
+        object_region_map,
+        object_region_descriptions,
+        object_names,
+        region_map,
+        valid_regions,
+    ) -> None:
+        """Use object footprint overlap for container interiors when pose origins are misleading."""
+        if 'inside_box' not in {normalize_region_name(region) for region in (valid_regions or [])}:
+            return
+        if 'inside_box' not in region_map:
+            return
+        get_bounding_box = getattr(self.detector, 'get_bounding_box', None)
+        if not callable(get_bounding_box):
+            return
+
+        box_min, box_max = region_map['inside_box']
+        for object_name in object_names:
+            if normalize_region_name(object_region_map.get(object_name)) == 'inside_box':
+                continue
+            try:
+                obj_bb = get_bounding_box(scene_object_for_object(object_name, self.env))
+            except Exception:
+                obj_bb = None
+            if not obj_bb:
+                continue
+            obj_min = np.array(obj_bb[0], dtype=float)
+            obj_max = np.array(obj_bb[1], dtype=float)
+            if self._bbox_substantially_overlaps_inside_box(obj_min, obj_max, box_min, box_max):
+                object_region_map[object_name] = 'inside_box'
+                object_region_descriptions[object_name] = REGION_DESCRIPTIONS['inside_box']
+
+    @staticmethod
+    def _bbox_substantially_overlaps_inside_box(obj_min, obj_max, box_min, box_max) -> bool:
+        obj_w = max(0.0, float(obj_max[0] - obj_min[0]))
+        obj_d = max(0.0, float(obj_max[1] - obj_min[1]))
+        obj_area = obj_w * obj_d
+        if obj_area <= 1e-6:
+            return False
+
+        overlap_x = max(0.0, min(float(obj_max[0]), float(box_max[0])) - max(float(obj_min[0]), float(box_min[0])))
+        overlap_y = max(0.0, min(float(obj_max[1]), float(box_max[1])) - max(float(obj_min[1]), float(box_min[1])))
+        overlap_ratio = (overlap_x * overlap_y) / obj_area
+        if overlap_ratio < 0.35:
+            return False
+
+        # Objects in the box may be taller than the box boundary. Use bottom/top
+        # compatibility instead of requiring the object's origin to lie inside.
+        obj_bottom = float(obj_min[2])
+        obj_top = float(obj_max[2])
+        box_bottom = float(box_min[2])
+        box_top = float(box_max[2])
+        return obj_top >= box_bottom - 0.05 and obj_bottom <= box_top + 0.12
 
     @staticmethod
     def _canonicalize_mapping_keys(values):

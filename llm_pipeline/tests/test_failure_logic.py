@@ -68,7 +68,7 @@ def _snapshot(object_evidence, newly_visible=None, visible_regions=None, object_
         newly_visible_objects=list(newly_visible or []),
         object_evidence=object_evidence,
         gripper_evidence={},
-        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        supported_regions=['table', 'table_staging_area', 'cupboard_shelf', 'inside_box'],
         visible_regions=list(visible_regions or []),
         object_region_map=dict(object_region_map or {}),
     )
@@ -114,10 +114,10 @@ def test_precheck_blocks_inside_grill_place_when_lid_closed() -> None:
 def test_precheck_blocks_inside_box_place_when_lid_closed() -> None:
     snapshot = _snapshot(
         {
-            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['table_target_area']),
+            'mug2': SegmentationObjectEvidence(name='mug2', visible=True, mask_regions=['table_staging_area']),
             'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
         },
-        visible_regions=['table_target_area', 'box_lid_top'],
+        visible_regions=['table_staging_area', 'box_lid_top'],
     )
     failure = checker.precheck(
         DirectAction('place', ('mug2', 'inside_box')),
@@ -154,7 +154,7 @@ def test_precheck_blocks_open_box_lid_when_object_on_lid() -> None:
     assert failure.stage == FailureStage.BEFORE_EXECUTION
     assert failure.source == FailureSource.SEGMENTATION
     assert failure.evidence['blocking_objects'] == ['mug2']
-    assert 'move mug2 to table_target_area first' in failure.message
+    assert 'move mug2 to table_staging_area first' in failure.message
 
 
 def test_postcheck_flags_bad_place_region() -> None:
@@ -166,7 +166,7 @@ def test_postcheck_flags_bad_place_region() -> None:
         object_region_map={'mug2': 'cupboard_shelf'},
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug2', 'table_target_area')),
+        DirectAction('place', ('mug2', 'table_staging_area')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -228,7 +228,7 @@ def test_postcheck_flags_object_dropped_when_placed_object_not_visible() -> None
         },
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug2', 'table_target_area')),
+        DirectAction('place', ('mug2', 'table_staging_area')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -255,7 +255,21 @@ def test_postcheck_uses_geometric_region_instead_of_mask_regions() -> None:
     assert failure is None
 
 
-def test_postcheck_accepts_gt_table_area_for_table_target_area() -> None:
+def test_postcheck_accepts_geometric_region_when_object_mask_is_hidden() -> None:
+    snapshot = _snapshot(
+        {},
+        visible_regions=['inside_box'],
+        object_region_map={'mug1': 'inside_box'},
+    )
+    failure = checker.postcheck(
+        DirectAction('place', ('mug1', 'inside_box')),
+        held_object=None,
+        snapshot=snapshot,
+    )
+    assert failure is None
+
+
+def test_postcheck_accepts_gt_table_area_for_table_staging_area() -> None:
     snapshot = _snapshot(
         {
             'mug3': SegmentationObjectEvidence(name='mug3', visible=True, mask_regions=['pantry_area']),
@@ -264,7 +278,7 @@ def test_postcheck_accepts_gt_table_area_for_table_target_area() -> None:
         object_region_map={'mug3': 'pantry_area'},
     )
     failure = checker.postcheck(
-        DirectAction('place', ('mug3', 'table_target_area')),
+        DirectAction('place', ('mug3', 'table_staging_area')),
         held_object=None,
         snapshot=snapshot,
     )
@@ -274,11 +288,11 @@ def test_postcheck_accepts_gt_table_area_for_table_target_area() -> None:
 def test_postcheck_triggers_replan_for_new_visibility() -> None:
     snapshot = _snapshot(
         {
-            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['table_target_area']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['table_staging_area']),
             'mug4': SegmentationObjectEvidence(name='mug4', visible=True, mask_regions=['inside_box']),
         },
         newly_visible=['mug4'],
-        visible_regions=['table_target_area', 'inside_box'],
+        visible_regions=['table_staging_area', 'inside_box'],
     )
     failure = checker.postcheck(DirectAction('open', ('box_lid',)), held_object=None, snapshot=snapshot)
     assert failure is not None
@@ -337,9 +351,9 @@ def test_postcheck_flags_lid_not_closed_enough() -> None:
     open_lid_checker = SegmentationFirstFailureChecker(adapter=OpenLidAdapter(), env=None)
     snapshot = _snapshot(
         {
-            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['table_target_area']),
+            'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['table_staging_area']),
         },
-        visible_regions=['table_target_area'],
+        visible_regions=['table_staging_area'],
     )
     failure = open_lid_checker.postcheck(DirectAction('close', ('box_lid',)), held_object=None, snapshot=snapshot)
     assert failure is not None
@@ -396,8 +410,8 @@ def test_geometric_postcheck_flags_failed_containment() -> None:
 
 def test_runtime_validation_failure_maps_to_layer_2() -> None:
     failure = checker.classify_runtime_error(
-        DirectAction('place', ('mug2', 'table_target_area')),
-        "Object 'mug2' not in target region 'table_target_area'",
+        DirectAction('place', ('mug2', 'table_staging_area')),
+        "Object 'mug2' not in target region 'table_staging_area'",
     )
     assert failure.failure_id == 'placement_failed'
     assert failure.failure_layer == FailureLayer.LAYER_2
@@ -420,7 +434,7 @@ def test_runtime_error_maps_layer_2_validation_failures() -> None:
             message = case
             expected = 'lid_not_open_enough' if 'open' in case else 'lid_not_closed_enough'
         failure = checker.classify_runtime_error(
-            DirectAction('place', ('mug2', 'table_target_area')),
+            DirectAction('place', ('mug2', 'table_staging_area')),
             message,
         )
         assert failure.failure_id == expected

@@ -26,6 +26,7 @@ from llm_pipeline.region_aliases import (
     BOX_STORAGE_REGION,
     CUPBOARD_TARGET_REGIONS,
     normalize_region_name,
+    regions_match_for_target,
     scene_object_for_region,
 )
 from llm_pipeline.grill_geometry import (
@@ -393,7 +394,7 @@ class UnifiedActionBundler:
         def completed_for_trace() -> List[str]:
             return list(self.executor.completed_primitive_actions) + list(completed)
 
-        self.executor._trace_bundle_state(
+        before_snapshot = self.executor._trace_bundle_state(
             failure_checker,
             event=f'before-bundle-transfer-{obj_name}',
             label='before bundle',
@@ -404,6 +405,25 @@ class UnifiedActionBundler:
             total_action_count=total_action_count,
             completed_actions_override=completed_for_trace(),
         )
+        if before_snapshot is not None:
+            object_region_map = dict(getattr(before_snapshot, 'object_region_map', {}) or {})
+            observed_region = normalize_region_name(object_region_map.get(obj_name))
+            if observed_region and regions_match_for_target(observed_region, target_region):
+                completed.extend(str(action) for action in bundle_actions)
+                print(
+                    f"[BUNDLE] Skipping redundant transfer: {obj_name} already in {observed_region} "
+                    f"(target {target_region})"
+                )
+                self.executor._trace_bundle_state(
+                    failure_checker,
+                    event=f'after-bundle-transfer-{obj_name}',
+                    label='after redundant bundle',
+                    desired=f'{obj_name} -> {target_region}',
+                    completed_action_count=start_index + len(bundle_actions),
+                    total_action_count=total_action_count,
+                    completed_actions_override=completed_for_trace(),
+                )
+                return BundleExecutionOutcome(2, True, "", None, completed, held_object)
 
         gt_executor, _, _, err = self.handler.create_transfer_executor(pick_action, place_action)
         if gt_executor is None:

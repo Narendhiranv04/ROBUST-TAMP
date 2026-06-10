@@ -337,7 +337,7 @@ class FakeExecutor:
                 stage=FailureStage.AFTER_EXECUTION,
                 source=FailureSource.SEGMENTATION,
                 action=self.remaining_actions[-1],
-                evidence={'target_region': 'table_target_area'},
+                evidence={'target_region': 'table_staging_area'},
                 message='place failed after pick',
             )
             self.last_failure_event = failure
@@ -473,7 +473,7 @@ def _snapshot() -> SegmentationSnapshot:
             'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
         },
         gripper_evidence={},
-        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        supported_regions=['table', 'table_staging_area', 'cupboard_shelf', 'inside_box'],
         visible_regions=['inside_box'],
         object_region_map={'mug2': 'inside_box'},
         object_region_descriptions={'mug2': 'inside the box storage target'},
@@ -493,7 +493,7 @@ def _kitchen_snapshot_with_grocery_in_box() -> SegmentationSnapshot:
             'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
         },
         gripper_evidence={},
-        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        supported_regions=['table', 'table_staging_area', 'cupboard_shelf', 'inside_box'],
         visible_regions=['inside_box', 'cupboard_shelf'],
         object_region_map={
             'mug2': 'inside_box',
@@ -522,7 +522,7 @@ def _kitchen_snapshot_missing_required_mug() -> SegmentationSnapshot:
             'box_lid': SegmentationObjectEvidence(name='box_lid', visible=True, mask_regions=['box_lid_top']),
         },
         gripper_evidence={},
-        supported_regions=['table', 'table_target_area', 'cupboard_shelf', 'inside_box'],
+        supported_regions=['table', 'table_staging_area', 'cupboard_shelf', 'inside_box'],
         visible_regions=['inside_box', 'cupboard_shelf'],
         object_region_map={
             'mug2': 'inside_box',
@@ -593,8 +593,8 @@ def _grill_g1_snapshot_only_phone_missing() -> SegmentationSnapshot:
 
 def test_pipeline_replans_with_previous_direct_actions() -> None:
     planner = QueuePlanner([
-        'pick(mug2)\nplace(mug2, table_target_area)',
-        'place(mug2, table_target_area)\nopen(box_lid)',
+        'pick(mug2)\nplace(mug2, table_staging_area)',
+        'place(mug2, table_staging_area)\nopen(box_lid)',
     ])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
@@ -609,7 +609,7 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to table_target_area and then open the lid.')
+    summary = pipeline.run('Move mug2 to table_staging_area and then open the lid.')
 
     assert summary['success'] is True
     assert summary['total_replans'] == 1
@@ -618,7 +618,7 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert summary['mean_planner_time_per_invocation_s'] == 0.01
     assert summary['completed_actions'] == [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
         'open(box_lid)',
     ]
     assert summary['held_object'] is None
@@ -630,7 +630,7 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     assert '- pick(mug2)' in planner.requests[1]['user_prompt']
     assert '### Replanning Event' in planner.requests[1]['user_prompt']
     assert 'event_type: failure' in planner.requests[1]['user_prompt']
-    assert 'failed_action: place(mug2, table_target_area)' in planner.requests[1]['user_prompt']
+    assert 'failed_action: place(mug2, table_staging_area)' in planner.requests[1]['user_prompt']
     assert 'pick(mug2)' in planner.requests[1]['user_prompt']
     assert 'place failed after pick' in planner.requests[1]['user_prompt']
     assert 'You are a high-level robotic task planner' in planner.requests[0]['system_prompt']
@@ -691,7 +691,7 @@ def test_parser_failure_replan_prompt_includes_structural_repair_rule() -> None:
 
 
 def test_pipeline_can_print_raw_llm_output_for_debugging(capsys) -> None:
-    planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_target_area)'])
+    planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_staging_area)'])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
@@ -710,12 +710,12 @@ def test_pipeline_can_print_raw_llm_output_for_debugging(capsys) -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    pipeline.run('Move mug2 to table_target_area.')
+    pipeline.run('Move mug2 to table_staging_area.')
     output = capsys.readouterr().out
 
     assert '[LLM] Raw output text:' in output
     assert 'pick(mug2)' in output
-    assert 'place(mug2, table_target_area)' in output
+    assert 'place(mug2, table_staging_area)' in output
 
 
 def test_plan_bundle_carries_generation_settings_for_plan_interface() -> None:
@@ -767,7 +767,7 @@ def test_vlm_goal_check_uses_image_from_same_scene_capture() -> None:
     )
 
     assert pipeline.initialize(env=env) is True
-    result = pipeline._check_goal_completion('Move mug2 to the table target area.')
+    result = pipeline._check_goal_completion('Move mug2 to the table staging area.')
 
     assert result.goal_satisfied is True
     assert planner.goal_check_images
@@ -778,8 +778,8 @@ def test_vlm_goal_check_uses_image_from_same_scene_capture() -> None:
 def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
     planner = GoalCheckingQueuePlanner(
         [
-            'pick(mug2)\nplace(mug2, table_target_area)',
-            'place(mug2, table_target_area)',
+            'pick(mug2)\nplace(mug2, table_staging_area)',
+            'place(mug2, table_staging_area)',
             'open(box_lid)',
         ],
         [
@@ -800,7 +800,7 @@ def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to table_target_area and open the lid.')
+    summary = pipeline.run('Move mug2 to table_staging_area and open the lid.')
 
     assert summary['success'] is True
     assert summary['goal_check_enabled'] is True
@@ -1011,7 +1011,7 @@ def test_pipeline_allows_no_actions_when_goal_already_satisfied() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to table_target_area and open the lid.')
+    summary = pipeline.run('Move mug2 to table_staging_area and open the lid.')
 
     assert summary['success'] is True
     assert summary['completed_actions'] == []
@@ -1021,8 +1021,8 @@ def test_pipeline_allows_no_actions_when_goal_already_satisfied() -> None:
 
 def test_pipeline_stops_when_no_actions_follows_goal_check_format_failure() -> None:
     planner = GoalCheckParseFailurePlanner([
-        'pick(mug2)\nplace(mug2, table_target_area)',
-        'place(mug2, table_target_area)',
+        'pick(mug2)\nplace(mug2, table_staging_area)',
+        'place(mug2, table_staging_area)',
         'NO_ACTIONS',
     ])
     snapshot = _snapshot()
@@ -1038,7 +1038,7 @@ def test_pipeline_stops_when_no_actions_follows_goal_check_format_failure() -> N
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to table_target_area.')
+    summary = pipeline.run('Move mug2 to table_staging_area.')
 
     assert summary['success'] is True
     assert summary['failure_reason'] is None
@@ -1215,10 +1215,10 @@ def test_vlm_replanning_sends_fresh_image_with_failure_context() -> None:
         action_batches=[
             [
                 DirectAction('pick', ('mug2',)),
-                DirectAction('place', ('mug2', 'table_target_area')),
+                DirectAction('place', ('mug2', 'table_staging_area')),
             ],
             [
-                DirectAction('place', ('mug2', 'table_target_area')),
+                DirectAction('place', ('mug2', 'table_staging_area')),
                 DirectAction('open', ('box_lid',)),
             ],
         ]
@@ -1243,7 +1243,7 @@ def test_vlm_replanning_sends_fresh_image_with_failure_context() -> None:
 
     env = FakeVisionEnv()
     assert pipeline.initialize(env=env) is True
-    summary = pipeline.run('Move mug2 to table_target_area and open the lid.')
+    summary = pipeline.run('Move mug2 to table_staging_area and open the lid.')
 
     assert summary['success'] is True
     assert summary['model_type'] == 'vlm'
@@ -1317,7 +1317,7 @@ def test_few_shot_system_prompt_includes_shared_behavior_examples() -> None:
     state = SceneState(
         frame_index=1,
         visible_objects=['box_lid', 'mug1'],
-        valid_regions=['table_target_area', 'inside_box'],
+        valid_regions=['table_staging_area', 'inside_box'],
         object_region_map={'mug1': 'box_lid_top'},
         object_region_descriptions={'mug1': 'on top of the box lid'},
         lid_states={'box_lid': False},
@@ -1352,7 +1352,7 @@ def test_pipeline_reports_validation_failure_before_execution() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to table_target_area.')
+    summary = pipeline.run('Move mug2 to table_staging_area.')
 
     assert summary['success'] is False
     assert summary['last_failure_event']['failure_id'] == 'unknown_action_token'
@@ -1361,7 +1361,7 @@ def test_pipeline_reports_validation_failure_before_execution() -> None:
 
 
 def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
-    planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_target_area)'])
+    planner = QueuePlanner(['pick(mug2)\nplace(mug2, table_staging_area)'])
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
@@ -1383,7 +1383,7 @@ def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
     )
 
     assert pipeline.initialize(env=FakeEnv()) is True
-    summary = pipeline.run('Move mug2 to table_target_area.')
+    summary = pipeline.run('Move mug2 to table_staging_area.')
 
     assert summary['success'] is True
     assert summary['replan_mode'] == 'off'
@@ -1393,12 +1393,12 @@ def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
     assert summary['post_action_checks_enabled'] is False
     assert summary['planned_actions'] == [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
     ]
     assert summary['completed_actions'] == []
     assert summary['remaining_actions'] == [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
     ]
     assert summary['total_cycles'] == 1
     assert summary['total_replans'] == 0

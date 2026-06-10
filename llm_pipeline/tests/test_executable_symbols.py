@@ -22,7 +22,7 @@ class GrillEnv:
         "serving_area": object(),
         "plate-boundary": object(),
         "dish_rack": object(),
-        "table_target_area": object(),
+        "table_staging_area": object(),
         "box_boundary": object(),
         "box-top": object(),
     }

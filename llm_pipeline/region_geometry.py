@@ -26,7 +26,7 @@ PRIMARY_REGION_PRIORITY = (
     "serving_area",
     "dish_rack",
     "pantry_area",
-    "table_target_area",
+    "table_staging_area",
     "table",
 )
 FALLBACK_REGION_PRIORITY = tuple(PLANNER_HIDDEN_REGIONS)
@@ -36,7 +36,7 @@ REGION_DESCRIPTIONS = {
     "box_lid_top": "on top of the box lid",
     "inside_box": "inside the box",
     "pantry_area": "in pantry area",
-    "table_target_area": "in placement area",
+    "table_staging_area": "in staging area",
     "table": "on table",
     "inside_grill": "inside grill",
     "prep_area": "in prep area",
@@ -55,9 +55,11 @@ OBJECT_REGION_EXCLUSIONS = {
 REGION_PADDING = {
     "cupboard_shelf": 0.20,
     "box_lid_top": 0.06,
-    "inside_box": 0.20,
+    # Keep container interiors tight. A large XY padding here makes objects that
+    # fall beside the box on the table look like they are still inside it.
+    "inside_box": 0.04,
     "pantry_area": 0.05,
-    "table_target_area": 0.05,
+    "table_staging_area": 0.05,
     "table": 0.04,
     "inside_grill": 0.08,
     "prep_area": 0.06,
@@ -71,7 +73,7 @@ REGION_Z_MARGIN = {
     "box_lid_top": (0.05, 0.15),
     "inside_box": (0.20, 0.30),
     "pantry_area": (0.15, 0.20),
-    "table_target_area": (0.15, 0.20),
+    "table_staging_area": (0.15, 0.20),
     "table": (0.05, 0.12),
     "inside_grill": (0.08, 0.18),
     "prep_area": (0.05, 0.15),

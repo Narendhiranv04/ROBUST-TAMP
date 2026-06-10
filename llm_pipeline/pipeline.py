@@ -539,9 +539,17 @@ class LLMOnlyReplanningPipeline:
             region_map,
             snapshot.supported_regions,
         )
-        if not object_region_map:
-            object_region_map = dict(getattr(snapshot, 'object_region_map', {}) or {})
-            object_region_descriptions = dict(getattr(snapshot, 'object_region_descriptions', {}) or {})
+        snapshot_object_region_map = dict(getattr(snapshot, 'object_region_map', {}) or {})
+        snapshot_object_region_descriptions = dict(getattr(snapshot, 'object_region_descriptions', {}) or {})
+        if snapshot_object_region_map:
+            # The adapter can resolve previously seen objects that are no longer
+            # mask-visible, e.g. a mug occluded inside the box. Keep that richer
+            # map, while letting fresh visible-object geometry override stale data.
+            object_region_map = {**snapshot_object_region_map, **object_region_map}
+            object_region_descriptions = {
+                **snapshot_object_region_descriptions,
+                **object_region_descriptions,
+            }
 
         pddl_state = []
         if (self.config.task_family or '').strip().lower() == 'grill':

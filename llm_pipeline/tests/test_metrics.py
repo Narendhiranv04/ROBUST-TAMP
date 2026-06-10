@@ -14,7 +14,7 @@ from llm_pipeline.executable_symbols import DEFAULT_OBJECT_ORDER
 def test_open_action_counts_in_completion_metrics() -> None:
     actions = [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
         'open(box_lid)',
     ]
     assert collapse_actions_to_subtasks(actions) == ['mug_to_placement', 'open_lid']
@@ -61,7 +61,7 @@ def test_grill_actions_count_in_completion_metrics() -> None:
 def test_k3_partial_grocery_completion_stays_incomplete() -> None:
     actions = [
         'pick(mug2)',
-        'place(mug2, table_target_area)',
+        'place(mug2, table_staging_area)',
         'open(box_lid)',
         'pick(mug3)',
         'place(mug3, inside_box)',

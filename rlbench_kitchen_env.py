@@ -1733,7 +1733,7 @@ class RLBenchKitchenEnv:
         
         # Z height: Place on table surface if possible
         table = self.regions.get('table')
-        if region_name in ['cupboard_lower', BOX_STORAGE_REGION]:
+        if region_name in CUPBOARD_TARGET_REGIONS or region_name == BOX_STORAGE_REGION:
              place_z = rz + r_min_z + 0.005
         elif table:
              _, _, _, _, _, table_max_z = table.get_bounding_box()
@@ -1803,6 +1803,8 @@ class RLBenchKitchenEnv:
         # Minimum distance between placed objects
         MIN_PLACEMENT_DIST = 0.06  # 6cm apart
         
+        needs_hover_reachability = region_name not in CUPBOARD_TARGET_REGIONS
+
         if region_name in [BOX_STORAGE_REGION,  BOX_LID_TOP_REGION]:
             margin_x = 0.045
             margin_y = 0.045
@@ -1842,13 +1844,19 @@ class RLBenchKitchenEnv:
                 candidate_pose = [float(sample_x), float(sample_y), place_z] + original_pose[3:]
                 obj.set_pose(candidate_pose)
                 if not obj.check_collision():
-                    try:
-                        self.compute_hover_config(obj, candidate_pose, hover_offset=0.18)
+                    if needs_hover_reachability:
+                        try:
+                            self.compute_hover_config(obj, candidate_pose, hover_offset=0.18)
+                        except Exception:
+                            pass
+                        else:
+                            obj.set_pose(original_pose)
+                            self.placed_positions.append([sample_x, sample_y, place_z])
+                            return candidate_pose
+                    else:
                         obj.set_pose(original_pose)
                         self.placed_positions.append([sample_x, sample_y, place_z])
                         return candidate_pose
-                    except Exception:
-                        pass
                         
             obj.set_pose(original_pose)
             raise RuntimeError(f"Could not find a valid deterministic placement in {region_name}")
@@ -1879,17 +1887,21 @@ class RLBenchKitchenEnv:
                 if obj.check_collision():
                     continue
                     
-                # 2. Check Hover Reachability (Downward gripper)
-                try:
-                    # We just need to know if a hover config EXISTS for this spot
-                    self.compute_hover_config(obj, candidate_pose, hover_offset=0.18)
-                    # If successful, this is valid
+                # 2. Check Hover Reachability (Downward gripper). Cupboard placement
+                # uses a separate horizontal approach in the executor, so probing a
+                # generic downward hover here is both redundant and can block in IK.
+                if needs_hover_reachability:
+                    try:
+                        # We just need to know if a hover config EXISTS for this spot
+                        self.compute_hover_config(obj, candidate_pose, hover_offset=0.18)
+                    except Exception:
+                        continue
                     obj.set_pose(original_pose)
-                    # Track this position
                     self.placed_positions.append([sample_x, sample_y, place_z])
                     return candidate_pose
-                except Exception:
-                    continue
+                obj.set_pose(original_pose)
+                self.placed_positions.append([sample_x, sample_y, place_z])
+                return candidate_pose
             
             # Restore
             obj.set_pose(original_pose)

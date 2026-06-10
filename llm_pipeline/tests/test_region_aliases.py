@@ -8,6 +8,9 @@ def test_kitchen_region_aliases_normalize_to_public_symbols() -> None:
     assert normalize_region_name("cupboard_boundary") == "cupboard_shelf"
     assert normalize_region_name("cupboard_boundary_top") == "cupboard_shelf"
     assert normalize_region_name("shelf-lower") == "cupboard_shelf"
+    assert normalize_region_name("placement_boundary") == "table_staging_area"
+    assert normalize_region_name("table_target_area") == "table_staging_area"
+    assert scene_object_for_region("table_staging_area") == "placement_boundary"
 
 
 def test_normalize_region_names_deduplicates_aliases() -> None:

@@ -19,7 +19,7 @@ MEAT_OBJECTS = {'steak', 'steak1', 'steak2', 'chicken', 'chicken1', 'chicken2'}
 GRILL_NON_TARGET_OBJECTS = {'phone'}
 PLATE_OBJECTS = {'plate'}
 BOX_REGIONS = {'inside_box', 'box_storage', 'box_boundary', 'box_top', 'box_inside', 'box-top', 'box-inside'}
-PLACEMENT_REGIONS = {'table_target_area', 'placement_boundary'}
+PLACEMENT_REGIONS = {'table_staging_area', 'table_target_area', 'placement_boundary'}
 CUPBOARD_REGIONS = {'cupboard_shelf', 'cupboard_lower', 'cupboard_boundary', 'cupboard_boundary_top', 'cupboard'}
 PLATE_TOP_REGIONS = {'plate', 'plate-top', 'plate_top'}
 SERVING_REGIONS = {'plate_boundary', 'plate-boundary', 'serving_area'}
@@ -89,7 +89,7 @@ def _normalize_region(region: Optional[str]) -> str:
     if token in BOX_REGIONS:
         return BOX_STORAGE_REGION
     if token in PLACEMENT_REGIONS:
-        return 'table_target_area'
+        return 'table_staging_area'
     if token in CUPBOARD_REGIONS:
         return 'cupboard_shelf'
     if token in PLATE_TOP_REGIONS:
@@ -120,7 +120,7 @@ def parse_action_string(action: Any) -> Optional[Dict[str, Any]]:
 def _bucket_for_transfer(object_name: str, region_name: str) -> Optional[str]:
     obj = canonical_object_name(_normalize_token(object_name))
     region = _normalize_region(region_name)
-    if obj in MUG_OBJECTS and region in {'table_target_area', 'table'}:
+    if obj in MUG_OBJECTS and region in {'table_staging_area', 'table'}:
         return 'mug_to_placement'
     if obj in MUG_OBJECTS and region == BOX_STORAGE_REGION:
         return 'mug_to_box'

@@ -13,7 +13,7 @@ class FakeDetector:
             3: 'box_lid',
             50: 'panda_leftfinger_visual',
             101: 'box_boundary',
-            102: 'table_target_area',
+            102: 'table_staging_area',
         }
         self.handle_to_task_name = {
             1: 'mug2',
@@ -22,7 +22,7 @@ class FakeDetector:
         }
         self.handle_to_region_name = {
             101: 'box_boundary',
-            102: 'table_target_area',
+            102: 'table_staging_area',
         }
         self.current_visible = set()
         self.newly_detected = set()
@@ -111,13 +111,13 @@ def test_segmentation_adapter_fuses_mask_regions_and_discovery() -> None:
     second_mask[3:5, 4:6] = 3
     detector.current_visible = {'box_lid'}
     detector.newly_detected = {'box_lid'}
-    detector.current_regions = {'table_target_area'}
+    detector.current_regions = {'table_staging_area'}
     detector.camera_hits = {'box_lid': ['wrist']}
     detector.pixel_totals = {'box_lid': 4}
-    detector.object_region_membership = {'box_lid': ['table_target_area']}
+    detector.object_region_membership = {'box_lid': ['table_staging_area']}
     second_snapshot = adapter.capture_snapshot({'wrist': second_mask})
 
-    assert second_snapshot.object_evidence['box_lid'].mask_regions == ['table_target_area']
+    assert second_snapshot.object_evidence['box_lid'].mask_regions == ['table_staging_area']
     assert second_snapshot.newly_visible_objects == ['box_lid']
     assert adapter.is_lid_open(second_snapshot) is True
     assert adapter.blocking_objects_for_lid(first_snapshot) == ['mug2']
@@ -140,6 +140,42 @@ def test_segmentation_adapter_adds_geometric_object_regions() -> None:
     assert snapshot.object_region_map['mug2'] == 'box_lid_top'
 
 
+def test_segmentation_adapter_uses_bbox_overlap_for_mug_inside_box() -> None:
+    detector = FakeDetector()
+    detector.handle_to_task_name[4] = 'mug1'
+    detector.current_visible = {'mug1'}
+    detector.newly_detected = {'mug1'}
+    detector.object_poses = {'mug1': (0.27, 0.0, 0.12)}
+    detector.region_bboxes = {
+        'box_boundary': ((-0.2, -0.2, 0.0), (0.2, 0.2, 0.25)),
+        'mug1': ((0.14, -0.04, 0.04), (0.22, 0.04, 0.22)),
+    }
+
+    mask = _empty_mask()
+    mask[3:5, 4:6] = 4
+    snapshot = SegmentationEvidenceAdapter(detector=detector).capture_snapshot({'overhead': mask})
+
+    assert snapshot.object_region_map['mug1'] == 'inside_box'
+
+
+def test_segmentation_adapter_bbox_overlap_rejects_nearby_table_fall() -> None:
+    detector = FakeDetector()
+    detector.handle_to_task_name[4] = 'mug1'
+    detector.current_visible = {'mug1'}
+    detector.newly_detected = {'mug1'}
+    detector.object_poses = {'mug1': (0.30, 0.0, 0.12)}
+    detector.region_bboxes = {
+        'box_boundary': ((-0.2, -0.2, 0.0), (0.2, 0.2, 0.25)),
+        'mug1': ((0.24, -0.04, 0.04), (0.32, 0.04, 0.22)),
+    }
+
+    mask = _empty_mask()
+    mask[3:5, 4:6] = 4
+    snapshot = SegmentationEvidenceAdapter(detector=detector).capture_snapshot({'overhead': mask})
+
+    assert snapshot.object_region_map['mug1'] == 'table'
+
+
 def test_segmentation_adapter_refreshes_direct_detector_and_live_view_methods() -> None:
     detector = FakeDetector()
     detector.current_visible = {'mug2', 'box_lid'}
@@ -159,7 +195,7 @@ def test_segmentation_adapter_refreshes_direct_detector_and_live_view_methods() 
     assert detected == {'mug2', 'box_lid'}
     assert adapter.viewer.updated == 1
 
-    adapter.set_live_action_sequence(['pick(mug2)', 'place(mug2, table_target_area)'], current_action_index=0, current_action_label='pick(mug2)')
+    adapter.set_live_action_sequence(['pick(mug2)', 'place(mug2, table_staging_area)'], current_action_index=0, current_action_label='pick(mug2)')
     assert adapter.viewer.actions[-1] == ('current', 0, 'pick(mug2)')
 
     adapter.shutdown()

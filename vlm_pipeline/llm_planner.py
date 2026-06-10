@@ -3,6 +3,7 @@ Text-only Hugging Face planner backend.
 """
 
 import inspect
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict
@@ -19,6 +20,16 @@ except ImportError:
     AutoTokenizer = None
 
 from vlm_pipeline.vlm_planner import PlanResult, VLMPlanner
+
+
+def _qwen_thinking_mode() -> str:
+    legacy_no_think = os.environ.get("QWEN_NO_THINK_PROMPT", "").strip().lower() in {"1", "true", "yes", "on"}
+    mode = os.environ.get("QWEN_THINKING_MODE", "").strip().lower()
+    if mode in {"off", "no_think", "nothink", "false", "0"} or legacy_no_think:
+        return "off"
+    if mode in {"default", "on", "think", "thinking", "true", "1"}:
+        return "default"
+    return "off"
 
 
 class LLMPlanner(VLMPlanner):
@@ -106,6 +117,17 @@ class LLMPlanner(VLMPlanner):
         }
 
     def _build_prompt_text(self, system_prompt: str, user_prompt: str) -> str:
+        thinking_mode = _qwen_thinking_mode()
+        no_think_prompt = thinking_mode == "off"
+        if no_think_prompt and "/no_think" not in user_prompt:
+            user_prompt = f"/no_think\n\n{user_prompt}"
+        self.last_request_summary.update({
+            "qwen_thinking_mode": thinking_mode,
+            "qwen_no_think_prompt": no_think_prompt,
+            "effective_user_prompt": user_prompt,
+            "effective_user_prompt_length": len(user_prompt),
+        })
+
         if hasattr(self.tokenizer, "apply_chat_template"):
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -117,7 +139,7 @@ class LLMPlanner(VLMPlanner):
             }
             try:
                 signature = inspect.signature(self.tokenizer.apply_chat_template)
-                if "enable_thinking" in signature.parameters:
+                if no_think_prompt and "enable_thinking" in signature.parameters:
                     template_kwargs["enable_thinking"] = False
             except (TypeError, ValueError):
                 pass
