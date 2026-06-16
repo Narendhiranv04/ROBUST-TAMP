@@ -1331,12 +1331,13 @@ def test_few_shot_system_prompt_includes_shared_behavior_examples() -> None:
     )
 
     assert 'SHARED FEW-SHOT EXEMPLAR' in bundle.system_prompt
-    assert 'EXAMPLE 1: correct visible-only kitchen planning' in bundle.system_prompt
+    assert 'EXAMPLE 1: correct visible-only object planning' in bundle.system_prompt
     assert 'Do not invent or use hidden objects.' in bundle.system_prompt
     assert 'EXAMPLE 3: correct clearing before opening an obstructed lid' in bundle.system_prompt
     assert 'EXAMPLE 4: correct replanning after discovery' in bundle.system_prompt
-    assert 'EXAMPLE 5: correct implicit handling of a visible non-target object in the grill' in bundle.system_prompt
-    assert 'pick(phone)' in bundle.system_prompt
+    assert 'EXAMPLE 5: correct implicit handling of a visible non-target object' in bundle.system_prompt
+    assert 'EXAMPLE 6: correct batch processing and serving' in bundle.system_prompt
+    assert 'pick(stray_tool)' in bundle.system_prompt
 
 
 def test_pipeline_reports_validation_failure_before_execution() -> None:
