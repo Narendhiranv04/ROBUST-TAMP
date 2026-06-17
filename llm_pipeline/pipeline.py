@@ -97,13 +97,13 @@ class LLMPipelineConfig:
     context_builder_type: str = 'geometric'  # IMPROVED ACCURACY: Default to 3D geometric reasoning
 
     def resolve_model_name(self) -> Tuple[str, str]:
-        model_type = 'vlm' if self.enable_vision else (self.model_type or 'llm')
+        model_type = (self.model_type or ('vlm' if self.enable_vision else 'llm')).strip().lower()
         spec = resolve_planner_model(self.model_path or self.model_alias, model_type)
         return spec.alias, spec.path
 
     @property
     def effective_model_type(self) -> str:
-        return 'vlm' if self.enable_vision else 'llm'
+        return (self.model_type or ('vlm' if self.enable_vision else 'llm')).strip().lower()
 
 
 @dataclass
@@ -252,16 +252,16 @@ class LLMOnlyReplanningPipeline:
             if self.config.use_remote_planner:
                 expected_model = (
                     resolve_vlm_model(self.config.model_path or self.config.model_alias)
-                    if self.config.enable_vision
+                    if self.config.effective_model_type == 'vlm'
                     else resolve_llm_model(self.config.model_path or self.config.model_alias)
                 )
                 self.planner = RemoteTextLLMPlanner(
                     server_url=self.config.remote_planner_url or None,
                     expected_model=expected_model,
                 )
-            elif self.config.enable_vision:
+            elif self.config.effective_model_type == 'vlm':
                 if VLMPlanner is None:
-                    raise ImportError("VLMPlanner dependencies not met, but enable_vision=True")
+                    raise ImportError("VLMPlanner dependencies not met, but model_type='vlm'")
                 self.planner = VLMPlanner(
                     model_path=model_name or model_alias,
                     model_alias=model_alias,

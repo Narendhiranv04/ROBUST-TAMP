@@ -185,6 +185,47 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         client_module.HAS_REQUESTS = old_has_requests
 
 
+def test_remote_planner_preserves_server_failure_event() -> None:
+    fake_requests = _FakeRequests(
+        health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen-vl', 'model_name': 'qwen-vl', 'model_type': 'vlm', 'prompt_mode': 'text_visible', 'gpu_available': True},
+        plan_payload={
+            'success': False,
+            'actions': [],
+            'raw_output': 'Reasoning...\nopen(box_lid)\n' * 300,
+            'inference_time': 0.08,
+            'error_message': 'Previous planner output was too verbose and not parseable.',
+            'failure_event': {
+                'failure_id': 'planner_output_too_verbose',
+                'failure_layer': 'layer_1',
+                'stage': 'before_execution',
+                'source': 'parser',
+                'action': None,
+                'evidence': {'raw_output_chars': 7200},
+                'should_replan': True,
+                'message': 'Previous planner output was too verbose and not parseable. Reply with only a concise FINAL ACTIONS block.',
+            },
+        },
+    )
+    old_requests = client_module.requests
+    old_has_requests = client_module.HAS_REQUESTS
+    client_module.requests = fake_requests
+    client_module.HAS_REQUESTS = True
+    try:
+        planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
+        result = planner.generate_plan(
+            system_prompt='system',
+            user_prompt='user',
+            icl_mode='zero_shot',
+        )
+        assert result.success is False
+        assert result.failure_event is not None
+        assert result.failure_event.failure_id == 'planner_output_too_verbose'
+        assert 'too verbose' in result.failure_event.message
+    finally:
+        client_module.requests = old_requests
+        client_module.HAS_REQUESTS = old_has_requests
+
+
 def test_remote_planner_sends_held_object_from_prompt_metadata() -> None:
     fake_requests = _FakeRequests(
         health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen', 'model_name': 'qwen', 'model_type': 'llm', 'prompt_mode': 'text_visible', 'gpu_available': True},

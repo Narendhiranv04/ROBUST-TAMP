@@ -19,6 +19,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
+from llm_pipeline.executable_symbols import (
+    DEFAULT_OBJECT_ORDER,
+    DEFAULT_REGION_ORDER,
+    GRILL_OBJECT_ORDER,
+    GRILL_REGION_ORDER,
+)
+from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
+
 # Try to import planner dependencies
 try:
     import torch
@@ -166,6 +174,26 @@ class VLMPlanner:
         self.last_request_summary: Dict[str, Any] = {}
         self.known_objects = set(type(self).KNOWN_OBJECTS)
         self.known_regions = set(type(self).KNOWN_REGIONS)
+        self.parser = self._build_strict_parser()
+        self.last_parse_error: Optional[str] = None
+
+    def _build_strict_parser(self) -> StrictActionParser:
+        valid_objects = (
+            set(DEFAULT_OBJECT_ORDER)
+            | set(GRILL_OBJECT_ORDER)
+            | set(self.known_objects)
+            | {"lid"}
+        )
+        valid_regions = (
+            set(DEFAULT_REGION_ORDER)
+            | set(GRILL_REGION_ORDER)
+            | set(self.known_regions)
+        )
+        return StrictActionParser(
+            valid_actions=("pick", "place", "open", "close"),
+            valid_objects=valid_objects,
+            valid_regions=valid_regions,
+        )
         
     def set_known_entities(self,
                            objects: Optional[List[str]] = None,
@@ -173,6 +201,7 @@ class VLMPlanner:
         """Update planner validation symbols from the current observation."""
         self.known_objects = set(objects) if objects else set(type(self).KNOWN_OBJECTS)
         self.known_regions = set(regions) if regions else set(type(self).KNOWN_REGIONS)
+        self.parser = self._build_strict_parser()
 
     def _infer_model_family(self) -> str:
         lowered = self.model_name.lower()
@@ -474,9 +503,9 @@ class VLMPlanner:
                                  max_new_tokens: int,
                                  temperature: float,
                                  pad_token_id: Optional[int] = None) -> Dict[str, Any]:
-        capped_tokens = max(64, min(int(max_new_tokens), 4096))
+        requested_tokens = max(1, int(max_new_tokens))
         kwargs: Dict[str, Any] = {
-            "max_new_tokens": capped_tokens,
+            "max_new_tokens": requested_tokens,
             "do_sample": temperature > 0,
         }
         if temperature > 0:
@@ -485,12 +514,32 @@ class VLMPlanner:
             kwargs["pad_token_id"] = pad_token_id
         return kwargs
 
+    def _format_failure_diagnosis(self, bad_output: str) -> str:
+        text = bad_output or ""
+        details = []
+        if len(text) >= 4000:
+            details.append(
+                f"the previous answer was too verbose ({len(text)} characters)"
+            )
+        if not self.FINAL_ACTIONS_MARKER.search(text):
+            details.append("it did not contain a clean FINAL ACTIONS block")
+        if self.last_parse_error:
+            details.append(f"parser error: {self.last_parse_error}")
+        if not details:
+            details.append("it did not parse as executable action lines")
+        return "; ".join(details)
+
     def _build_format_repair_prompt(self, user_prompt: str, bad_output: str) -> str:
         prior_output = (bad_output.strip() or "(empty output)")[:1200]
+        diagnosis = self._format_failure_diagnosis(bad_output)
         return f"""{user_prompt}
 
 FORMAT REPAIR:
-Your previous answer was not parseable as executable actions:
+Your previous answer failed formatting because {diagnosis}.
+Do not re-analyze the task. Do not restate the state, goal, checks, alternatives, or reasoning.
+Return only the executable action block.
+
+Previous answer excerpt:
 {prior_output}
 
 Rewrite the answer so it ends with this exact block:
@@ -681,7 +730,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
 
             skeleton = self.parse_plan(output_text)
             if not skeleton:
-                print("[VLM Planner] No parseable actions found. Retrying once with format repair.")
+                diagnosis = self._format_failure_diagnosis(output_text)
+                print(f"[VLM Planner] No parseable actions found ({diagnosis}). Retrying once with format repair.")
                 repaired_output = self._generate_multimodal_output(
                     image=image,
                     system_prompt=system_prompt,
@@ -696,7 +746,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                     skeleton = repaired_skeleton
 
             inference_time = time.time() - start_time
-            error_message = None if skeleton else "No parseable actions found in VLM output"
+            error_message = None if skeleton else self._format_failure_diagnosis(output_text)
             return PlanResult(
                 success=len(skeleton) > 0,
                 skeleton=skeleton,
@@ -746,7 +796,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
             skeleton = self.parse_plan(output_text)
 
             if not skeleton:
-                print("[VLM Planner] Text-only parse yielded no actions. Retrying once with format repair.")
+                diagnosis = self._format_failure_diagnosis(output_text)
+                print(f"[VLM Planner] Text-only parse yielded no actions ({diagnosis}). Retrying once with format repair.")
                 repaired_output = self._generate_text_output(
                     system_prompt=system_prompt,
                     user_prompt=self._build_format_repair_prompt(user_prompt, output_text),
@@ -760,7 +811,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                     skeleton = repaired_skeleton
 
             inference_time = time.time() - start_time
-            error_message = None if skeleton else "No parseable actions found in VLM output"
+            error_message = None if skeleton else self._format_failure_diagnosis(output_text)
             return PlanResult(
                 success=len(skeleton) > 0,
                 skeleton=skeleton,
@@ -790,12 +841,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
 
     def parse_plan(self, text: str) -> List[ActionSkeleton]:
         """
-        Parse VLM output text into action skeletons.
-
-        Handles formats like:
-        - "1. pick(mug2)"
-        - "pick(mug2)"
-        - "- pick(mug2)"
+        Parse VLM output text into action skeletons using the maintained
+        strict action parser shared with the LLM pipeline.
 
         Args:
             text: Raw output text from VLM
@@ -805,135 +852,23 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
         """
         if not text:
             return []
+        self.last_parse_error = None
+        try:
+            direct_actions = self.parser.parse(text)
+        except StrictParseError as exc:
+            self.last_parse_error = str(exc)
+            print(f"[Parser] Strict VLM parse failed: {self.last_parse_error}")
+            return []
 
-        think_close = re.search(r'</think\s*>', text, flags=re.IGNORECASE)
-        if think_close:
-            text = text[think_close.end():]
-        else:
-            text = re.sub(r'</?think\s*>', '', text, flags=re.IGNORECASE)
-
-        final_markers = list(self.FINAL_ACTIONS_MARKER.finditer(text))
-        if final_markers:
-            text = text[final_markers[-1].end():]
-
-        actions = []
-        seen_pick_place_pairs = set()  # Track (object, region) pairs to detect duplicates
-        action_pattern = re.compile(r'([A-Za-z][A-Za-z0-9_-]*)\s*\(\s*([^)]*)\s*\)')
-
-        def _normalize_token(token: str) -> str:
-            """Normalize an action/object/region token."""
-            return token.strip().lower().replace(" ", "_")
-
-        def _normalize_action_name(name: str) -> str:
-            """
-            Normalize common model output action variants to canonical names.
-            """
-            n = _normalize_token(name).replace("-", "_")
-            if n in {"pick", "pickup", "pick_up", "grasp"}:
-                return "pick"
-            if n in {"place", "put", "put_down", "putdown"}:
-                return "place"
-            if n in {"open", "open_lid", "openlid", "open_box_lid", "open_boxlid", "open_box"}:
-                return "open-lid"
-            if n in {"close", "close_lid", "closelid", "close_grill_lid", "close_grill"}:
-                return "close-lid"
-            if n in {"move_object_to", "move_to", "move_object", "move"}:
-                return "move"
-            return n.replace("_", "-")
-
-        def _append_action(action_name: str, args: List[str]):
-            """Append action with duplicate-pair protection."""
-            if len(actions) >= 25:
-                return
-
-            action = ActionSkeleton(action_name=action_name, args=tuple(args))
-            if action_name == 'place' and len(actions) >= 1:
-                prev = actions[-1]
-                if prev.action_name == 'pick':
-                    pair_key = (prev.args[0], args[1])
-                    if pair_key in seen_pick_place_pairs:
-                        print(f"[Parser] Skipping duplicate pick-place: {pair_key}")
-                        actions.pop()
-                        return
-                    seen_pick_place_pairs.add(pair_key)
-            actions.append(action)
-
-        def _consume_match(match) -> bool:
-            action_name = _normalize_action_name(match.group(1))
-            args_raw = match.group(2).strip()
-            args = []
-            if args_raw:
-                args = [_normalize_token(a) for a in args_raw.split(',') if a.strip()]
-
-            if action_name == "open-lid":
-                if len(args) == 0:
-                    args = ["box_lid"]
-                elif len(args) != 1:
-                    print(f"Warning: {action_name} expects 1 arg, got {len(args)}")
-                    return False
-                _append_action("open-lid", args)
-                return len(actions) >= 25
-
-            if action_name == "close-lid":
-                if len(args) == 0:
-                    args = ["box_lid"]
-                elif len(args) != 1:
-                    print(f"Warning: {action_name} expects 1 arg, got {len(args)}")
-                    return False
-                _append_action("close-lid", args)
-                return len(actions) >= 25
-
-            if action_name == "move":
-                if len(args) not in {1, 2}:
-                    print(f"Warning: {action_name} expects 1 or 2 args, got {len(args)}")
-                    return False
-                if len(args) == 2 and args[0] in self.known_regions and args[1] in self.known_objects:
-                    args = [args[1], args[0]]
-                _append_action("move", args)
-                return len(actions) >= 25
-
-            if action_name == "pick":
-                if len(args) != 1:
-                    print(f"Warning: {action_name} expects 1 arg, got {len(args)}")
-                    return False
-                _append_action("pick", args)
-            elif action_name == "place":
-                if len(args) != 2:
-                    print(f"Warning: {action_name} expects 2 args, got {len(args)}")
-                    return False
-                if args[0] in self.known_regions and args[1] in self.known_objects:
-                    args = [args[1], args[0]]
-                _append_action("place", args)
-            elif action_name == "open_lid":
-                if len(args) == 0:
-                    args = ["box_lid"]
-                if len(args) != 1:
-                    print(f"Warning: open_lid expects 1 arg, got {len(args)}")
-                    return False
-                _append_action("open-lid", args)
-
-            return len(actions) >= 25
-
-        # Parse line by line first, allowing multiple actions per line.
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            line = re.sub(r'^\s*(?:\d+[.)]|[-*])\s*', '', line)
-            for match in action_pattern.finditer(line):
-                if _consume_match(match):
-                    print(f"[Parser] Capping plan at 25 actions")
-                    return actions
-
-        # Fallback: scan the whole response in case the model emitted actions inline
-        # after reasoning text or without newlines.
-        if not actions:
-            for match in action_pattern.finditer(text):
-                if _consume_match(match):
-                    print(f"[Parser] Capping plan at 25 actions")
-                    return actions
-
-        return actions
+        skeletons: List[ActionSkeleton] = []
+        for action in direct_actions:
+            action_name = action.action_name
+            if action_name == "open":
+                action_name = "open-lid"
+            elif action_name == "close":
+                action_name = "close-lid"
+            skeletons.append(ActionSkeleton(action_name=action_name, args=tuple(action.args)))
+        return skeletons
 
     def validate_plan(self, skeleton: List[ActionSkeleton]) -> Tuple[bool, List[str]]:
         """Validate syntax and generic execution discipline for a plan."""

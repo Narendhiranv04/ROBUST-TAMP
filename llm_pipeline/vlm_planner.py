@@ -3,7 +3,17 @@
 from __future__ import annotations
 import time
 from typing import Any, Dict
-from llm_pipeline.pipeline_types import BasePlanner, PromptBundle, PlanResult, DirectAction, GoalCheckResult
+from llm_pipeline.pipeline_types import (
+    BasePlanner,
+    DirectAction,
+    FailureEvent,
+    FailureLayer,
+    FailureSource,
+    FailureStage,
+    GoalCheckResult,
+    PlanResult,
+    PromptBundle,
+)
 
 
 class VLMPlanner(BasePlanner):
@@ -33,12 +43,38 @@ class VLMPlanner(BasePlanner):
             device=device,
             use_4bit=use_4bit,
         )
+        self.parser = self.legacy_planner.parser
+        self.legacy_planner.parser = self.parser
 
     def load_model(self) -> bool:
         if self.loaded:
             return True
         self.loaded = bool(self.legacy_planner.load_model())
         return self.loaded
+
+    def _build_planning_failure_event(self, legacy_result) -> FailureEvent | None:
+        if legacy_result.success:
+            return None
+        raw_output = legacy_result.raw_output or ""
+        too_verbose = len(raw_output) >= 4000
+        failure_id = "planner_output_too_verbose" if too_verbose else "planner_output_not_parseable"
+        message = legacy_result.error_message or "Planner output was not parseable as executable actions."
+        if too_verbose and "too verbose" not in message:
+            message = f"Previous planner output was too verbose ({len(raw_output)} characters) and not parseable. Reply with only a concise FINAL ACTIONS block."
+        return FailureEvent(
+            failure_id=failure_id,
+            stage=FailureStage.BEFORE_EXECUTION,
+            source=FailureSource.PARSER,
+            action=None,
+            evidence={
+                "raw_output": raw_output,
+                "raw_output_chars": len(raw_output),
+                "model_type": "vlm",
+            },
+            failure_layer=FailureLayer.LAYER_1,
+            should_replan=True,
+            message=message,
+        )
 
     def plan(self, bundle: PromptBundle) -> PlanResult:
         start_time = time.time()
@@ -51,11 +87,12 @@ class VLMPlanner(BasePlanner):
         metadata = dict(getattr(bundle, "metadata", {}) or {})
         max_new_tokens = int(metadata.get("max_new_tokens", 4096) or 4096)
         temperature = float(metadata.get("temperature", 0.0) or 0.0)
+        use_vision = composite is not None
         self.last_request_summary = {
             "model_type": "vlm",
-            "text_only": False,
-            "use_vision": True,
-            "image_present": composite is not None,
+            "text_only": not use_vision,
+            "use_vision": use_vision,
+            "image_present": use_vision,
             "image_shape": list(getattr(composite, "shape", ())) if composite is not None else [],
         }
 
@@ -65,13 +102,23 @@ class VLMPlanner(BasePlanner):
         # We'll use a slightly modified call or direct inference if needed.
         
         # For now, we utilize the generate_plan method which takes system/user prompts
-        legacy_result = self.legacy_planner.generate_plan(
-            image=composite,
-            system_prompt=bundle.system_prompt,
-            user_prompt=bundle.user_prompt,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-        )
+        if use_vision:
+            self.legacy_planner.parser = self.parser
+            legacy_result = self.legacy_planner.generate_plan(
+                image=composite,
+                system_prompt=bundle.system_prompt,
+                user_prompt=bundle.user_prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+            )
+        else:
+            self.legacy_planner.parser = self.parser
+            legacy_result = self.legacy_planner.generate_plan_text_only(
+                system_prompt=bundle.system_prompt,
+                user_prompt=bundle.user_prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+            )
         
         # 3. Map legacy ActionSkeleton to DirectAction
         actions = []
@@ -93,7 +140,8 @@ class VLMPlanner(BasePlanner):
             actions=actions,
             raw_output=legacy_result.raw_output,
             inference_time=time.time() - start_time,
-            error_message=legacy_result.error_message
+            error_message=legacy_result.error_message,
+            failure_event=self._build_planning_failure_event(legacy_result),
         )
 
     def _parse_goal_check_output(self, raw_output: str) -> GoalCheckResult:

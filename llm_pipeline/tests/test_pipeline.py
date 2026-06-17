@@ -21,6 +21,17 @@ from llm_pipeline.pipeline_types import (
 )
 
 
+def test_vlm_model_type_can_be_text_only() -> None:
+    config = LLMPipelineConfig(
+        model_alias='qwen3-vl-8b-thinking',
+        model_type='vlm',
+        enable_vision=False,
+    )
+
+    assert config.resolve_model_name() == ('qwen3-vl-8b-thinking', 'Qwen/Qwen3-VL-8B-Thinking')
+    assert config.effective_model_type == 'vlm'
+
+
 class QueuePlanner:
     def __init__(self, outputs):
         self.outputs = list(outputs)

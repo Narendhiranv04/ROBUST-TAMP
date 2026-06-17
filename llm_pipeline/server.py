@@ -150,10 +150,14 @@ class LLMServer:
 
     def generate_plan(self, request: PlanRequest) -> PlanResponse:
         image = self._decode_image_base64(request.image_base64) if request.image_base64 else None
-        use_vision = bool(request.use_vision or image is not None or self.model_spec.model_type == 'vlm')
-        if use_vision:
+        use_vision = bool(request.use_vision or image is not None)
+        if self.model_spec.model_type == 'vlm':
             if image is None:
-                raise ValueError('VLM planning requires image_base64')
+                if use_vision:
+                    raise ValueError('VLM planning requires image_base64')
+                images = []
+            else:
+                images = [image]
             bundle = PromptBundle(
                 goal_text=request.goal or request.user_prompt,
                 system_prompt=request.system_prompt,
@@ -161,7 +165,7 @@ class LLMServer:
                 visible_objects=[],
                 valid_regions=[],
                 icl_mode=request.icl_mode,
-                images=[image],
+                images=images,
                 metadata={
                     'held_object': request.held_object,
                     'max_new_tokens': request.max_new_tokens,

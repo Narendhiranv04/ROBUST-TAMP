@@ -208,7 +208,7 @@ class RemoteTextLLMPlanner:
                         message=str(exc),
                     )
 
-            if not actions and raw_output.strip():
+            if not actions and raw_output.strip() and failure_event is None:
                 try:
                     actions = self.parser.parse(raw_output, held_object=held_object)
                 except StrictParseError as exc:
