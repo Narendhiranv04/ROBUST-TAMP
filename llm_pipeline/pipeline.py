@@ -16,6 +16,7 @@ from llm_pipeline.failure_logic import SegmentationFirstFailureChecker, Geometri
 from llm_pipeline.object_aliases import scene_object_for_object
 from llm_pipeline.planner import TextLLMPlanner
 from llm_pipeline.prompt_builder import TextOnlyContextBuilder
+from llm_pipeline.quantization import normalize_quantization
 from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
 from llm_pipeline.strict_parser import StrictActionParser
 from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_region
@@ -62,6 +63,7 @@ class LLMPipelineConfig:
     max_replans: int = 10
     enable_replanning: bool = True
     use_4bit: bool = False
+    quantization: str = ''
     device: str = 'cuda'
     headless: bool = False
     text_only: bool = True
@@ -104,6 +106,10 @@ class LLMPipelineConfig:
     @property
     def effective_model_type(self) -> str:
         return (self.model_type or ('vlm' if self.enable_vision else 'llm')).strip().lower()
+
+    @property
+    def effective_quantization(self) -> str:
+        return normalize_quantization(self.quantization, use_4bit=self.use_4bit)
 
 
 @dataclass
@@ -266,13 +272,15 @@ class LLMOnlyReplanningPipeline:
                     model_path=model_name or model_alias,
                     model_alias=model_alias,
                     device=self.config.device,
-                    use_4bit=self.config.use_4bit
+                    use_4bit=self.config.use_4bit,
+                    quantization=self.config.effective_quantization,
                 )
             else:
                 self.planner = TextLLMPlanner(
                     model_name=model_name,
                     model_alias=model_alias,
                     use_4bit=self.config.use_4bit,
+                    quantization=self.config.effective_quantization,
                     device=self.config.device,
                 )
 
@@ -349,6 +357,7 @@ class LLMOnlyReplanningPipeline:
             'model_alias': getattr(self.planner, 'model_alias', self.config.model_alias),
             'model_name': getattr(self.planner, 'model_name', self.config.model_path or self.config.model_alias),
             'model_type': self.config.effective_model_type,
+            'quantization': self._planner_quantization(debug_snapshot),
             'icl_mode': self.config.icl_mode,
             'loaded': bool(getattr(self.planner, 'loaded', False)),
             'text_only': not self.config.enable_vision,
@@ -975,6 +984,7 @@ class LLMOnlyReplanningPipeline:
             'model_alias': getattr(self.planner, 'model_alias', self.config.model_alias),
             'model_path': getattr(self.planner, 'model_name', self.config.model_path or self.config.model_alias),
             'model_type': model_type,
+            'quantization': self._planner_quantization(),
             'icl_mode': self.config.icl_mode,
             'prompt_mode': prompt_mode,
             'replan_mode': 'off' if execution_skipped else 'on',
@@ -1021,6 +1031,21 @@ class LLMOnlyReplanningPipeline:
         if self.symbol_registry is not None:
             debug['symbol_registry'] = self.symbol_registry.to_dict()
         return debug
+
+    def _planner_quantization(self, debug_snapshot: Optional[Dict[str, Any]] = None) -> str:
+        direct = getattr(self.planner, 'quantization', None)
+        if direct:
+            return str(direct)
+        if debug_snapshot is None:
+            debug_snapshot = self.get_debug_snapshot()
+        for source in (
+            debug_snapshot,
+            debug_snapshot.get('health', {}) if isinstance(debug_snapshot, dict) else {},
+            debug_snapshot.get('last_request', {}) if isinstance(debug_snapshot, dict) else {},
+        ):
+            if isinstance(source, dict) and source.get('quantization'):
+                return str(source['quantization'])
+        return self.config.effective_quantization
 
     def shutdown(self) -> None:
         if self.segmentation_adapter is not None and hasattr(self.segmentation_adapter, 'shutdown'):
@@ -1093,6 +1118,7 @@ if __name__ == '__main__':
     parser.add_argument("--goal", type=str, default="", help="Task goal text. Defaults to the variant goal when --variant is set.")
     parser.add_argument("--model", type=str, default="qwen", help="Model alias")
     parser.add_argument("--model-type", choices=["", "llm", "vlm"], default="", help="Optional explicit model type")
+    parser.add_argument("--quantization", choices=["", "none", "bnb8", "bnb4"], default="", help="Local quantization mode for Hugging Face loading")
     parser.add_argument("--icl-mode", type=str, default=ICLMode.ZERO_SHOT.value, choices=[mode.value for mode in ICLMode], help="Prompt mode")
     parser.add_argument("--vision", action="store_true", help="Enable vision-first reasoning (VLM)")
     display_group = parser.add_mutually_exclusive_group()
@@ -1155,6 +1181,7 @@ if __name__ == '__main__':
         headless=headless,
         enable_vision=args.vision,
         model_type=args.model_type or ("vlm" if args.vision else "llm"),
+        quantization=args.quantization,
         text_only=not args.vision,
         prompt_mode=PROMPT_MODE_VLM_MULTIMODAL if args.vision else PROMPT_MODE_SEGMENTATION_TEXT,
         use_remote_planner=args.remote,

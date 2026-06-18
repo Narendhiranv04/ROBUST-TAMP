@@ -29,6 +29,7 @@ class VLMPlanner(BasePlanner):
         model_alias: str = "",
         device: str = "cuda",
         use_4bit: bool = False,
+        quantization: str = "",
         trust_remote_code: bool = True
     ):
         from vlm_pipeline.vlm_planner import VLMPlanner as LegacyVLMPlanner
@@ -42,6 +43,7 @@ class VLMPlanner(BasePlanner):
             model_type="vlm",
             device=device,
             use_4bit=use_4bit,
+            quantization=quantization,
         )
         self.parser = self.legacy_planner.parser
         self.legacy_planner.parser = self.parser
@@ -255,6 +257,7 @@ class VLMPlanner(BasePlanner):
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": "vlm",
+            "quantization": getattr(self.legacy_planner, "quantization", "none"),
             "loaded": self.loaded,
             "text_only": False,
             "use_vision": True,

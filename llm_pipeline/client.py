@@ -162,6 +162,9 @@ class RemoteTextLLMPlanner:
             'held_object': held_object,
             'use_vision': bool(image_b64 is not None),
             'image_present': bool(image_b64 is not None),
+            'valid_actions': sorted(self.parser.valid_actions),
+            'valid_objects': sorted(self.parser.valid_objects),
+            'valid_regions': sorted(self.parser.valid_regions),
         }
         if image_b64 is not None:
             request_data['image_base64'] = image_b64
@@ -170,6 +173,9 @@ class RemoteTextLLMPlanner:
             'use_vision': bool(image_b64 is not None),
             'image_present': bool(image_b64 is not None),
             'text_only': image_b64 is None,
+            'valid_actions': sorted(self.parser.valid_actions),
+            'valid_objects': sorted(self.parser.valid_objects),
+            'valid_regions': sorted(self.parser.valid_regions),
         }
 
         try:
@@ -302,6 +308,7 @@ class RemoteTextLLMPlanner:
                 'model_type',
                 getattr(self.expected_model, 'model_type', 'llm'),
             ),
+            'quantization': self.server_model_info.get('quantization'),
             'loaded': self.loaded,
             'server_url': self.server_url,
             'health': dict(self.server_model_info),
@@ -312,6 +319,7 @@ class RemoteTextLLMPlanner:
             if health.status_code == 200:
                 info['health'] = health.json()
                 info['model_type'] = info['health'].get('model_type', info['model_type'])
+                info['quantization'] = info['health'].get('quantization', info.get('quantization'))
         except Exception as exc:
             info['health_error'] = str(exc)
 

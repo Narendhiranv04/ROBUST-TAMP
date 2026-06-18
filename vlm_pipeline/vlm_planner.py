@@ -25,6 +25,7 @@ from llm_pipeline.executable_symbols import (
     GRILL_OBJECT_ORDER,
     GRILL_REGION_ORDER,
 )
+from llm_pipeline.quantization import make_bnb_quantization_config, normalize_quantization
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 
 # Try to import planner dependencies
@@ -149,6 +150,7 @@ class VLMPlanner:
     def __init__(self, 
                  model_name: str = "Qwen/Qwen2-VL-2B-Instruct",
                  use_4bit: bool = False,  # 2B fits without quantization
+                 quantization: str = "",
                  device: str = "cuda",
                  model_alias: str = "",
                  model_type: str = "vlm"):
@@ -158,10 +160,12 @@ class VLMPlanner:
         Args:
             model_name: HuggingFace model name
             use_4bit: Whether to use 4-bit quantization
+            quantization: Explicit quantization mode: none, bnb8, or bnb4
             device: Device to run on ('cuda' or 'cpu')
         """
         self.model_name = model_name
-        self.use_4bit = use_4bit
+        self.quantization = normalize_quantization(quantization, use_4bit=use_4bit)
+        self.use_4bit = self.quantization == "bnb4"
         self.device = device
         self.model_alias = model_alias or model_name
         self.model_type = model_type
@@ -356,7 +360,7 @@ class VLMPlanner:
             return False
 
         print(f"Loading VLM: {self.model_name}")
-        print(f"Using 4-bit quantization: {self.use_4bit}")
+        print(f"Quantization: {self.quantization}")
         self.model_family = self._infer_model_family()
         print(f"Detected model family: {self.model_family}")
         model_loaders = self._candidate_model_loaders()
@@ -387,17 +391,10 @@ class VLMPlanner:
         try:
             self._load_processor()
 
-            if self.use_4bit:
+            if self.quantization != "none":
                 try:
-                    from transformers import BitsAndBytesConfig
-                    print("Configuring 4-bit quantization...")
-
-                    bnb_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_quant_type="nf4",
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_use_double_quant=True,
-                    )
+                    print(f"Configuring quantization: {self.quantization}")
+                    bnb_config = make_bnb_quantization_config(self.quantization, torch)
 
                     self.model = _load_from_pretrained({
                         "quantization_config": bnb_config,
@@ -406,16 +403,17 @@ class VLMPlanner:
                         "low_cpu_mem_usage": True,
                     })
                 except Exception as exc:
-                    print(f"4-bit quantization failed: {exc}")
+                    print(f"Quantization failed ({self.quantization}): {exc}")
                     print("Cleaning up memory and falling back to float16...")
                     self.model = None
                     import gc
                     gc.collect()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                    self.quantization = "none"
                     self.use_4bit = False
 
-            if not self.use_4bit:
+            if self.quantization == "none":
                 print("Loading with float16 precision...")
                 self.model = _load_from_pretrained({
                     "device_map": "auto",
@@ -456,6 +454,7 @@ class VLMPlanner:
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": self.model_type,
+            "quantization": self.quantization,
             "use_vision": use_vision,
             "image_present": image is not None,
             "image_shape": list(image.shape) if image is not None else None,
@@ -835,6 +834,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
             "model_type": self.model_type,
             "model_family": self.model_family,
             "model_loader_name": self.model_loader_name,
+            "quantization": self.quantization,
             "loaded": self.loaded,
             "last_request": self.last_request_summary,
         }

@@ -134,10 +134,10 @@ python -m llm_pipeline.server \
   --model /scratch4/long-horizon/hub/models--casperhansen--deepseek-r1-distill-qwen-32b-awq/snapshots/e20a4933e66aa5eccc8270489f5aeab17f90b888 \
   --host 127.0.0.1 \
   --port 8020 \
-  --no-4bit
+  --quantization none
 ```
 
-Use `--no-4bit` for AWQ models because they are already quantized. Do not combine AWQ with BitsAndBytes 4-bit.
+Use `--quantization none` for AWQ/FP8 models because they are already quantized. Use `--quantization bnb4` only with normal non-quantized HF checkpoints.
 
 ## 4. Forward Server Ports to the Local Trial Machine
 

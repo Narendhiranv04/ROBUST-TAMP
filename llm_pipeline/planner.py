@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
 
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
+from llm_pipeline.quantization import make_bnb_quantization_config, normalize_quantization
 
 
 def _qwen_thinking_mode() -> str:
@@ -40,11 +41,13 @@ class TextLLMPlanner:
         model_name: str,
         model_alias: str,
         use_4bit: bool = False,
+        quantization: str = "",
         device: str = "cuda",
     ):
         self.model_name = model_name
         self.model_alias = model_alias or model_name
-        self.use_4bit = use_4bit
+        self.quantization = normalize_quantization(quantization, use_4bit=use_4bit)
+        self.use_4bit = self.quantization == "bnb4"
         self.device = device
         self.tokenizer = None
         self.model = None
@@ -96,15 +99,10 @@ class TextLLMPlanner:
             if torch.cuda.is_available():
                 model_kwargs["device_map"] = "auto"
 
-            if self.use_4bit:
-                from transformers import BitsAndBytesConfig
-
-                model_kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                )
+            quantization_config = make_bnb_quantization_config(self.quantization, torch)
+            if quantization_config is not None:
+                print(f"Configuring quantization: {self.quantization}")
+                model_kwargs["quantization_config"] = quantization_config
 
             try:
                 self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
@@ -134,6 +132,7 @@ class TextLLMPlanner:
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": "llm",
+            "quantization": self.quantization,
             "text_only": True,
             "request_type": request_type,
             "icl_mode": icl_mode,
@@ -267,7 +266,7 @@ class TextLLMPlanner:
                 "raw_output": raw_output,
             },
             failure_layer=FailureLayer.LAYER_1,
-            should_replan=False,
+            should_replan=True,
             message=str(exc),
         )
 
@@ -360,6 +359,7 @@ class TextLLMPlanner:
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": "llm",
+            "quantization": self.quantization,
             "loaded": self.loaded,
             "last_request": self.last_request_summary,
         }

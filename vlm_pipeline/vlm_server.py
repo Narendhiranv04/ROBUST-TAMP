@@ -20,6 +20,11 @@ try:
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
+    FastAPI = None
+    HTTPException = None
+    CORSMiddleware = None
+    BaseModel = object
+    uvicorn = None
     print("FastAPI not installed. Run: pip install fastapi uvicorn")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vlm_pipeline.model_registry import format_model_listing, resolve_model_spec
 from vlm_pipeline.planner_factory import create_local_planner
 from vlm_pipeline.vlm_planner import ActionSkeleton, PlanResult
+from llm_pipeline.quantization import normalize_quantization
 
 
 class PlanRequest(BaseModel):
@@ -62,6 +68,7 @@ class HealthResponse(BaseModel):
     model_name: str
     model_alias: str
     model_type: str
+    quantization: str = "none"
     prompt_mode: str
     gpu_available: bool
 
@@ -69,9 +76,16 @@ class HealthResponse(BaseModel):
 class VLMServer:
     """Planner inference server."""
 
-    def __init__(self, model: str = "qwen-vl", model_type: str = "", use_4bit: bool = True):
+    def __init__(
+        self,
+        model: str = "qwen-vl",
+        model_type: str = "",
+        use_4bit: bool = True,
+        quantization: str = "",
+    ):
         self.model_spec = resolve_model_spec(model, model_type)
-        self.use_4bit = use_4bit
+        self.quantization = normalize_quantization(quantization, use_4bit=use_4bit)
+        self.use_4bit = self.quantization == "bnb4"
         self.planner = None
         self.loaded = False
         self.last_request_summary: Dict[str, Any] = {}
@@ -84,6 +98,7 @@ class VLMServer:
             model=self.model_spec.path,
             model_type=self.model_spec.model_type,
             use_4bit=self.use_4bit,
+            quantization=self.quantization,
             use_mock=False,
         )
         if hasattr(self.planner, "model_alias"):
@@ -163,7 +178,12 @@ class VLMServer:
 
 
 
-def create_app(model: str = "qwen-vl", model_type: str = "", use_4bit: bool = True) -> FastAPI:
+def create_app(
+    model: str = "qwen-vl",
+    model_type: str = "",
+    use_4bit: bool = True,
+    quantization: str = "",
+) -> FastAPI:
     app = FastAPI(
         title="Planner Inference Server",
         description="Remote Hugging Face planner inference for robot task planning",
@@ -178,7 +198,12 @@ def create_app(model: str = "qwen-vl", model_type: str = "", use_4bit: bool = Tr
         allow_headers=["*"],
     )
 
-    server = VLMServer(model=model, model_type=model_type, use_4bit=use_4bit)
+    server = VLMServer(
+        model=model,
+        model_type=model_type,
+        use_4bit=use_4bit,
+        quantization=quantization,
+    )
 
     @app.on_event("startup")
     async def startup_event():
@@ -193,6 +218,7 @@ def create_app(model: str = "qwen-vl", model_type: str = "", use_4bit: bool = Tr
             model_name=server.model_spec.path,
             model_alias=server.model_spec.alias,
             model_type=server.model_spec.model_type,
+            quantization=server.quantization,
             prompt_mode=server.model_spec.prompt_mode,
             gpu_available=torch.cuda.is_available(),
         )
@@ -203,6 +229,7 @@ def create_app(model: str = "qwen-vl", model_type: str = "", use_4bit: bool = Tr
             "model_alias": server.model_spec.alias,
             "model_name": server.model_spec.path,
             "model_type": server.model_spec.model_type,
+            "quantization": server.quantization,
             "prompt_mode": server.model_spec.prompt_mode,
             "last_request": server.last_request_summary,
         }
@@ -237,9 +264,13 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
     parser.add_argument("--model", type=str, default="qwen-vl", help="Registered model alias or Hugging Face model path")
     parser.add_argument("--model-type", type=str, default="", choices=["", "vlm", "llm"], help="Explicit model type when --model is a custom path")
-    parser.add_argument("--no-4bit", action="store_true", help="Disable 4-bit quantization")
+    parser.add_argument("--quantization", choices=["none", "bnb8", "bnb4"], default="", help="Explicit quantization mode. Use bnb4 for native bitsandbytes 4-bit.")
+    parser.add_argument("--no-4bit", action="store_true", help="Deprecated alias for --quantization none")
     parser.add_argument("--list-models", action="store_true", help="List registered planner models and exit")
     args = parser.parse_args()
+
+    if args.no_4bit and args.quantization:
+        parser.error("--no-4bit is deprecated; do not combine it with --quantization. Use --quantization none instead.")
 
     if args.list_models:
         print(format_model_listing())
@@ -255,11 +286,17 @@ def main():
     print("=" * 60)
     print(f"Model: {args.model}")
     print(f"Model type override: {args.model_type or '(auto)'}")
-    print(f"4-bit quantization: {not args.no_4bit}")
+    quantization = normalize_quantization(args.quantization, use_4bit=not args.no_4bit)
+    print(f"Quantization: {quantization}")
     print(f"Server: http://{args.host}:{args.port}")
     print("=" * 60)
 
-    app = create_app(model=args.model, model_type=args.model_type, use_4bit=not args.no_4bit)
+    app = create_app(
+        model=args.model,
+        model_type=args.model_type,
+        use_4bit=not args.no_4bit,
+        quantization=quantization,
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 

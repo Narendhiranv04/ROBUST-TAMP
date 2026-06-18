@@ -547,6 +547,7 @@ class UnifiedActionBundler:
                         )
                         return BundleExecutionOutcome(2, False, failure.message, failure, completed, held_object)
 
+                previous_held = held_object
                 if stage_action.action_name == 'pick':
                     held_object = obj_name
                 elif stage_action.action_name == 'place':
@@ -574,6 +575,11 @@ class UnifiedActionBundler:
                     if post_failure is not None:
                         post_failure.evidence.setdefault('bundle', 'transfer')
                         post_failure.evidence.setdefault('legacy_failure_id', legacy_id)
+                        if stage_action.action_name == 'pick' and post_failure.failure_id == 'grasp_failed':
+                            held_object = previous_held
+                            self.executor.held_object = held_object
+                            if completed and completed[-1] == str(stage_action):
+                                completed.pop()
                         if post_failure.failure_id == 'new_object_discovered' and stage_action.action_name != 'place':
                             deferred_visibility_failure = post_failure
                             continue
@@ -1198,7 +1204,9 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                 post_failure = failure_checker.postcheck(action, self.held_object, post_snapshot)
             if post_failure is not None:
                 if action.action_name == 'pick':
-                    # Restore the held state since the pick geometrically failed
+                    # A failed pick postcheck means the object is not reliably in hand.
+                    # Restore the previous held state instead of advertising a stale grasp
+                    # to replanning.
                     self.held_object = previous_held
                 # If a place action fails geometrically, the physical object was still dropped,
                 # so we do NOT restore self.held_object to previous_held.

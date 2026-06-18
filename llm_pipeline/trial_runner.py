@@ -194,6 +194,7 @@ def _render_failure_summary(record: Dict[str, Any]) -> str:
         f"variant: {record.get('variant_id', '')}",
         f"task_family: {record.get('task_family', '')}",
         f"model: {record.get('model_alias', '')}",
+        f"quantization: {record.get('quantization', '')}",
         f"icl_mode: {record.get('icl_mode', '')}",
         f"trial_index: {record.get('trial_index', '')}",
         f"status: {status}",
@@ -252,6 +253,7 @@ def run_trial(
     goal_check: bool = False,
     vision: bool = False,
     model_type: str = '',
+    quantization: str = '',
     planner_max_new_tokens: int = 4096,
     goal_check_max_new_tokens: int = 128,
 ) -> Dict[str, Any]:
@@ -279,6 +281,7 @@ def run_trial(
         text_only=not vision,
         enable_vision=bool(vision),
         model_type=model_type or ('vlm' if vision else 'llm'),
+        quantization=quantization,
         planner_max_new_tokens=int(planner_max_new_tokens),
         goal_check_max_new_tokens=int(goal_check_max_new_tokens),
         prompt_mode='segmentation_text_image' if vision else 'segmentation_text_only',
@@ -334,6 +337,7 @@ def run_trial(
                 'preflight_only': True,
                 'model_alias': model_alias,
                 'model_type': effective_model_type,
+                'quantization': preflight.get('quantization', quantization or 'none'),
                 'icl_mode': icl_mode,
                 'goal_text': goal_text,
                 'text_only': text_only,
@@ -405,6 +409,7 @@ def run_trial(
                 'missing_condition_count': success_validation.get('missing_condition_count'),
                 'model_alias': summary.get('model_alias', model_alias),
                 'model_type': summary.get('model_type', effective_model_type),
+                'quantization': summary.get('quantization', quantization or 'none'),
                 'icl_mode': icl_mode,
                 'prompt_mode': summary.get('prompt_mode', icl_mode),
                 'goal_text': goal_text,
@@ -470,6 +475,7 @@ def main() -> None:
     parser.add_argument('--variant', required=True, help='Variant id (K1/K2/K3/G1/G2/G3)')
     parser.add_argument('--model', required=True, help='Registered planner alias or custom HF path')
     parser.add_argument('--model-type', choices=['', 'llm', 'vlm'], default='', help='Optional explicit model type')
+    parser.add_argument('--quantization', choices=['', 'none', 'bnb8', 'bnb4'], default='', help='Expected/local quantization mode. Remote runs read the real mode from server health when available.')
     parser.add_argument('--vision', action='store_true', help='Use the maintained multimodal VLM backend')
     parser.add_argument('--icl-mode', required=True, choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode to evaluate')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
@@ -516,6 +522,7 @@ def main() -> None:
         goal_check=bool(args.goal_check and not args.no_goal_check),
         vision=bool(args.vision),
         model_type=args.model_type,
+        quantization=args.quantization,
         planner_max_new_tokens=args.planner_max_new_tokens,
         goal_check_max_new_tokens=args.goal_check_max_new_tokens,
     )

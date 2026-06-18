@@ -19,6 +19,7 @@ except ImportError:
     AutoModelForCausalLM = None
     AutoTokenizer = None
 
+from llm_pipeline.quantization import make_bnb_quantization_config
 from vlm_pipeline.vlm_planner import PlanResult, VLMPlanner
 
 
@@ -40,10 +41,16 @@ class LLMPlanner(VLMPlanner):
     def __init__(self,
                  model_name: str = "Qwen/Qwen3-8B",
                  use_4bit: bool = False,
+                 quantization: str = "",
                  device: str = "cuda",
                  model_alias: str = "",
                  model_type: str = "llm"):
-        super().__init__(model_name=model_name, use_4bit=use_4bit, device=device)
+        super().__init__(
+            model_name=model_name,
+            use_4bit=use_4bit,
+            quantization=quantization,
+            device=device,
+        )
         self.model_alias = model_alias or model_name
         self.model_type = model_type
         self.tokenizer = None
@@ -56,7 +63,7 @@ class LLMPlanner(VLMPlanner):
             return False
 
         print(f"Loading LLM: {self.model_name}")
-        print(f"Using 4-bit quantization: {self.use_4bit}")
+        print(f"Quantization: {self.quantization}")
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -80,16 +87,10 @@ class LLMPlanner(VLMPlanner):
             if torch.cuda.is_available():
                 model_kwargs["device_map"] = "auto"
 
-            if self.use_4bit:
-                from transformers import BitsAndBytesConfig
-
-                print("Configuring 4-bit quantization...")
-                model_kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                )
+            quantization_config = make_bnb_quantization_config(self.quantization, torch)
+            if quantization_config is not None:
+                print(f"Configuring quantization: {self.quantization}")
+                model_kwargs["quantization_config"] = quantization_config
 
             self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
             self.loaded = True
@@ -107,6 +108,7 @@ class LLMPlanner(VLMPlanner):
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": self.model_type,
+            "quantization": self.quantization,
             "use_vision": False,
             "image_present": False,
             "image_shape": None,
@@ -266,6 +268,7 @@ class LLMPlanner(VLMPlanner):
             "model_alias": self.model_alias,
             "model_name": self.model_name,
             "model_type": self.model_type,
+            "quantization": self.quantization,
             "loaded": self.loaded,
             "last_request": self.last_request_summary,
         }

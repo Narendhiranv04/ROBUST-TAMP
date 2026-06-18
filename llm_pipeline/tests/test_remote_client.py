@@ -3,6 +3,7 @@ import numpy as np
 from llm_pipeline import client as client_module
 from llm_pipeline.client import RemoteTextLLMPlanner
 from llm_pipeline.pipeline_types import PromptBundle
+from llm_pipeline.strict_parser import StrictActionParser
 
 
 class _FakeResponse:
@@ -179,6 +180,50 @@ def test_remote_planner_falls_back_to_local_parse_when_server_returns_raw_output
         assert [str(action) for action in result.actions] == [
             'pick(mug2)',
             'place(mug2, table_staging_area)',
+        ]
+    finally:
+        client_module.requests = old_requests
+        client_module.HAS_REQUESTS = old_has_requests
+
+
+def test_remote_planner_sends_runtime_parser_symbols() -> None:
+    fake_requests = _FakeRequests(
+        health_payload={'status': 'ok', 'model_loaded': True, 'model_alias': 'qwen', 'model_name': 'qwen', 'model_type': 'llm', 'prompt_mode': 'text_visible', 'gpu_available': True},
+        plan_payload={
+            'success': False,
+            'actions': [],
+            'raw_output': 'pick(plate)\nplace(plate, serving_area)',
+            'inference_time': 0.08,
+            'error_message': None,
+            'failure_event': None,
+        },
+    )
+    old_requests = client_module.requests
+    old_has_requests = client_module.HAS_REQUESTS
+    client_module.requests = fake_requests
+    client_module.HAS_REQUESTS = True
+    try:
+        planner = RemoteTextLLMPlanner(server_url='http://planner-box:8000')
+        planner.parser = StrictActionParser(
+            valid_actions=['pick', 'place', 'open', 'close'],
+            valid_objects=['plate', 'chicken', 'grill_lid'],
+            valid_regions=['serving_area', 'inside_grill', 'plate_top'],
+        )
+
+        result = planner.generate_plan(
+            system_prompt='system',
+            user_prompt='user',
+            icl_mode='few_shot_shared_1',
+        )
+
+        payload = fake_requests.post_calls[0][1]
+        assert payload['valid_actions'] == ['close', 'open', 'pick', 'place']
+        assert payload['valid_objects'] == ['chicken', 'grill_lid', 'plate']
+        assert payload['valid_regions'] == ['inside_grill', 'plate_top', 'serving_area']
+        assert result.success is True
+        assert [str(action) for action in result.actions] == [
+            'pick(plate)',
+            'place(plate, serving_area)',
         ]
     finally:
         client_module.requests = old_requests

@@ -30,6 +30,8 @@ if ROOT_DIR not in sys.path:
 
 from llm_pipeline.planner import TextLLMPlanner
 from llm_pipeline.pipeline_types import FailureEvent, PromptBundle
+from llm_pipeline.quantization import normalize_quantization
+from llm_pipeline.strict_parser import StrictActionParser
 from vlm_pipeline.model_registry import format_model_listing as format_planner_model_listing, resolve_model_spec
 PROMPT_MODE_LLM_SEGMENTATION = 'segmentation_text_only'
 PROMPT_MODE_VLM_MULTIMODAL = 'segmentation_text_image'
@@ -50,6 +52,9 @@ class PlanRequest(BaseModel):
     use_vision: bool = False
     image_present: bool = False
     image_base64: Optional[str] = None
+    valid_actions: Optional[List[str]] = None
+    valid_objects: Optional[List[str]] = None
+    valid_regions: Optional[List[str]] = None
 
 
 class ActionResponse(BaseModel):
@@ -102,14 +107,23 @@ class HealthResponse(BaseModel):
     model_name: str
     model_alias: str
     model_type: str
+    quantization: str = 'none'
     prompt_mode: str
     gpu_available: bool
 
 
 class LLMServer:
-    def __init__(self, model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda', model_type: str = ''):
+    def __init__(
+        self,
+        model: str = 'qwen',
+        use_4bit: bool = False,
+        device: str = 'cuda',
+        model_type: str = '',
+        quantization: str = '',
+    ):
         self.model_spec = resolve_model_spec(model, model_type)
-        self.use_4bit = use_4bit
+        self.quantization = normalize_quantization(quantization, use_4bit=use_4bit)
+        self.use_4bit = self.quantization == 'bnb4'
         self.device = device
         if self.model_spec.model_type == 'vlm':
             from llm_pipeline.vlm_planner import VLMPlanner
@@ -118,6 +132,7 @@ class LLMServer:
                 model_path=self.model_spec.path,
                 model_alias=self.model_spec.alias,
                 use_4bit=self.use_4bit,
+                quantization=self.quantization,
                 device=self.device,
             )
         else:
@@ -125,6 +140,7 @@ class LLMServer:
                 model_name=self.model_spec.path,
                 model_alias=self.model_spec.alias,
                 use_4bit=self.use_4bit,
+                quantization=self.quantization,
                 device=self.device,
             )
         self.loaded = False
@@ -148,7 +164,29 @@ class LLMServer:
         except Exception as exc:
             raise ValueError(f'invalid image_base64 payload: {exc}') from exc
 
+    def _apply_runtime_parser(self, request: PlanRequest) -> Dict[str, Any]:
+        runtime_symbols = {
+            'valid_actions': list(request.valid_actions or []),
+            'valid_objects': list(request.valid_objects or []),
+            'valid_regions': list(request.valid_regions or []),
+        }
+        if not any(runtime_symbols.values()):
+            return runtime_symbols
+
+        parser = StrictActionParser(
+            valid_actions=request.valid_actions or None,
+            valid_objects=request.valid_objects or None,
+            valid_regions=request.valid_regions or None,
+        )
+        if hasattr(self.planner, 'parser'):
+            self.planner.parser = parser
+        legacy_planner = getattr(self.planner, 'legacy_planner', None)
+        if legacy_planner is not None and hasattr(legacy_planner, 'parser'):
+            legacy_planner.parser = parser
+        return runtime_symbols
+
     def generate_plan(self, request: PlanRequest) -> PlanResponse:
+        runtime_symbols = self._apply_runtime_parser(request)
         image = self._decode_image_base64(request.image_base64) if request.image_base64 else None
         use_vision = bool(request.use_vision or image is not None)
         if self.model_spec.model_type == 'vlm':
@@ -162,8 +200,8 @@ class LLMServer:
                 goal_text=request.goal or request.user_prompt,
                 system_prompt=request.system_prompt,
                 user_prompt=request.user_prompt,
-                visible_objects=[],
-                valid_regions=[],
+                visible_objects=list(request.valid_objects or []),
+                valid_regions=list(request.valid_regions or []),
                 icl_mode=request.icl_mode,
                 images=images,
                 metadata={
@@ -191,6 +229,7 @@ class LLMServer:
             'use_vision': use_vision,
             'image_present': image is not None,
             'text_only': not use_vision,
+            **runtime_symbols,
         })
         return PlanResponse(
             success=result.success,
@@ -229,7 +268,13 @@ class LLMServer:
         return FailureEventResponse(**failure_event.to_dict())
 
 
-def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda', model_type: str = '') -> FastAPI:
+def create_app(
+    model: str = 'qwen',
+    use_4bit: bool = False,
+    device: str = 'cuda',
+    model_type: str = '',
+    quantization: str = '',
+) -> FastAPI:
     app = FastAPI(
         title='Maintained LLM Planner Server',
         description='Remote inference server for the llm_pipeline text-only planner',
@@ -244,7 +289,13 @@ def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda'
         allow_headers=['*'],
     )
 
-    server = LLMServer(model=model, use_4bit=use_4bit, device=device, model_type=model_type)
+    server = LLMServer(
+        model=model,
+        use_4bit=use_4bit,
+        device=device,
+        model_type=model_type,
+        quantization=quantization,
+    )
 
     @app.on_event('startup')
     async def startup_event():
@@ -259,6 +310,7 @@ def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda'
             model_name=server.model_spec.path,
             model_alias=server.model_spec.alias,
             model_type=server.model_spec.model_type,
+            quantization=server.quantization,
             prompt_mode=PROMPT_MODE_VLM_MULTIMODAL if server.model_spec.model_type == 'vlm' else PROMPT_MODE_LLM_SEGMENTATION,
             gpu_available=torch.cuda.is_available(),
         )
@@ -269,6 +321,7 @@ def create_app(model: str = 'qwen', use_4bit: bool = False, device: str = 'cuda'
             'model_alias': server.model_spec.alias,
             'model_name': server.model_spec.path,
             'model_type': server.model_spec.model_type,
+            'quantization': server.quantization,
             'prompt_mode': PROMPT_MODE_VLM_MULTIMODAL if server.model_spec.model_type == 'vlm' else PROMPT_MODE_LLM_SEGMENTATION,
             'last_request': server.last_request_summary,
         }
@@ -316,9 +369,13 @@ def main() -> None:
     parser.add_argument('--model', default='qwen', help='Registered LLM alias or Hugging Face path')
     parser.add_argument('--model-type', choices=['', 'llm', 'vlm'], default='', help='Optional explicit model type')
     parser.add_argument('--device', default='cuda', help='Torch device hint')
-    parser.add_argument('--no-4bit', action='store_true', help='Disable 4-bit quantization')
+    parser.add_argument('--quantization', choices=['none', 'bnb8', 'bnb4'], default='', help='Explicit quantization mode. Use bnb4 for native bitsandbytes 4-bit.')
+    parser.add_argument('--no-4bit', action='store_true', help='Deprecated alias for --quantization none')
     parser.add_argument('--list-models', action='store_true', help='List registered planner models and exit')
     args = parser.parse_args()
+
+    if args.no_4bit and args.quantization:
+        parser.error('--no-4bit is deprecated; do not combine it with --quantization. Use --quantization none instead.')
 
     if args.list_models:
         print(format_model_listing())
@@ -333,13 +390,20 @@ def main() -> None:
     print("=" * 60)
     print(f"Model: {args.model}")
     model_spec = resolve_model_spec(args.model, args.model_type)
+    quantization = normalize_quantization(args.quantization, use_4bit=not args.no_4bit)
     print(f"Model type: {model_spec.model_type}")
-    print(f"4-bit quantization: {not args.no_4bit}")
+    print(f"Quantization: {quantization}")
     print(f"Device hint: {args.device}")
     print(f"Server: http://{args.host}:{args.port}")
     print("=" * 60)
 
-    app = create_app(model=args.model, use_4bit=not args.no_4bit, device=args.device, model_type=args.model_type)
+    app = create_app(
+        model=args.model,
+        use_4bit=not args.no_4bit,
+        device=args.device,
+        model_type=args.model_type,
+        quantization=quantization,
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 

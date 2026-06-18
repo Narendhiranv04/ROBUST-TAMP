@@ -15,6 +15,7 @@ class ModelLoadError(ValueError):
 def create_local_planner(model: str = "",
                          model_type: str = "",
                          use_4bit: bool = False,
+                         quantization: str = "",
                          device: str = "cuda",
                          use_mock: bool = False):
     if use_mock:
@@ -25,6 +26,7 @@ def create_local_planner(model: str = "",
         return LLMPlanner(
             model_name=spec.path,
             use_4bit=use_4bit,
+            quantization=quantization,
             device=device,
             model_alias=spec.alias,
             model_type=spec.model_type,
@@ -33,6 +35,7 @@ def create_local_planner(model: str = "",
     return VLMPlanner(
         model_name=spec.path,
         use_4bit=use_4bit,
+        quantization=quantization,
         device=device,
         model_alias=spec.alias,
         model_type=spec.model_type,

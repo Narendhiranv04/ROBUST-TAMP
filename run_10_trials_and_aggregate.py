@@ -45,6 +45,8 @@ def _trial_command(args: argparse.Namespace, trial_index: int, trial_dir: Path) 
         "--output-dir",
         str(trial_dir),
     ]
+    if args.quantization:
+        command.extend(["--quantization", args.quantization])
     if args.pipeline == "vlm":
         command.append("--vision")
     if args.model_type:
@@ -248,6 +250,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pipeline", choices=["llm", "vlm"], default="llm")
     parser.add_argument("--model", default="devstral-24b")
     parser.add_argument("--model-type", choices=["", "llm", "vlm"], default="")
+    parser.add_argument("--quantization", choices=["", "none", "bnb8", "bnb4"], default="", help="Expected/local quantization mode to record/pass to trial_runner.")
     parser.add_argument("--variant", default="K1")
     parser.add_argument("--trials", type=int, default=10)
     parser.add_argument("--icl-mode", choices=["zero_shot", "few_shot_shared_1"], default="zero_shot")

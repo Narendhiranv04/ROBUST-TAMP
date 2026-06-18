@@ -1120,6 +1120,17 @@ def test_goal_check_parser_accepts_token_after_reasoning() -> None:
     assert result.goal_satisfied is True
 
 
+def test_text_planner_parse_failure_requests_replan() -> None:
+    planner = TextLLMPlanner(model_name='mock-llm', model_alias='mock-llm')
+    failure = planner._build_parse_failure(
+        StrictParseError("Unknown or unpickable object 'plate'", line_number=1),
+        'pick(plate)',
+    )
+
+    assert failure.should_replan is True
+    assert failure.failure_id == 'unknown_action_token'
+
+
 def test_text_planner_prompt_text_does_not_prefill_planning_by_default() -> None:
     class FakeTokenizer:
         def apply_chat_template(self, messages, **kwargs):

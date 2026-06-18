@@ -177,7 +177,7 @@ CUDA_VISIBLE_DEVICES=1 python -m llm_pipeline.server \
   --host 127.0.0.1 \
   --port 8020 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Start Llama-70B AWQ:
@@ -188,13 +188,14 @@ CUDA_VISIBLE_DEVICES=1 python -m llm_pipeline.server \
   --host 127.0.0.1 \
   --port 8020 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Important:
 
 ```text
-AWQ checkpoints are already quantized. Always use --no-4bit.
+AWQ checkpoints are already quantized. Always use `--quantization none`.
+For normal non-AWQ/non-FP8 70B/72B Hugging Face checkpoints, use `--quantization bnb4`.
 Do not install source/nightly Transformers into .venv_awq.
 Do not install torch cu130 on spectre.
 ```
@@ -241,7 +242,7 @@ python -m llm_pipeline.server \
   --host 0.0.0.0 \
   --port 8000 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Start Qwen3-VL 32B FP8:
@@ -253,7 +254,7 @@ python -m llm_pipeline.server \
   --host 0.0.0.0 \
   --port 8000 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Start InternVL 8B:
@@ -265,7 +266,7 @@ python -m llm_pipeline.server \
   --host 0.0.0.0 \
   --port 8000 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Start InternVL 38B:
@@ -277,7 +278,7 @@ python -m llm_pipeline.server \
   --host 0.0.0.0 \
   --port 8000 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Start Llama Vision:
@@ -289,7 +290,7 @@ python -m llm_pipeline.server \
   --host 0.0.0.0 \
   --port 8000 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 Start Qwen3.6-27B FP8 snapshot:
@@ -301,7 +302,7 @@ python -m llm_pipeline.server \
   --host 0.0.0.0 \
   --port 8000 \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 If a 27B/32B/38B model logs CPU offload and then CPU hits 100%, stop using that exact load configuration for batches. It is too slow or not fitting cleanly.
@@ -431,7 +432,7 @@ uv pip install torch torchvision torchaudio --index-url https://download.pytorch
 You loaded an AWQ checkpoint with BitsAndBytes 4-bit. Use:
 
 ```bash
---no-4bit
+--quantization none
 ```
 
 ### `module 'torch.utils._pytree' has no attribute 'register_constant'`

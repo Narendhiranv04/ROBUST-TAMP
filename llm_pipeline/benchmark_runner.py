@@ -43,6 +43,7 @@ def _trial_command(
     replan_mode: str,
     preflight_only: bool,
     goal: str,
+    quantization: str,
 ) -> List[str]:
     command = [
         sys.executable,
@@ -55,6 +56,8 @@ def _trial_command(
         '--max-replans', str(max_replans),
         '--output', str(output_path),
     ]
+    if quantization:
+        command.extend(['--quantization', quantization])
     if headless:
         command.append('--headless')
     if remote:
@@ -86,6 +89,7 @@ def main() -> None:
     parser.add_argument('--headless', action='store_true', help='Run without simulator GUI')
     parser.add_argument('--remote', action='store_true', help='Use the maintained remote LLM planner server')
     parser.add_argument('--remote-url', default=os.environ.get('LLM_SERVER_URL', os.environ.get('VLM_SERVER_URL', 'http://localhost:8000')), help='Remote planner server URL')
+    parser.add_argument('--quantization', choices=['', 'none', 'bnb8', 'bnb4'], default='', help='Expected/local quantization mode to record/pass to trial_runner')
     parser.add_argument('--replan-mode', choices=['on', 'off'], default='on', help='Use full execution+replanning (on) or first-plan-only mode with no failure checks (off)')
     parser.add_argument('--skip-preflight', action='store_true', help='Skip model/mode preflight checks')
     parser.add_argument('--execute-all-models', action='store_true', help='Run full execution for every requested model, not just the maintained trio')
@@ -131,6 +135,7 @@ def main() -> None:
                     replan_mode=args.replan_mode,
                     preflight_only=True,
                     goal=args.goal,
+                    quantization=args.quantization,
                 )
                 print(f'[LLM Benchmark] Preflight {model_alias} :: {icl_mode}')
                 preflight_records.append(_run_and_load(command, output_path))
@@ -159,6 +164,7 @@ def main() -> None:
                         replan_mode=args.replan_mode,
                         preflight_only=False,
                         goal=args.goal,
+                        quantization=args.quantization,
                     )
                     print(f'[LLM Benchmark] Run {model_alias} :: {icl_mode} :: {variant_id} :: trial {trial_index}/{args.trials}')
                     execution_records.append(_run_and_load(command, output_path))
@@ -188,6 +194,7 @@ def main() -> None:
         'replan_mode': args.replan_mode,
         'use_remote_planner': bool(args.remote),
         'remote_planner_url': args.remote_url or None,
+        'quantization': args.quantization or None,
         'preflight_records': preflight_records,
         'execution_record_count': len(execution_records),
         'execution_aggregates': aggregate_by_combo,

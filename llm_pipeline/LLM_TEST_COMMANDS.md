@@ -43,7 +43,15 @@ python -m llm_pipeline.server \
   --device cuda
 ```
 
-The server uses 4-bit quantization by default. To disable 4-bit:
+The server uses BNB 4-bit quantization by default. Prefer explicit quantization flags:
+
+```sh
+--quantization none   # fp16/bf16 loading
+--quantization bnb8   # native bitsandbytes 8-bit
+--quantization bnb4   # native bitsandbytes 4-bit
+```
+
+To disable quantization:
 
 ```sh
 python -m llm_pipeline.server \
@@ -51,7 +59,7 @@ python -m llm_pipeline.server \
   --port 8000 \
   --model qwen \
   --device cuda \
-  --no-4bit
+  --quantization none
 ```
 
 ### Terminal 2: Run One Trial
@@ -124,8 +132,8 @@ python -m llm_pipeline.trial_runner \
 
 ## Direct Local Mode
 
-This loads the model inside the trial process. Use only for tiny models because
-there is no trial-runner CLI flag for 4-bit quantization in this mode.
+This loads the model inside the trial process. Use only for tiny models unless
+you pass an explicit local quantization mode such as `--quantization bnb4`.
 
 ```sh
 python -m llm_pipeline.trial_runner \
@@ -221,4 +229,3 @@ python -m llm_pipeline.trial_runner \
   --max-replans 1 \
   --output-dir llm_pipeline/results/llm_runs/manual_G1_qwen_zero_shot
 ```
-
