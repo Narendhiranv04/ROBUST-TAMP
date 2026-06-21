@@ -409,7 +409,6 @@ class UnifiedActionBundler:
             object_region_map = dict(getattr(before_snapshot, 'object_region_map', {}) or {})
             observed_region = normalize_region_name(object_region_map.get(obj_name))
             if observed_region and regions_match_for_target(observed_region, target_region):
-                completed.extend(str(action) for action in bundle_actions)
                 print(
                     f"[BUNDLE] Skipping redundant transfer: {obj_name} already in {observed_region} "
                     f"(target {target_region})"

@@ -44,4 +44,4 @@ def test_transfer_bundle_skips_already_satisfied_object() -> None:
 
     assert outcome.success is True
     assert outcome.consumed == 2
-    assert outcome.completed_actions == ["pick(spam)", "place(spam, cupboard_shelf)"]
+    assert outcome.completed_actions == []
