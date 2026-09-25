@@ -62,6 +62,9 @@ MOVABLE_PATTERNS = [
 DETACHABLE_JOINT_CHILDREN = {'box_lid'}
 # Static shapes that the GT re-parents at runtime (e.g. grill handle grasp).
 REPARENTABLE_EXTRAS = {'handle_visual'}
+# Marker shapes that are drawn by CoppeliaSim but carry no scene content; they are
+# not rendered (cameras, segmentation, viewer). Their collision geometry is kept.
+HIDDEN_FROM_CAMERAS = {'plate_target'}
 
 # CoppeliaSim constants
 SP_COLLIDABLE = 1
@@ -481,7 +484,9 @@ class SceneBuilder:
                         g['robot'] = True
                     lines.append(f'{pad}  ' + self.geom_xml(gname, g))
                     meta['col_geoms'].append({'name': gname, 'contype': ct, 'conaffinity': ca})
-            if renderable:
+            if o['name'] in HIDDEN_FROM_CAMERAS:
+                pass
+            elif renderable:
                 for k, g in enumerate(self.visual_geoms(o, group=1)):
                     gname = f'{o["name"]}__vis{k}'
                     lines.append(f'{pad}  ' + self.geom_xml(gname, g))

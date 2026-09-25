@@ -204,6 +204,18 @@ class SegmentationObjectDetector:
         except Exception:
             pass
 
+        # Variant objects declared by the env (e.g. added cans or meats): their whole
+        # shape tree maps to exactly this task name.
+        for task_name, scene_name in (getattr(self.env, 'extra_task_objects', {}) or {}).items():
+            try:
+                root_obj = self.env.get_object(scene_name)
+                handles = sim.simGetObjectsInTree(int(root_obj.get_handle()), sim.sim_object_shape_type, 0)
+            except Exception:
+                continue
+            for handle in handles:
+                self.handle_to_task_name[int(handle)] = task_name
+            self.task_objects.add(task_name)
+
         # Fallback mapping from raw scene names.
         for handle, scene_name in self.handle_to_name.items():
             if handle in self.handle_to_task_name:
@@ -299,7 +311,7 @@ class SegmentationObjectDetector:
             return 'mug1'
         if 'box_lid' in n:
             return 'box_lid'
-        if 'plate' in n and 'boundary' not in n:
+        if 'plate' in n and 'boundary' not in n and 'target' not in n:
             return 'plate'
         grill_meat = self._canonical_grill_meat_name(n)
         if grill_meat is not None:

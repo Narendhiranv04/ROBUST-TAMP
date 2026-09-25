@@ -118,6 +118,11 @@ def faded(image, amount=0.72):
     return (amount * 255 + (1 - amount) * gray).repeat(3, axis=2).astype(np.uint8)
 
 
+def dimmed(image, factor=0.8):
+    """Camera image, slightly darkened so the overlays stand out."""
+    return (image.astype(float) * factor).astype(np.uint8)
+
+
 def outline(mask):
     edge = np.zeros_like(mask)
     edge[1:, :] |= mask[1:, :] != mask[:-1, :]
@@ -125,14 +130,47 @@ def outline(mask):
     return edge & mask
 
 
-def label_chip(draw, xy, text, color, font, bounds):
-    x, y = xy
+def _free_spot(x, y, w, h, bounds, placed):
+    """Move a tag down/up until it does not overlap already placed tags."""
+    x = int(min(max(x, 2), bounds[0] - w - 2))
+    for dy in [0] + [s * k for k in range(1, 12) for s in (1, -1)]:
+        yy = int(min(max(y + dy * (h + 2), 2), bounds[1] - h - 2))
+        rect = (x, yy, x + w, yy + h)
+        if not any(rect[0] < r[2] and r[0] < rect[2] and rect[1] < r[3] and r[1] < rect[3] for r in placed):
+            return rect
+    return (x, int(min(max(y, 2), bounds[1] - h - 2)), x + w, int(min(max(y, 2), bounds[1] - h - 2)) + h)
+
+
+def label_chip(draw, xy, text, color, font, bounds, placed=()):
+    """Object tag: filled with the object colour, white text."""
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     w, h = right - left + 10, bottom - top + 6
-    x = int(min(max(x, 2), bounds[0] - w - 2))
-    y = int(min(max(y - h - 3, 2), bounds[1] - h - 2))
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=4, fill=color)
-    draw.text((x + 5, y + 3 - top), text, fill=(255, 255, 255), font=font)
+    rect = _free_spot(xy[0], xy[1] - h - 2, w, h, bounds, placed)
+    draw.rounded_rectangle(rect, radius=4, fill=color)
+    draw.text((rect[0] + 5, rect[1] + 3 - top), text, fill=(255, 255, 255), font=font)
+    return rect
+
+
+def outlined_chip(draw, xy, text, color, font, bounds, placed=()):
+    """Region tag: white box with a coloured border and coloured text."""
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    w, h = right - left + 12, bottom - top + 8
+    rect = _free_spot(xy[0], xy[1] - h - 3, w, h, bounds, placed)
+    draw.rounded_rectangle(rect, radius=4, fill=(255, 255, 255), outline=color, width=2)
+    draw.text((rect[0] + 6, rect[1] + 4 - top), text, fill=color, font=font)
+    return rect
+
+
+def main_blob_box(mask, keep=0.15, margin=3):
+    """Bounding box of the object's main connected blob(s), ignoring stray pixels."""
+    from scipy import ndimage
+    labels, count = ndimage.label(mask)
+    if count == 0:
+        return None
+    sizes = ndimage.sum(mask, labels, range(1, count + 1))
+    big = [i + 1 for i, s in enumerate(sizes) if s >= keep * sizes.max()]
+    ys, xs = np.nonzero(np.isin(labels, big))
+    return [int(xs.min()) - margin, int(ys.min()) - margin, int(xs.max()) + margin, int(ys.max()) + margin]
 
 
 def main():
@@ -204,33 +242,56 @@ def main():
             continue
         image = capture_rgb(cam)
         rgb_tiles.append((name, Image.fromarray(image)))
-        canvas = faded(image)
+        base = Image.fromarray(dimmed(image)).convert('RGBA')
+        overlay = Image.new('RGBA', base.size, (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
         pixels[name] = {}
+        object_masks = {}
         for handle, label in detector.handle_to_task_name.items():
             obj = canonical_object_name(label)
             if obj not in object_colors:
                 continue
             hit = mask == int(handle)
-            if not hit.any():
-                continue
-            canvas[hit] = object_colors[obj]
-            canvas[outline(hit)] = (60, 60, 60)
-            pixels[name][obj] = pixels[name].get(obj, 0) + int(hit.sum())
-        tile = Image.fromarray(canvas)
-        draw = ImageDraw.Draw(tile)
-        shown_regions = []
+            if hit.any():
+                object_masks[obj] = object_masks.get(obj, np.zeros_like(hit)) | hit
+        # Regions first: projected 3D box, translucent top face + full wireframe.
+        shown_regions, region_tags = [], []
         for region, (lo, hi) in region_boxes.items():
-            corners = np.array([[lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]], [hi[0], hi[1], hi[2]], [lo[0], hi[1], hi[2]]])
+            corners = np.array([[x, y, z] for z in (lo[2], hi[2]) for x, y in
+                                ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))])
             uv, in_front = project(cam, corners)
             if not in_front.all():
                 continue
-            if uv[:, 0].max() < 0 or uv[:, 0].min() > tile.width or uv[:, 1].max() < 0 or uv[:, 1].min() > tile.height:
+            if uv[:, 0].max() < 0 or uv[:, 0].min() > base.width or uv[:, 1].max() < 0 or uv[:, 1].min() > base.height:
                 continue
-            points = [tuple(map(float, p)) for p in uv]
-            draw.line(points + [points[0]], fill=region_colors[region], width=2, joint='curve')
-            top = min(points, key=lambda p: p[1])
-            label_chip(draw, top, planner_region_name(region), region_colors[region], tag, tile.size)
+            color = region_colors[region]
+            bottom, top = [tuple(map(float, p)) for p in uv[:4]], [tuple(map(float, p)) for p in uv[4:]]
+            odraw.polygon(top, fill=color + (70,))
+            for ring in (bottom, top):
+                odraw.line(ring + [ring[0]], fill=color + (230,), width=2)
+            for a, b in zip(bottom, top):
+                odraw.line([a, b], fill=color + (230,), width=2)
+            region_tags.append((min(top, key=lambda q: q[1]), planner_region_name(region), color))
             shown_regions.append(region)
+        # Objects on top: translucent fill, solid contour, 2D bounding box.
+        object_tags = []
+        for obj, hit in object_masks.items():
+            color = object_colors[obj]
+            fill = np.zeros(hit.shape + (4,), dtype=np.uint8)
+            fill[hit] = color + (120,)
+            fill[outline(hit)] = color + (255,)
+            overlay = Image.alpha_composite(overlay, Image.fromarray(fill, 'RGBA'))
+            box = main_blob_box(hit)
+            ImageDraw.Draw(overlay).rectangle(box, outline=color + (255,), width=2)
+            object_tags.append(((box[0], box[1]), obj, color))
+            pixels[name][obj] = int(hit.sum())
+        tile = Image.alpha_composite(base, overlay).convert('RGB')
+        draw = ImageDraw.Draw(tile)
+        placed = []
+        for xy, text, color in object_tags:   # objects: filled tag (placed first, on their box)
+            placed.append(label_chip(draw, xy, text, color, tag, tile.size, placed))
+        for xy, text, color in region_tags:   # regions: outlined tag
+            placed.append(outlined_chip(draw, xy, text, color, tag, tile.size, placed))
         sem_tiles.append((name, tile))
         tile.save(out / f'semantic_{name}.png')  # the map alone, no legend
         save_single(out / f'semantic_{name}_legend.png', name, tile, [o for o in object_colors if pixels[name].get(o)],
