@@ -11,6 +11,7 @@ def _args(pipeline="llm"):
         variant="K1",
         model="qwen",
         model_type="",
+        quantization="",
         icl_mode="zero_shot",
         max_replans=3,
         planner_max_new_tokens=1024,
@@ -49,6 +50,16 @@ def test_repeated_runner_can_enable_raw_llm_output() -> None:
     command = runner._trial_command(args, 1, Path("trial_001"))
 
     assert "--show-llm-output" in command
+
+
+def test_repeated_runner_passes_quantization_when_set() -> None:
+    args = _args()
+    args.quantization = "bnb8"
+
+    command = runner._trial_command(args, 1, Path("trial_001"))
+
+    assert command[command.index("--quantization") + 1] == "bnb8"
+    assert "--quantization" not in runner._trial_command(_args(), 1, Path("trial_001"))
 
 
 def test_repeated_runner_parse_args_can_enable_goal_check(monkeypatch) -> None:
