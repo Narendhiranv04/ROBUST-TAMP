@@ -57,6 +57,7 @@ class FailureCode(_StrEnum):
     ORPHAN_PLACE = 'orphan_place'
     MISSING_POST_PICK_PLACE = 'missing_post_pick_place'
     UNOBSERVED_OBJECT = 'unobserved_object'
+    REMEMBERED_OBJECT_INACCESSIBLE = 'remembered_object_inaccessible'
     PLANNER_OUTPUT_TOO_VERBOSE = 'planner_output_too_verbose'
     PLANNER_OUTPUT_NOT_PARSEABLE = 'planner_output_not_parseable'
     MISSING_PRECEDING_MOVE = 'missing_preceding_move'
@@ -183,6 +184,7 @@ FAILURE_CODE_INFO: Dict[FailureCode, FailureCodeInfo] = {
     FailureCode.ORPHAN_PLACE: FailureCodeInfo(_PLAN, _L1, (_PI, 'Orphan place')),
     FailureCode.MISSING_POST_PICK_PLACE: FailureCodeInfo(_PLAN, _L1, (_PI, 'Missing post-pick place')),
     FailureCode.UNOBSERVED_OBJECT: FailureCodeInfo(_PLAN, _L1),
+    FailureCode.REMEMBERED_OBJECT_INACCESSIBLE: FailureCodeInfo(_PLAN, _L1, phase=2),
     FailureCode.PLANNER_OUTPUT_TOO_VERBOSE: FailureCodeInfo(_PLAN, _L1),
     FailureCode.PLANNER_OUTPUT_NOT_PARSEABLE: FailureCodeInfo(_PLAN, _L1),
     FailureCode.MISSING_PRECEDING_MOVE: FailureCodeInfo(_PLAN, _L1, emitted=False),
@@ -221,7 +223,7 @@ FAILURE_CODE_INFO: Dict[FailureCode, FailureCodeInfo] = {
     FailureCode.SIMULATOR_ERROR: FailureCodeInfo(FailureCheck.INFRASTRUCTURE, _L1),
     FailureCode.REPLAN_BUDGET_EXHAUSTED: FailureCodeInfo(FailureCheck.REPLAN, _L1),
     FailureCode.REPEATED_PLANNER_OUTPUT: FailureCodeInfo(FailureCheck.REPLAN, _L1, emitted=False, phase=7),
-    FailureCode.MEMORY_MISMATCH: FailureCodeInfo(FailureCheck.MEMORY, _L2, emitted=False, phase=2),
+    FailureCode.MEMORY_MISMATCH: FailureCodeInfo(FailureCheck.MEMORY, _L2, phase=2),
     FailureCode.INSERTION_TOO_LATE: FailureCodeInfo(FailureCheck.INSERTION, _L1, emitted=False, phase=5),
     FailureCode.ANCHOR_ALREADY_EXECUTED: FailureCodeInfo(FailureCheck.PARALLEL, _L1, emitted=False, phase=6),
     FailureCode.MERGE_CONFLICT: FailureCodeInfo(FailureCheck.PARALLEL, _L1, emitted=False, phase=6),

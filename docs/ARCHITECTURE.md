@@ -431,6 +431,10 @@ frameworks). Every condition in it has a matching code above.
 | Prompts | `prompt.version=v2` (`PromptV2Builder`) is the default; legacy stays available. v2 requests disable the server-side format-repair call | `llm_pipeline/prompt_v2.py`, `docs/PROMPTS.md` |
 | Smoke test | Full-pipeline trial with a ground-truth oracle planner, no GPU | `llm_pipeline/oracle_trial_runner.py` |
 
+## Phase 2 changes (memory)
+
+`memory.enabled=true`: `LLMOnlyReplanningPipeline.memory` (`llm_pipeline/memory.py`) is updated in `_emit_observation`, i.e. at every observation (planning events except plan-check re-queries, and after every bundle). It feeds the v2 prompt (`PromptV2Builder.set_memory_view`), the plan check (`StrictActionParser.set_access_context`: remembered object → last region, closed regions, lid → regions) and the pick pre-check (`failure_checker.remembered_pick_allowed`). Memory is also the input to the Phase 4 IF rule.
+
 ## External baselines
 
 Source: `https://github.com/Narendhiranv04/GRAB-TAMP`, branch `baseline_executions`, commit `f2976cc`. It is cloned read-only into `external/GRAB-TAMP`, which is git-ignored. Nothing was run or modified.

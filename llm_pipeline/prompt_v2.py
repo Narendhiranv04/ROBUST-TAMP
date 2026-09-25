@@ -122,8 +122,13 @@ def _lid_states(state: SceneState, available_lids: Sequence[str]) -> Dict[str, b
     return {lid: lid_states[lid] for lid in available_lids if lid in lid_states}
 
 
-def state_section(state: SceneState, regions: Sequence[str], lids: Sequence[str]) -> List[str]:
-    """The current state: visible objects with regions, lids, gripper, regions."""
+def state_section(
+    state: SceneState,
+    regions: Sequence[str],
+    lids: Sequence[str],
+    remembered: Optional[Sequence[Tuple[str, Optional[str], int]]] = None,
+) -> List[str]:
+    """The current state: visible objects with regions, remembered objects, lids, gripper, regions."""
     object_region_map = dict(getattr(state, 'object_region_map', {}) or {})
     lines = ['## Current state', 'Visible objects and the region each one is in:']
     objects = [name for name in state.visible_objects if name not in LID_OBJECTS]
@@ -133,6 +138,14 @@ def state_section(state: SceneState, regions: Sequence[str], lids: Sequence[str]
             lines.append(f'- {name}: {planner_region_name(region) if region else "unknown"}')
     else:
         lines.append('- (none)')
+    if remembered is not None:
+        lines.append('Remembered objects (not currently visible): last region, steps since last seen:')
+        if remembered:
+            for name, region, steps_ago in remembered:
+                shown = planner_region_name(region) if region else 'unknown'
+                lines.append(f'- {name}: {shown}, {steps_ago} step{"s" if steps_ago != 1 else ""} ago')
+        else:
+            lines.append('- (none)')
     lines.append('Lids:')
     lid_states = _lid_states(state, lids)
     if lid_states:
@@ -182,6 +195,8 @@ class PromptV2Builder(BaseContextBuilder):
         self.env = None
         self.symbol_registry = None
         self.replan_context: Optional[ReplanContext] = None
+        # memory.enabled: (object, last_region, steps since last seen) of remembered objects.
+        self.memory_view: Optional[List[Tuple[str, Optional[str], int]]] = None
 
     def set_env(self, env) -> None:
         self.env = env
@@ -197,6 +212,9 @@ class PromptV2Builder(BaseContextBuilder):
 
     def set_replan_context(self, context: Optional[ReplanContext]) -> None:
         self.replan_context = context
+
+    def set_memory_view(self, remembered: Optional[Sequence[Tuple[str, Optional[str], int]]]) -> None:
+        self.memory_view = None if remembered is None else list(remembered)
 
     # -- data -----------------------------------------------------------------
     def _actions(self) -> Tuple[str, ...]:
@@ -227,7 +245,7 @@ class PromptV2Builder(BaseContextBuilder):
     ) -> Dict[str, List[str]]:
         sections: Dict[str, List[str]] = {
             'goal': ['## Goal', goal_text],
-            'state': state_section(state, self._regions(state), self._lids()),
+            'state': state_section(state, self._regions(state), self._lids(), self.memory_view),
         }
         if failure_event is None:
             return sections
@@ -274,7 +292,7 @@ class PromptV2Builder(BaseContextBuilder):
     def goal_check_prompts(self, state: SceneState, goal_text: str, completed_actions: Sequence[str]) -> Tuple[str, str]:
         lines = [
             '## Goal', goal_text, '',
-            *state_section(state, self._regions(state), self._lids()), '',
+            *state_section(state, self._regions(state), self._lids(), self.memory_view), '',
             '## Completed actions',
             *([f'- {planner_action_text(action)}' for action in completed_actions] or ['- (none)']),
         ]

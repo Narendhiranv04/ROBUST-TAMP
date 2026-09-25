@@ -57,6 +57,16 @@ class StrictActionParser:
         # prompt.version=v2: only the text after the last FINAL ACTIONS: line is parsed;
         # everything before it is reasoning (logged, never parsed).
         self.require_final_marker = False
+        # memory.enabled: remembered-but-not-visible objects -> last region, the regions
+        # closed off by currently closed lids, and lid -> regions it closes off.
+        self.remembered_regions: Optional[dict] = None
+        self.closed_regions: set = set()
+        self.lid_regions: dict = {}
+
+    def set_access_context(self, remembered_regions=None, closed_regions=(), lid_regions=None) -> None:
+        self.remembered_regions = None if remembered_regions is None else dict(remembered_regions)
+        self.closed_regions = set(closed_regions or ())
+        self.lid_regions = dict(lid_regions or {})
 
     def set_observed_objects(self, observed_objects: Optional[Iterable[str]]) -> None:
         self.observed_objects = None if observed_objects is None else set(observed_objects)
@@ -115,6 +125,7 @@ class StrictActionParser:
 
         actions: List[DirectAction] = []
         holding: Optional[str] = held_object
+        closed_regions = set(self.closed_regions)
 
         for index, line in enumerate(lines, start=1):
             # Strip leading numbering/bullets (e.g. "1. pick(spam)", "2. place(spam, table)", "- open(lid)")
@@ -166,6 +177,15 @@ class StrictActionParser:
                         line_number=index,
                         failure_id=FailureCode.PICK_PLACE_MISMATCH,
                         fact=f"Line {index} ({line}) picks '{arg0}' while the gripper holds '{holding}'.",
+                    )
+                remembered_region = (self.remembered_regions or {}).get(arg0)
+                if remembered_region is not None and remembered_region in closed_regions:
+                    raise StrictParseError(
+                        f"'{arg0}' was last seen in {remembered_region}, which is closed off by a closed lid here",
+                        line_number=index,
+                        failure_id=FailureCode.REMEMBERED_OBJECT_INACCESSIBLE,
+                        fact=(f"Line {index} ({line}) picks '{arg0}', last seen in {remembered_region}; "
+                              f"at that point of the plan {remembered_region} is closed off by a closed lid."),
                     )
                 holding = arg0
                 actions.append(DirectAction('pick', (arg0,)))
@@ -238,6 +258,10 @@ class StrictActionParser:
                         failure_id=FailureCode.MISSING_POST_PICK_PLACE,
                         fact=f"Line {index} ({line}) uses {action_name} while the gripper holds '{holding}'.",
                     )
+                if action_name == 'open':
+                    closed_regions -= set(self.lid_regions.get(arg0, ()))
+                else:
+                    closed_regions |= set(self.lid_regions.get(arg0, ()))
                 actions.append(DirectAction(action_name, (arg0,)))
                 continue
 

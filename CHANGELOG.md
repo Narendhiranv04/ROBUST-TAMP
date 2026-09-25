@@ -2,6 +2,37 @@
 
 One entry per phase of `plan.md`: what changed, which flags, which tests.
 
+## Phase 2: observation memory (branch `phase-2-memory`)
+
+### Changed (all behind `memory.enabled`, default `false`)
+- `llm_pipeline/memory.py`: `MemoryEntry(object_id, last_seen_step, last_region)` and `ObservationMemory`.
+  - Updated after every observation: visible objects are created or overwritten; hidden objects keep their entry; entries are never deleted; never-observed objects are never stored.
+  - A held object is remembered in region `gripper`.
+- Trial log:
+  - `memory_snapshot` (the full table) at every observation;
+  - `memory_mismatch` (diagnostic only) when a remembered object's last region is visible and open but the object is not seen there.
+- Prompt v2: a "Remembered objects (not currently visible): last region, steps since last seen" block after the visible objects. The legacy prompts are unchanged.
+- Plan check: remembered objects are known objects. A `pick` of a remembered object whose last region is closed off by a lid that is closed at that point of the plan is rejected (`remembered_object_inaccessible`).
+- Pre-action check: a remembered object that is not visible may be picked when its last region is reachable now.
+
+### Tests
+`test_memory.py` (10 tests):
+- create, overwrite, keep-when-hidden and never-delete;
+- never-observed objects are not stored;
+- a held object is remembered in the gripper;
+- a kitchen object revealed by opening the box stays in memory after it is hidden;
+- mismatch conditions;
+- plan-check reachability;
+- grill: after `close(grill_lid)` the meat stays in memory (`inside_grill`) and appears as remembered in the next prompt;
+- remembered picks are allowed only when the region is reachable;
+- flag-off regression: no memory events and no remembered block.
+
+`test_prompt_v2.py` gains a golden snapshot of the remembered block.
+
+### Runs
+- `results/phase2/oracle_memory/`: oracle planner with `memory.enabled=true`, 6 variants × seeds 0–1, 12/12 successful, no memory mismatches.
+- Note: the segmentation detector keeps an object "visible" for up to 30 frames after it was last seen (`LIVE_SEG_PERSIST_FRAMES`), so an object can stay visible for one observation after its container closes.
+
 ## Phase 1: repository map, logging, evaluator, prompts (branch `phase-1-logging`)
 
 **Not finished yet:** step 6 (the baseline run) is still to come.

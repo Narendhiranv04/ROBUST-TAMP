@@ -23,7 +23,7 @@ class FlagSpec:
 
 
 FLAG_SPECS: Tuple[FlagSpec, ...] = (
-    FlagSpec('memory.enabled', 'memory_enabled', ('true', 'false'), 'false', ('false',), 2),
+    FlagSpec('memory.enabled', 'memory_enabled', ('true', 'false'), 'false', ('true', 'false'), 2),
     FlagSpec('replan.trigger_mode', 'replan_trigger_mode', ('discovery', 'if_rule'), 'discovery', ('discovery',), 4),
     FlagSpec('replan.output_mode', 'replan_output_mode', ('full_replan', 'corrective'), 'full_replan', ('full_replan',), 5),
     FlagSpec(

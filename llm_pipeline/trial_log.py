@@ -27,6 +27,7 @@ EVENT_FIELDS: Dict[str, tuple] = {
     'trial_start': ('scene', 'variant', 'condition', 'seed', 'flags', 'git_commit'),
     'observation': ('step', 'visible_objects', 'object_regions', 'articulation_states', 'newly_visible_objects'),
     'memory_snapshot': ('step', 'memory'),  # Phase 2
+    'memory_mismatch': ('step', 'object', 'last_region', 'last_seen_step'),  # Phase 2, diagnostic only
     'if_check': ('step', 'objects'),  # Phase 4
     'planning_event': (
         'step', 'kind', 'trigger_objects', 'model', 'prompt_hash', 'prompt_path',

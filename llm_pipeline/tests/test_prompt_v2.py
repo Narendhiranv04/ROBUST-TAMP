@@ -160,3 +160,21 @@ def test_v2_rejects_in_context_examples() -> None:
     builder = PromptV2Builder()
     with pytest.raises(ValueError):
         builder.build_bundle(KITCHEN['state'], KITCHEN['goal'], icl_mode='few_shot_shared_1')
+
+
+def test_prompt_v2_remembered_objects_snapshot() -> None:
+    """memory.enabled: remembered (not visible) objects with last region and steps since last seen."""
+    data = GRILL
+    builder = PromptV2Builder()
+    builder.set_symbol_registry(data['registry'])
+    builder.set_replan_context(data['context'])
+    builder.set_memory_view([('chicken', 'inside_grill', 3), ('steak', 'prep_area', 1)])
+    state = SceneState(**{**data['state'].__dict__})
+    state.visible_objects = ['steak1', 'plate', 'grill_lid']
+    state.object_region_map = {'steak1': 'prep_area', 'plate': 'dish_rack'}
+    text = builder.build_bundle(state, data['goal'], failure_event=data['trigger']).user_prompt
+    path = SNAPSHOT_DIR / 'prompt_v2_grill_replan_user_memory.txt'
+    if os.environ.get('UPDATE_PROMPT_SNAPSHOTS') == '1':
+        path.write_text(text + '\n', encoding='utf-8')
+    assert text + '\n' == path.read_text(encoding='utf-8')
+    assert '- chicken: inside_grill, 3 steps ago' in text and '- steak: grill_side_area, 1 step ago' in text

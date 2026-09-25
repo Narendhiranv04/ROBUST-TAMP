@@ -105,7 +105,7 @@ def test_flags_parse_cli_assignments() -> None:
 
 @pytest.mark.parametrize(
     'assignment',
-    ['memory.enabled=true', 'replan.trigger_mode=if_rule', 'replan.output_mode=corrective',
+    ['replan.trigger_mode=if_rule', 'replan.output_mode=corrective',
      'replan.insertion_mode=always_front', 'parallel.enabled=true'],
 )
 def test_flags_of_later_phases_are_not_available_yet(assignment) -> None:

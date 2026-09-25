@@ -138,6 +138,9 @@ class SegmentationFirstFailureChecker:
         # state (a stand-in for perception, docs/ARCHITECTURE.md); 'segmentation' is
         # the previous mask-proximity check.
         self.grasp_confirmation = 'gripper_state'
+        # memory.enabled: callable(object) -> True when a remembered object that is not
+        # visible may be picked (its last region is reachable now).
+        self.remembered_pick_allowed = None
 
     def capture_snapshot(self, event: str = '') -> SegmentationSnapshot:
         return self.adapter.capture_snapshot(event=event)
@@ -166,7 +169,8 @@ class SegmentationFirstFailureChecker:
                 )
 
             evidence = snapshot.object_evidence.get(object_name)
-            if evidence is None or not evidence.visible:
+            remembered_ok = callable(self.remembered_pick_allowed) and self.remembered_pick_allowed(object_name)
+            if (evidence is None or not evidence.visible) and not remembered_ok:
                 return FailureEvent(
                     failure_id=FailureCode.PICK_OBJECT_MISSING,
                     stage=FailureStage.BEFORE_EXECUTION,

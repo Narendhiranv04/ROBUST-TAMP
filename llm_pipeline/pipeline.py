@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from llm_pipeline.catalog import resolve_llm_model, resolve_planner_model, resolve_vlm_model
 from llm_pipeline.failures import CycleError, FailureCheck, FailureCode, TerminationReason, failure_check_for
 from llm_pipeline.flags import PipelineFlags
+from llm_pipeline.memory import ObservationMemory
 from llm_pipeline.prompt_v2 import LID_REGIONS, IdentifiedAction, PromptV2Builder, ReplanContext
 from llm_pipeline.trial_log import LoggingFailureChecker, NullTrialLogger, prompt_hash
 from llm_pipeline.client import RemoteTextLLMPlanner
@@ -270,6 +271,8 @@ class LLMOnlyReplanningPipeline:
             self.executor.set_bundle_end_callback(self._on_bundle_end)
         if hasattr(self.failure_checker, 'grasp_confirmation'):
             self.failure_checker.grasp_confirmation = self.config.flags.grasp_confirmation
+        if hasattr(self.failure_checker, 'remembered_pick_allowed'):
+            self.failure_checker.remembered_pick_allowed = self._remembered_pick_allowed
         if not isinstance(self.failure_checker, LoggingFailureChecker):
             self.failure_checker = LoggingFailureChecker(
                 self.failure_checker,
@@ -347,6 +350,8 @@ class LLMOnlyReplanningPipeline:
         self._completed_with_ids: List[IdentifiedAction] = []
         self._remaining_with_ids: List[IdentifiedAction] = []
         self._current_plan_with_ids: List[IdentifiedAction] = []
+        self.memory = ObservationMemory()
+        self._last_articulation: Dict[str, bool] = {}
 
     def _log_event(self, event: str, **fields) -> None:
         try:
@@ -383,11 +388,41 @@ class LLMOnlyReplanningPipeline:
         seen.update(self._scene_lids())
         return seen
 
-    def _emit_observation(self, visible_objects, object_region_map, articulation_states) -> None:
+    @property
+    def memory_enabled(self) -> bool:
+        return self.config.flags.memory_enabled == 'true'
+
+    def _closed_regions(self, articulation_states) -> set:
+        closed = set()
+        for lid, is_open in (articulation_states or {}).items():
+            if not is_open:
+                closed.update(LID_REGIONS.get(lid, ()))
+        return closed
+
+    def _update_memory(self, visible, object_region_map, articulation_states, visible_regions) -> None:
+        self.memory.update(self.step, visible, object_region_map, held_object=getattr(self.executor, 'held_object', None))
+        self._log_event('memory_snapshot', step=self.step, memory=self.memory.snapshot())
+        all_regions = set(getattr(self.symbol_registry, 'regions', ()) or ())
+        open_regions = all_regions - self._closed_regions(articulation_states)
+        for entry in self.memory.mismatches(visible_regions, open_regions):
+            self._log_event('memory_mismatch', step=self.step, object=entry.object_id,
+                            last_region=entry.last_region, last_seen_step=entry.last_seen_step,
+                            failure_code=str(FailureCode.MEMORY_MISMATCH))
+
+    def _remembered_pick_allowed(self, object_name: str) -> bool:
+        if not self.memory_enabled or self.memory.is_visible(object_name):
+            return False
+        entry = self.memory.get(object_name)
+        return entry is not None and entry.last_region not in self._closed_regions(self._last_articulation)
+
+    def _emit_observation(self, visible_objects, object_region_map, articulation_states, visible_regions=()) -> None:
         self.step += 1
         visible = [name for name in visible_objects if name not in LID_REGIONS]
         newly_visible = [name for name in visible if name not in self._observation_seen]
         self._observation_seen.update(visible)
+        self._last_articulation = dict(articulation_states or {})
+        if self.memory_enabled:
+            self._update_memory(visible, dict(object_region_map or {}), articulation_states, visible_regions)
         self._log_event(
             'observation',
             step=self.step,
@@ -405,6 +440,7 @@ class LLMOnlyReplanningPipeline:
             list(getattr(snapshot, 'visible_objects', []) or []),
             dict(getattr(snapshot, 'object_region_map', {}) or {}),
             self._lid_states_from_snapshot(snapshot),
+            list(getattr(snapshot, 'visible_regions', []) or []),
         )
 
     def _assign_plan_ids(self, actions) -> List[IdentifiedAction]:
@@ -528,7 +564,9 @@ class LLMOnlyReplanningPipeline:
             failure_event is not None and failure_check_for(failure_event.failure_id) == FailureCheck.PLAN_CHECK
         )
         if not is_plan_check_requery:
-            self._emit_observation(state.visible_objects, dict(state.object_region_map or {}), dict(state.lid_states or {}))
+            snapshot = getattr(state, '_original_snapshot', None)
+            self._emit_observation(state.visible_objects, dict(state.object_region_map or {}), dict(state.lid_states or {}),
+                                   list(getattr(snapshot, 'visible_regions', []) or []))
         if hasattr(self.context_builder, 'set_replan_context'):
             self.context_builder.set_replan_context(
                 ReplanContext(completed=list(self._completed_with_ids), remaining=list(self._remaining_with_ids))
@@ -539,6 +577,21 @@ class LLMOnlyReplanningPipeline:
             planner_parser.set_observed_objects(self.observed_objects())
         if planner_parser is not None and hasattr(planner_parser, 'require_final_marker'):
             planner_parser.require_final_marker = self.config.flags.prompt_version == 'v2'
+        remembered = self.memory.remembered() if self.memory_enabled else None
+        if hasattr(self.context_builder, 'set_memory_view'):
+            self.context_builder.set_memory_view(
+                None if remembered is None
+                else [(entry.object_id, entry.last_region, self.step - entry.last_seen_step) for entry in remembered]
+            )
+        if planner_parser is not None and hasattr(planner_parser, 'set_access_context'):
+            if remembered is None:
+                planner_parser.set_access_context(None)
+            else:
+                planner_parser.set_access_context(
+                    remembered_regions={entry.object_id: entry.last_region for entry in remembered},
+                    closed_regions=self._closed_regions(self._last_articulation),
+                    lid_regions=LID_REGIONS,
+                )
 
         # 2. Build prompt bundle via modular context builder. Completed actions come from
         # the executor's cumulative list; concatenating per-cycle lists duplicated them.
