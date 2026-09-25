@@ -4,6 +4,7 @@ from llm_pipeline.executor import PrimitiveExecutionOutcome
 from llm_pipeline.executable_symbols import RuntimeSymbolRegistry
 from llm_pipeline.geometric_builder import GeometricContextBuilder
 from llm_pipeline.grill_geometry import derive_grill_semantic_facts
+from llm_pipeline.flags import PipelineFlags
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
 from llm_pipeline.planner import MockTextLLMPlanner, TextLLMPlanner
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
@@ -19,6 +20,10 @@ from llm_pipeline.pipeline_types import (
     SegmentationObjectEvidence,
     SegmentationSnapshot,
 )
+
+
+# Tests of the previous system's prompts and evaluator-driven stop condition.
+LEGACY_FLAGS = PipelineFlags(prompt_version='legacy', termination_mode='evaluator')
 
 
 def test_vlm_model_type_can_be_text_only() -> None:
@@ -612,7 +617,8 @@ def test_pipeline_replans_with_previous_direct_actions() -> None:
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=2, live_view_update_stride=1),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='zero_shot', max_replans=2, live_view_update_stride=1),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=failure_checker,
@@ -803,7 +809,8 @@ def test_pipeline_replans_when_goal_check_reports_incomplete() -> None:
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=3),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='zero_shot', max_replans=3),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=failure_checker,
@@ -849,6 +856,7 @@ def test_pipeline_replans_when_grill_deterministic_goal_is_incomplete() -> None:
     executor = RegionUpdatingSuccessExecutor(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-vlm',
             icl_mode='zero_shot',
             max_replans=2,
@@ -943,6 +951,7 @@ def test_grill_phone_only_goal_mismatch_does_not_trigger_goal_check_replan() -> 
     )
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-vlm',
             icl_mode='zero_shot',
             max_replans=2,
@@ -982,6 +991,7 @@ def test_grill_goal_check_respects_replan_budget() -> None:
     executor = RegionUpdatingSuccessExecutor(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-vlm',
             icl_mode='zero_shot',
             max_replans=0,
@@ -1065,7 +1075,8 @@ def test_no_actions_does_not_succeed_when_scene_state_goal_is_incomplete() -> No
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=0, variant_id='K1'),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='zero_shot', max_replans=0, variant_id='K1'),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=failure_checker,
@@ -1089,6 +1100,7 @@ def test_no_actions_does_not_succeed_when_required_k1_object_is_missing() -> Non
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-llm',
             icl_mode='zero_shot',
             max_replans=0,
@@ -1169,7 +1181,8 @@ def test_pipeline_preflight_reports_no_image_input() -> None:
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='few_shot_shared_1'),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='few_shot_shared_1'),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=FakeFailureChecker(segmentation_adapter, snapshot),
@@ -1192,6 +1205,7 @@ def test_vlm_preflight_uses_state_text_plus_redacted_composite_image() -> None:
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-vlm',
             model_type='vlm',
             enable_vision=True,
@@ -1249,6 +1263,7 @@ def test_vlm_replanning_sends_fresh_image_with_failure_context() -> None:
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-vlm',
             model_type='vlm',
             enable_vision=True,

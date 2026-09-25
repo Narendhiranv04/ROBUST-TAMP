@@ -55,6 +55,9 @@ class PlanRequest(BaseModel):
     valid_actions: Optional[List[str]] = None
     valid_objects: Optional[List[str]] = None
     valid_regions: Optional[List[str]] = None
+    # prompt.version of the client (plan.md Section 0.7). 'v2' disables the
+    # legacy VLM format-repair regeneration, so one request is one planner call.
+    prompt_version: Optional[str] = None
 
 
 class ActionResponse(BaseModel):
@@ -208,6 +211,7 @@ class LLMServer:
                     'held_object': request.held_object,
                     'max_new_tokens': request.max_new_tokens,
                     'temperature': request.temperature,
+                    'prompt_version': request.prompt_version,
                 },
             )
             result = self.planner.plan(bundle)

@@ -701,7 +701,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                       system_prompt: str,
                       user_prompt: str,
                       max_new_tokens: int = 4096,
-                      temperature: float = 0.1) -> PlanResult:
+                      temperature: float = 0.1,
+                      allow_format_repair: bool = True) -> PlanResult:
         """
         Generate an action plan from visual context and prompts.
         """
@@ -728,7 +729,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
             print(f"[VLM Planner] Generated {len(output_text or '')} characters.")
 
             skeleton = self.parse_plan(output_text)
-            if not skeleton:
+            if not skeleton and allow_format_repair:
                 diagnosis = self._format_failure_diagnosis(output_text)
                 print(f"[VLM Planner] No parseable actions found ({diagnosis}). Retrying once with format repair.")
                 repaired_output = self._generate_multimodal_output(
@@ -767,7 +768,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                                 system_prompt: str,
                                 user_prompt: str,
                                 max_new_tokens: int = 4096,
-                                temperature: float = 0.1) -> PlanResult:
+                                temperature: float = 0.1,
+                                allow_format_repair: bool = True) -> PlanResult:
         """
         Generate plan without image (text-only mode for testing).
         Falls back to text-only generation on the loaded model.
@@ -794,7 +796,7 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
             print(f"[VLM Planner] Text-only generation produced {len(output_text or '')} characters.")
             skeleton = self.parse_plan(output_text)
 
-            if not skeleton:
+            if not skeleton and allow_format_repair:
                 diagnosis = self._format_failure_diagnosis(output_text)
                 print(f"[VLM Planner] Text-only parse yielded no actions ({diagnosis}). Retrying once with format repair.")
                 repaired_output = self._generate_text_output(

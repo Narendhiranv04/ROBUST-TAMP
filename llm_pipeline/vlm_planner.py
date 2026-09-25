@@ -3,6 +3,7 @@
 from __future__ import annotations
 import time
 from typing import Any, Dict
+from llm_pipeline.failures import FailureCode
 from llm_pipeline.pipeline_types import (
     BasePlanner,
     DirectAction,
@@ -59,7 +60,7 @@ class VLMPlanner(BasePlanner):
             return None
         raw_output = legacy_result.raw_output or ""
         too_verbose = len(raw_output) >= 4000
-        failure_id = "planner_output_too_verbose" if too_verbose else "planner_output_not_parseable"
+        failure_id = FailureCode.PLANNER_OUTPUT_TOO_VERBOSE if too_verbose else FailureCode.PLANNER_OUTPUT_NOT_PARSEABLE
         message = legacy_result.error_message or "Planner output was not parseable as executable actions."
         if too_verbose and "too verbose" not in message:
             message = f"Previous planner output was too verbose ({len(raw_output)} characters) and not parseable. Reply with only a concise FINAL ACTIONS block."
@@ -90,6 +91,7 @@ class VLMPlanner(BasePlanner):
         max_new_tokens = int(metadata.get("max_new_tokens", 4096) or 4096)
         temperature = float(metadata.get("temperature", 0.0) or 0.0)
         use_vision = composite is not None
+        allow_format_repair = metadata.get("prompt_version") != "v2"
         self.last_request_summary = {
             "model_type": "vlm",
             "text_only": not use_vision,
@@ -112,6 +114,7 @@ class VLMPlanner(BasePlanner):
                 user_prompt=bundle.user_prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                allow_format_repair=allow_format_repair,
             )
         else:
             self.legacy_planner.parser = self.parser
@@ -120,6 +123,7 @@ class VLMPlanner(BasePlanner):
                 user_prompt=bundle.user_prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                allow_format_repair=allow_format_repair,
             )
         
         # 3. Map legacy ActionSkeleton to DirectAction

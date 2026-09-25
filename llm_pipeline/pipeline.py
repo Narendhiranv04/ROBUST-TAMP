@@ -10,6 +10,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from llm_pipeline.catalog import resolve_llm_model, resolve_planner_model, resolve_vlm_model
+from llm_pipeline.failures import CycleError, FailureCheck, FailureCode, TerminationReason, failure_check_for
+from llm_pipeline.flags import PipelineFlags
+from llm_pipeline.prompt_v2 import LID_REGIONS, IdentifiedAction, PromptV2Builder, ReplanContext
+from llm_pipeline.trial_log import LoggingFailureChecker, NullTrialLogger, prompt_hash
 from llm_pipeline.client import RemoteTextLLMPlanner
 from llm_pipeline.executable_symbols import build_runtime_symbol_registry
 from llm_pipeline.failure_logic import SegmentationFirstFailureChecker, GeometricFailureChecker
@@ -97,6 +101,8 @@ class LLMPipelineConfig:
     user_prompt_path: str = ''
     exemplar_path: str = ''
     context_builder_type: str = 'geometric'  # IMPROVED ACCURACY: Default to 3D geometric reasoning
+    # plan.md Section 0.7 flags (termination.mode, prompt.version, ...).
+    flags: PipelineFlags = field(default_factory=PipelineFlags)
 
     def resolve_model_name(self) -> Tuple[str, str]:
         model_type = (self.model_type or ('vlm' if self.enable_vision else 'llm')).strip().lower()
@@ -170,14 +176,18 @@ class LLMOnlyReplanningPipeline:
         self.symbol_registry = None
         self._sim_step_counter = 0
         self._last_image_camera_names: List[str] = []
+        self.trial_logger = NullTrialLogger()
+        self._reset_trial_log_state()
 
-        # Default Context Builder based on config
-        # IMPROVED ACCURACY: Always default to 3D Geometric Reasoning
+        # Default context builder: prompt.version selects v2 (docs/PROMPTS.md) or the legacy prompts.
         if self.context_builder is None:
-            self.context_builder = GeometricContextBuilder(
-                system_prompt_path=self.config.system_prompt_path,
-                user_prompt_path=self.config.user_prompt_path
-            )
+            if self.config.flags.prompt_version == 'v2':
+                self.context_builder = PromptV2Builder()
+            else:
+                self.context_builder = GeometricContextBuilder(
+                    system_prompt_path=self.config.system_prompt_path,
+                    user_prompt_path=self.config.user_prompt_path
+                )
 
     def initialize(self, env=None) -> bool:
         if env is None:
@@ -252,6 +262,16 @@ class LLMOnlyReplanningPipeline:
             self.executor.set_action_start_callback(self._on_action_start)
         if hasattr(self.executor, 'set_scene_state_trace_enabled'):
             self.executor.set_scene_state_trace_enabled(self.config.scene_state_trace)
+        if hasattr(self.executor, 'set_event_sink'):
+            self.executor.set_event_sink(self._log_executor_event)
+        if hasattr(self.executor, 'set_bundle_end_callback'):
+            self.executor.set_bundle_end_callback(self._on_bundle_end)
+        if not isinstance(self.failure_checker, LoggingFailureChecker):
+            self.failure_checker = LoggingFailureChecker(
+                self.failure_checker,
+                emit=self._log_event,
+                step=lambda: self.step,
+            )
 
         if self.planner is None:
             model_alias, model_name = self.config.resolve_model_name()
@@ -303,10 +323,100 @@ class LLMOnlyReplanningPipeline:
         self._update_live_action_sequence([], None)
         return True
 
+    # ---------------------------------------------------------------- trial log
+    def set_trial_logger(self, trial_logger) -> None:
+        self.trial_logger = trial_logger or NullTrialLogger()
+
+    def _reset_trial_log_state(self) -> None:
+        self.step = 0
+        self.termination_reason: Optional[str] = None
+        self._observation_seen: set = set()
+        self._action_counter = 0
+        self._completed_with_ids: List[IdentifiedAction] = []
+        self._remaining_with_ids: List[IdentifiedAction] = []
+        self._current_plan_with_ids: List[IdentifiedAction] = []
+
+    def _log_event(self, event: str, **fields) -> None:
+        try:
+            self.trial_logger.emit(event, **fields)
+        except Exception as exc:
+            print(f'[TRIAL-LOG] {event} not logged: {exc}')
+
+    def _log_executor_event(self, event: str, **fields) -> None:
+        self._log_event(event, step=self.step, **fields)
+
+    def _scene_lids(self) -> List[str]:
+        objects = set(getattr(self.symbol_registry, 'objects', ()) or ())
+        return [lid for lid in LID_REGIONS if lid in objects]
+
+    def _lid_states_from_snapshot(self, snapshot) -> Dict[str, bool]:
+        """Lid states from joint/pose values: a stand-in for camera perception (docs/ARCHITECTURE.md)."""
+        states = {}
+        for lid in self._scene_lids():
+            try:
+                if lid == 'grill_lid':
+                    value = infer_grill_lid_open(self.env)
+                else:
+                    value = self.segmentation_adapter.is_lid_open(snapshot, lid_name=lid)
+            except Exception:
+                value = None
+            if value is not None:
+                states[lid] = bool(value)
+        return states
+
+    def observed_objects(self) -> set:
+        """Objects the robot has observed so far in this trial, plus the scene's lids."""
+        seen = set(getattr(self.segmentation_adapter, 'known_visible', set()) or set())
+        seen.update(self._observation_seen)
+        seen.update(self._scene_lids())
+        return seen
+
+    def _emit_observation(self, visible_objects, object_region_map, articulation_states) -> None:
+        self.step += 1
+        visible = [name for name in visible_objects if name not in LID_REGIONS]
+        newly_visible = [name for name in visible if name not in self._observation_seen]
+        self._observation_seen.update(visible)
+        self._log_event(
+            'observation',
+            step=self.step,
+            visible_objects=visible,
+            object_regions={name: object_region_map.get(name) for name in visible},
+            articulation_states={name: ('open' if is_open else 'closed') for name, is_open in articulation_states.items()},
+            newly_visible_objects=newly_visible,
+        )
+
+    def _on_bundle_end(self, bundle_id, actions, success, failure_event, snapshot) -> None:
+        del bundle_id, actions, success, failure_event
+        if snapshot is None:
+            return
+        self._emit_observation(
+            list(getattr(snapshot, 'visible_objects', []) or []),
+            dict(getattr(snapshot, 'object_region_map', {}) or {}),
+            self._lid_states_from_snapshot(snapshot),
+        )
+
+    def _assign_plan_ids(self, actions) -> List[IdentifiedAction]:
+        identified = []
+        for action in actions:
+            self._action_counter += 1
+            identified.append(IdentifiedAction(f'a{self._action_counter}', str(action)))
+        return identified
+
+    def _record_execution_progress(self, plan_with_ids: List[IdentifiedAction], remaining_actions) -> None:
+        remaining_count = len(list(remaining_actions or []))
+        done = plan_with_ids[: max(0, len(plan_with_ids) - remaining_count)]
+        self._completed_with_ids.extend(done)
+        self._remaining_with_ids = plan_with_ids[len(done):]
+
+    def _set_termination(self, reason) -> None:
+        if self.termination_reason is None:
+            self.termination_reason = str(reason)
+
     def reset_episode_state(self) -> None:
         self.cycles = []
         self.last_prompt_trace = {}
         self._sim_step_counter = 0
+        self._reset_trial_log_state()
         self._initial_cooked_meats = set()
         self._initial_cooked_meats_captured = False
         if self.executor is not None and hasattr(self.executor, 'reset_episode'):
@@ -400,17 +510,29 @@ class LLMOnlyReplanningPipeline:
     ) -> Tuple[PlanResult, Dict[str, Any]]:
         # 1. Capture and resolve scene state
         state = self._build_scene_state()
-        
-        # 2. Build prompt bundle via modular context builder
+        # Every planning event is an observation, except a re-query after a plan-check
+        # failure, which belongs to the same planning event (plan.md Section 10, Q7).
+        is_plan_check_requery = (
+            failure_event is not None and failure_check_for(failure_event.failure_id) == FailureCheck.PLAN_CHECK
+        )
+        if not is_plan_check_requery:
+            self._emit_observation(state.visible_objects, dict(state.object_region_map or {}), dict(state.lid_states or {}))
+        if hasattr(self.context_builder, 'set_replan_context'):
+            self.context_builder.set_replan_context(
+                ReplanContext(completed=list(self._completed_with_ids), remaining=list(self._remaining_with_ids))
+            )
+        # Objects never observed must not reach the planner (plan.md Phase 1, step 5b).
+        planner_parser = getattr(self.planner, 'parser', None)
+        if planner_parser is not None and hasattr(planner_parser, 'set_observed_objects'):
+            planner_parser.set_observed_objects(self.observed_objects())
+
+        # 2. Build prompt bundle via modular context builder. Completed actions come from
+        # the executor's cumulative list; concatenating per-cycle lists duplicated them.
         bundle = self.context_builder.build_bundle(
             state=state,
             goal_text=goal_text,
             failure_event=failure_event,
-            previous_actions=[
-                action
-                for cycle in self.cycles
-                for action in cycle.completed_actions
-            ],
+            previous_actions=list(getattr(self.executor, 'completed_primitive_actions', []) or []),
             icl_mode=self.config.icl_mode
         )
         bundle_metadata = dict(getattr(bundle, 'metadata', {}) or {})
@@ -418,6 +540,7 @@ class LLMOnlyReplanningPipeline:
             'held_object': getattr(self.executor, 'held_object', None),
             'max_new_tokens': int(self.config.planner_max_new_tokens),
             'temperature': float(self.config.planner_temperature),
+            'prompt_version': self.config.flags.prompt_version,
         })
         bundle = replace(bundle, metadata=bundle_metadata)
 
@@ -432,6 +555,7 @@ class LLMOnlyReplanningPipeline:
 
         # 3. Plan using modular planner
         # We try to use the new .plan() interface, fall back to .generate_plan() for legacy
+        call_started = time.time()
         if hasattr(self.planner, 'plan'):
             result = self.planner.plan(bundle)
         else:
@@ -459,6 +583,10 @@ class LLMOnlyReplanningPipeline:
                 print(f'[LLM] Plan FAILED: {result.error_message}')
             print(f'{"=" * 60}')
 
+        if not silent:
+            self._log_planning_event(bundle, result, failure_event, is_replan, is_plan_check_requery,
+                                     wall_latency_s=time.time() - call_started)
+
         bundle_trace = self._prompt_bundle_trace(bundle)
         self.last_prompt_trace = {
             'bundle': bundle_trace,
@@ -471,6 +599,47 @@ class LLMOnlyReplanningPipeline:
         else:
             self._update_live_action_sequence([], None)
         return result, dict(self.last_prompt_trace)
+
+    def _log_planning_event(self, bundle, result, failure_event, is_replan, is_plan_check_requery, wall_latency_s) -> None:
+        trigger_objects = []
+        if failure_event is not None and failure_event.failure_id == FailureCode.NEW_OBJECT_DISCOVERED:
+            trigger_objects = list((failure_event.evidence or {}).get('newly_visible_objects') or [])
+        prompt_path = self.trial_logger.save_prompt(
+            self.step, bundle.system_prompt, bundle.user_prompt, kind='replan' if is_replan else 'initial',
+        )
+        parsed = [str(action) for action in (result.actions or [])]
+        self._log_event(
+            'planning_event',
+            step=self.step,
+            kind='replan' if is_replan else 'initial',
+            plan_check_requery=bool(is_plan_check_requery),
+            trigger_code=str(failure_event.failure_id) if failure_event is not None else None,
+            trigger_objects=trigger_objects,
+            model=getattr(self.planner, 'model_name', None) or getattr(self.planner, 'model_alias', None),
+            prompt_version=self.config.flags.prompt_version,
+            prompt_hash=prompt_hash(bundle.system_prompt, bundle.user_prompt),
+            prompt_path=prompt_path,
+            image_present=bool(bundle.images),
+            raw_output=result.raw_output,
+            parsed_output=parsed,
+            planner_call_latency_s=float(result.inference_time or 0.0),
+            wall_latency_s=round(float(wall_latency_s), 4),
+            error_message=result.error_message,
+        )
+        if result.failure_event is not None:
+            check = failure_check_for(result.failure_event.failure_id)
+            self._log_event(
+                'plan_check',
+                step=self.step,
+                result='fail' if check == FailureCheck.PLAN_CHECK else 'not_run',
+                failure_codes=[str(result.failure_event.failure_id)],
+                fact=(result.failure_event.evidence or {}).get('fact'),
+            )
+        elif result.success:
+            self._log_event('plan_check', step=self.step, result='pass', failure_codes=[], plan=parsed)
+        else:
+            self._log_event('plan_check', step=self.step, result='not_run',
+                            failure_codes=[str(FailureCode.PLANNER_CALL_FAILED)], error_message=result.error_message)
 
     def _capture_rgb_frames(self) -> Dict[str, np.ndarray]:
         frames: Dict[str, np.ndarray] = {}
@@ -576,11 +745,19 @@ class LLMOnlyReplanningPipeline:
                 initially_cooked_meats=getattr(self, '_initial_cooked_meats', set()),
             )
 
-        # Resolve lid open/closed states for all lid objects
+        # Resolve lid open/closed states. Legacy prompts list visible lids only; prompt v2
+        # lists every lid of the scene (joint/pose values as a stand-in for perception).
         lid_names = [name for name in snapshot.visible_objects if name in {'box_lid', 'grill_lid', 'lid'}]
+        if self.config.flags.prompt_version == 'v2':
+            lid_names = list(dict.fromkeys(lid_names + self._scene_lids()))
         lid_states = {}
         for lid_name in lid_names:
             try:
+                if lid_name == 'grill_lid' and self.config.flags.prompt_version == 'v2':
+                    grill_open = infer_grill_lid_open(self.env)
+                    if grill_open is not None:
+                        lid_states[lid_name] = bool(grill_open)
+                        continue
                 lid_states[lid_name] = bool(self.segmentation_adapter.is_lid_open(snapshot, lid_name=lid_name))
             except Exception:
                 lid_states[lid_name] = False
@@ -610,6 +787,11 @@ class LLMOnlyReplanningPipeline:
         goal_check_image = None
         if self.config.enable_vision and state.images:
             goal_check_image = state.images[0]
+        if hasattr(self.context_builder, 'goal_check_prompts'):
+            system_prompt, user_prompt = self.context_builder.goal_check_prompts(
+                state, goal_text, list(getattr(self.executor, 'completed_primitive_actions', []) or []),
+            )
+            return system_prompt, user_prompt, goal_check_image
         bundle = self.context_builder.build_bundle(
             state=state,
             goal_text=goal_text,
@@ -691,6 +873,9 @@ class LLMOnlyReplanningPipeline:
 
     def _deterministic_goal_completion_from_scene(self, goal_text: str) -> Optional[GoalCheckResult]:
         del goal_text
+        # termination.mode=agent: the evaluator only scores, it never controls the loop.
+        if self.config.flags.termination_mode != 'evaluator':
+            return None
         variant_id = self._variant_id_for_goal_check()
         if not variant_id:
             return None
@@ -751,7 +936,7 @@ class LLMOnlyReplanningPipeline:
 
     def _goal_check_failure_event(self, goal_check: GoalCheckResult) -> FailureEvent:
         return FailureEvent(
-            failure_id='goal_not_satisfied',
+            failure_id=FailureCode.GOAL_NOT_SATISFIED,
             stage=FailureStage.AFTER_EXECUTION,
             source=FailureSource.GOAL_CHECK,
             action=None,
@@ -823,12 +1008,13 @@ class LLMOnlyReplanningPipeline:
                 cycle.remaining_actions = list(cycle.planned_actions)
             else:
                 cycle.success = False
-                cycle.error_message = plan_result.error_message or 'planning_failed'
+                cycle.error_message = plan_result.error_message or CycleError.PLANNING_FAILED
                 if plan_result.failure_event is not None:
                     cycle.failure_event = plan_result.failure_event.to_dict()
                     last_failure_event = plan_result.failure_event
                 failure_reason = cycle.error_message
             self.cycles.append(cycle)
+            self._set_termination(TerminationReason.EXECUTION_SKIPPED)
         else:
             while len(self.cycles) <= self.config.max_replans:
                 cycle_number = len(self.cycles) + 1
@@ -857,7 +1043,7 @@ class LLMOnlyReplanningPipeline:
                     deterministic_goal_check = self._deterministic_goal_completion_from_scene(goal_text)
                     if (
                         pending_failure is not None
-                        and pending_failure.failure_id == 'goal_not_satisfied'
+                        and pending_failure.failure_id == FailureCode.GOAL_NOT_SATISFIED
                         and (pending_failure.evidence or {}).get('error_message')
                         and 'NO_ACTIONS' in (plan_result.raw_output or '').upper()
                         and (deterministic_goal_check is None or deterministic_goal_check.goal_satisfied)
@@ -866,17 +1052,22 @@ class LLMOnlyReplanningPipeline:
                             cycle.goal_check = deterministic_goal_check.to_dict()
                         self.cycles.append(cycle)
                         failure_reason = None
+                        self._remaining_with_ids = []
+                        self._set_termination(TerminationReason.PLANNER_RETURNED_NO_ACTIONS)
                         break
+                    self._remaining_with_ids = []
                     if self.config.enable_goal_check:
                         goal_check = deterministic_goal_check or self._check_goal_completion(goal_text)
                         cycle.goal_check = goal_check.to_dict()
                         if goal_check.success and goal_check.goal_satisfied:
                             self.cycles.append(cycle)
                             failure_reason = None
+                            self._set_termination(TerminationReason.GOAL_CHECK_SATISFIED)
                             break
                         if self._is_implicit_non_target_only_goal_failure(goal_check):
                             self.cycles.append(cycle)
                             failure_reason = None
+                            self._set_termination(TerminationReason.GOAL_CHECK_SATISFIED)
                             break
                         goal_failure = self._goal_check_failure_event(goal_check)
                         cycle.success = False
@@ -886,17 +1077,19 @@ class LLMOnlyReplanningPipeline:
                         pending_failure = goal_failure
                         failure_reason = goal_failure.message
                         if len(self.cycles) > self.config.max_replans:
+                            self._set_termination(TerminationReason.REPLAN_BUDGET_EXHAUSTED)
                             break
                         continue
                     cycle.success = False
-                    cycle.error_message = 'planner_returned_no_actions'
+                    cycle.error_message = CycleError.PLANNER_RETURNED_NO_ACTIONS
                     self.cycles.append(cycle)
                     failure_reason = cycle.error_message
+                    self._set_termination(TerminationReason.PLANNER_RETURNED_NO_ACTIONS)
                     break
 
                 if not plan_result.success:
                     cycle.success = False
-                    cycle.error_message = plan_result.error_message or 'planning_failed'
+                    cycle.error_message = plan_result.error_message or CycleError.PLANNING_FAILED
                     if plan_result.failure_event is not None:
                         cycle.failure_event = plan_result.failure_event.to_dict()
                         last_failure_event = plan_result.failure_event
@@ -910,8 +1103,13 @@ class LLMOnlyReplanningPipeline:
                             self.executor.remaining_actions = []
                         pending_failure = plan_result.failure_event
                         continue
+                    self._set_termination(
+                        TerminationReason.PLANNING_FAILED if plan_result.failure_event is None
+                        else TerminationReason.NON_REPLANNABLE_FAILURE
+                    )
                     break
 
+                plan_with_ids = self._assign_plan_ids(plan_result.actions)
                 execution = self.executor.execute_actions(
                     plan_result.actions,
                     self.failure_checker,
@@ -921,6 +1119,7 @@ class LLMOnlyReplanningPipeline:
 
                 cycle.completed_actions = list(getattr(self.executor, 'completed_primitive_actions', []))
                 cycle.remaining_actions = list(execution.remaining_actions)
+                self._record_execution_progress(plan_with_ids, execution.remaining_actions)
                 cycle.success = bool(execution.success)
                 cycle.error_message = execution.error_message
                 if execution.last_failure_event is not None:
@@ -935,9 +1134,11 @@ class LLMOnlyReplanningPipeline:
                         cycle.goal_check = goal_check.to_dict()
                         if goal_check.success and goal_check.goal_satisfied:
                             failure_reason = None
+                            self._set_termination(TerminationReason.GOAL_CHECK_SATISFIED)
                             break
                         if self._is_implicit_non_target_only_goal_failure(goal_check):
                             failure_reason = None
+                            self._set_termination(TerminationReason.GOAL_CHECK_SATISFIED)
                             break
                         goal_failure = self._goal_check_failure_event(goal_check)
                         cycle.success = False
@@ -946,18 +1147,23 @@ class LLMOnlyReplanningPipeline:
                         pending_failure = goal_failure
                         failure_reason = goal_failure.message
                         if len(self.cycles) > self.config.max_replans:
+                            self._set_termination(TerminationReason.REPLAN_BUDGET_EXHAUSTED)
                             break
                         continue
 
                     failure_reason = None
+                    self._set_termination(TerminationReason.PLAN_COMPLETED)
                     break
 
                 pending_failure = execution.last_failure_event
                 failure_reason = execution.error_message or (pending_failure.message if pending_failure else 'execution_failed')
                 if pending_failure is None or not pending_failure.should_replan:
+                    self._set_termination(TerminationReason.NON_REPLANNABLE_FAILURE)
                     break
                 if len(self.cycles) > self.config.max_replans:
+                    self._set_termination(TerminationReason.REPLAN_BUDGET_EXHAUSTED)
                     break
+            self._set_termination(TerminationReason.REPLAN_BUDGET_EXHAUSTED)
 
         success = bool(self.cycles) and self.cycles[-1].success
         planned_actions = list(self.cycles[0].planned_actions) if self.cycles else []

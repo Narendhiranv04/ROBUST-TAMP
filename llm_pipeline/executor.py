@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import math
+import time
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PDDLSTREAM_DIR = os.path.join(ROOT_DIR, 'pddlstream')
@@ -21,6 +22,7 @@ from pddlstream.algorithms.meta import solve
 from pddlstream.language.constants import And, PDDLProblem
 
 from llm_pipeline.pipeline_types import DirectAction, FailureEvent, FailureLayer, FailureStage, FailureSource
+from llm_pipeline.failures import FailureCode, LegacyFailureId
 from llm_pipeline.object_aliases import scene_object_for_object
 from llm_pipeline.region_aliases import (
     BOX_STORAGE_REGION,
@@ -109,6 +111,7 @@ class AbstractBundlingHandler:
 
 class KitchenBundlingHandler(AbstractBundlingHandler):
     """Bundling rituals for the Kitchen scene."""
+    adapter_name = 'kitchen'
     def create_transfer_executor(self, p_action: DirectAction, pl_action: DirectAction):
         obj_name = p_action.args[0]
         scene_obj_name = scene_object_for_object(obj_name, self.env)
@@ -178,6 +181,7 @@ class KitchenBundlingHandler(AbstractBundlingHandler):
 
 class GrillBundlingHandler(AbstractBundlingHandler):
     """Bundling rituals for the Grill scene."""
+    adapter_name = 'grill'
     def __init__(self, executor):
         super().__init__(executor)
         self.placed_counts = {}
@@ -385,7 +389,7 @@ class UnifiedActionBundler:
         pick_action, place_action = bundle_actions
         obj_name = pick_action.args[0]
         target_region = normalize_region_name(place_action.args[1])
-        legacy_id = 'TAMP_EXECUTION_ERROR'
+        legacy_id = LegacyFailureId.TAMP_EXECUTION_ERROR
         completed: List[str] = []
         held_object = self.executor.held_object
         last_action_name = self.executor._last_action_name
@@ -424,6 +428,7 @@ class UnifiedActionBundler:
                 )
                 return BundleExecutionOutcome(2, True, "", None, completed, held_object)
 
+        self.executor._action_started(pick_action, adapter=f'{self.handler.adapter_name}.transfer')
         gt_executor, _, _, err = self.handler.create_transfer_executor(pick_action, place_action)
         if gt_executor is None:
             failure = self._runtime_failure(
@@ -446,6 +451,7 @@ class UnifiedActionBundler:
         try:
             for stage_index, stage_action in enumerate(bundle_actions):
                 print(f'[BUNDLE] ({stage_index + 1}/2) {stage_action}')
+                self.executor._action_started(stage_action, adapter=f'{self.handler.adapter_name}.transfer')
 
                 if pre_action_checks_enabled and failure_checker is not None:
                     pre_snapshot = self.executor._trace_bundle_state(
@@ -574,12 +580,12 @@ class UnifiedActionBundler:
                     if post_failure is not None:
                         post_failure.evidence.setdefault('bundle', 'transfer')
                         post_failure.evidence.setdefault('legacy_failure_id', legacy_id)
-                        if stage_action.action_name == 'pick' and post_failure.failure_id == 'grasp_failed':
+                        if stage_action.action_name == 'pick' and post_failure.failure_id == FailureCode.GRASP_FAILED:
                             held_object = previous_held
                             self.executor.held_object = held_object
                             if completed and completed[-1] == str(stage_action):
                                 completed.pop()
-                        if post_failure.failure_id == 'new_object_discovered' and stage_action.action_name != 'place':
+                        if post_failure.failure_id == FailureCode.NEW_OBJECT_DISCOVERED and stage_action.action_name != 'place':
                             deferred_visibility_failure = post_failure
                             continue
                         else:
@@ -650,7 +656,7 @@ class UnifiedActionBundler:
         post_action_checks_enabled: bool = True,
     ) -> BundleExecutionOutcome:
         lid_action = bundle_actions[0]
-        legacy_id = 'TAMP_OPEN_ERROR' if lid_action.action_name == 'open' else 'TAMP_CLOSE_ERROR'
+        legacy_id = LegacyFailureId.TAMP_OPEN_ERROR if lid_action.action_name == 'open' else LegacyFailureId.TAMP_CLOSE_ERROR
         completed: List[str] = []
         held_object = self.executor.held_object
         desired = f'{lid_action.args[0]} {lid_action.action_name}'
@@ -672,6 +678,7 @@ class UnifiedActionBundler:
         )
 
         for stage_index, stage_action in enumerate(bundle_actions):
+            self.executor._action_started(stage_action, adapter=f'{self.handler.adapter_name}.lid')
             if pre_action_checks_enabled and failure_checker is not None:
                 pre_snapshot = self.executor._trace_bundle_state(
                     failure_checker,
@@ -820,7 +827,7 @@ class UnifiedActionBundler:
             failure = failure_checker.classify_runtime_error(action, message or 'Execution failed')
         else:
             failure = FailureEvent(
-                failure_id='executor_failure',
+                failure_id=FailureCode.EXECUTOR_FAILURE,
                 stage=FailureStage.BEFORE_EXECUTION,
                 source=FailureSource.EXECUTOR,
                 action=str(action),
@@ -849,6 +856,14 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         self.action_start_callback: Optional[Callable[[List[DirectAction], int], None]] = None
         self.bundler: Optional[UnifiedActionBundler] = None
         self.scene_state_trace_enabled = False
+        # Trial-log hooks (llm_pipeline.trial_log). ``event_sink(event, **fields)``
+        # receives action_start/action_end; ``bundle_end_callback`` runs after every
+        # bundle finishes (success or failure) so the pipeline can take an observation.
+        self.event_sink: Optional[Callable[..., None]] = None
+        self.bundle_end_callback: Optional[Callable[..., None]] = None
+        self.last_trace_snapshot = None
+        self._bundle_counter = 0
+        self._current_bundle: Optional[dict] = None
         if env is not None:
             self.set_env(env)
 
@@ -862,6 +877,92 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
 
     def set_scene_state_trace_enabled(self, enabled: bool) -> None:
         self.scene_state_trace_enabled = bool(enabled)
+
+    def set_event_sink(self, sink: Optional[Callable[..., None]]) -> None:
+        self.event_sink = sink
+
+    def set_bundle_end_callback(self, callback: Optional[Callable[..., None]]) -> None:
+        self.bundle_end_callback = callback
+
+    def _emit_event(self, event: str, **fields) -> None:
+        if self.event_sink is None:
+            return
+        try:
+            self.event_sink(event, **fields)
+        except Exception as exc:
+            print(f'[EXEC] trial-log event {event} failed: {exc}')
+
+    @staticmethod
+    def _bundle_size(actions: List[DirectAction], index: int) -> int:
+        action = actions[index]
+        if action.action_name == 'pick' and index + 1 < len(actions):
+            nxt = actions[index + 1]
+            if nxt.action_name == 'place' and nxt.args and action.args and nxt.args[0] == action.args[0]:
+                return 2
+        return 1
+
+    def _begin_bundle(self, bundle_actions: List[DirectAction]) -> str:
+        self._bundle_counter += 1
+        bundle_id = f'b{self._bundle_counter}'
+        self._current_bundle = {
+            'bundle_id': bundle_id,
+            'actions': [str(action) for action in bundle_actions],
+            'started': {},
+            'adapter': {},
+        }
+        return bundle_id
+
+    def _action_started(self, action: DirectAction, adapter: str) -> None:
+        bundle = self._current_bundle
+        if bundle is None or str(action) in bundle['started']:
+            return
+        bundle['started'][str(action)] = time.monotonic()
+        bundle['adapter'][str(action)] = adapter
+        self._emit_event('action_start', action=str(action), bundle_id=bundle['bundle_id'], adapter=adapter)
+
+    def _end_bundle(self, completed_actions: List[str], success: bool, failure_event: Optional[FailureEvent]) -> None:
+        bundle = self._current_bundle
+        self._current_bundle = None
+        if bundle is None:
+            return
+        now = time.monotonic()
+        started = bundle['started']
+        order = [name for name in bundle['actions'] if name in started]
+        completed = list(completed_actions or [])
+        failure_code = str(failure_event.failure_id) if failure_event is not None else None
+        for name in bundle['actions']:
+            if name in started:
+                later = [started[other] for other in order[order.index(name) + 1:]]
+                duration = (later[0] if later else now) - started[name]
+                if name in completed:
+                    outcome, code = 'success', None
+                else:
+                    outcome, code = 'failure', failure_code
+            else:
+                duration = 0.0
+                outcome = 'skipped_already_satisfied' if success and not started else 'not_executed'
+                code = None
+            self._emit_event(
+                'action_end',
+                action=name,
+                bundle_id=bundle['bundle_id'],
+                adapter=bundle['adapter'].get(name),
+                local_retries_used=None,
+                outcome=outcome,
+                failure_code=code,
+                duration_s=round(float(duration), 4),
+            )
+        if self.bundle_end_callback is not None:
+            try:
+                self.bundle_end_callback(
+                    bundle_id=bundle['bundle_id'],
+                    actions=list(bundle['actions']),
+                    success=bool(success),
+                    failure_event=failure_event,
+                    snapshot=self.last_trace_snapshot,
+                )
+            except Exception as exc:
+                print(f'[EXEC] bundle-end callback failed: {exc}')
 
     def _run_external_step_callback(self) -> None:
         callback = getattr(self, 'step_callback', None)
@@ -882,6 +983,9 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         self._manual_hold_context = None
         self._last_action_name = None
         self._pending_pddl_segments = None
+        self.last_trace_snapshot = None
+        self._bundle_counter = 0
+        self._current_bundle = None
 
     def _trace_bundle_state(
         self,
@@ -905,6 +1009,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             if self.scene_state_trace_enabled:
                 print(f'[SCENE-STATE] {label}: capture failed: {exc}')
             return None
+        self.last_trace_snapshot = snapshot
         adapter = getattr(failure_checker, 'adapter', None)
         scene_state_info = self._build_live_scene_state_info(
             failure_checker,
@@ -1117,6 +1222,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             
             # --- Try Bundling ---
             if self.bundler:
+                self._begin_bundle(actions[index:index + self._bundle_size(actions, index)])
                 bundle = self.bundler.try_execute_bundle(
                     actions,
                     index,
@@ -1132,6 +1238,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                         last_completed_name = actions[index + len(bundle.completed_actions) - 1].action_name
                         self._last_action_name = last_completed_name
 
+                    self._end_bundle(bundle.completed_actions, bundle.success, bundle.failure_event)
                     if not bundle.success:
                         remaining_start = index + len(bundle.completed_actions)
                         self.remaining_actions = [str(item) for item in actions[remaining_start:]]
@@ -1147,7 +1254,9 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
 
                     skip_counter = bundle.consumed - 1
                     continue
+                self._current_bundle = None
             # --- End Bundling ---
+            self._begin_bundle([action])
 
             next_action = actions[index + 1] if index + 1 < len(actions) else None
             if self.action_start_callback is not None:
@@ -1157,14 +1266,17 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                     pass
 
             print(f'[EXEC] ({index + 1}/{len(actions)}) {action}')
+            self._action_started(action, adapter='direct.' + action.action_name)
 
             pre_failure = None
             if pre_action_checks_enabled and failure_checker is not None:
                 pre_snapshot = failure_checker.capture_snapshot(event=f'before-{index + 1}')
+                self.last_trace_snapshot = pre_snapshot
                 pre_failure = failure_checker.precheck(action, self.held_object, pre_snapshot, last_action_name=self._last_action_name)
             if pre_failure is not None:
                 print(f'[EXEC] PRE-CHECK FAILED: {pre_failure.message}')
                 self.last_failure_event = pre_failure
+                self._end_bundle([], False, pre_failure)
                 return PrimitiveExecutionOutcome(
                     success=False,
                     completed_actions=list(self.completed_primitive_actions),
@@ -1181,6 +1293,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                 if failure_checker is not None:
                     failure = failure_checker.classify_runtime_error(action, error_message or 'Execution failed')
                 self.last_failure_event = failure
+                self._end_bundle([], False, failure)
                 return PrimitiveExecutionOutcome(
                     success=False,
                     completed_actions=list(self.completed_primitive_actions),
@@ -1200,6 +1313,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             post_failure = None
             if post_action_checks_enabled and failure_checker is not None:
                 post_snapshot = failure_checker.capture_snapshot(event=f'after-{index + 1}')
+                self.last_trace_snapshot = post_snapshot
                 post_failure = failure_checker.postcheck(action, self.held_object, post_snapshot)
             if post_failure is not None:
                 if action.action_name == 'pick':
@@ -1212,6 +1326,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
 
                 print(f'[EXEC] POST-CHECK FAILED: {post_failure.message}')
                 self.last_failure_event = post_failure
+                self._end_bundle([] if action.action_name == 'pick' else [str(action)], False, post_failure)
                 return PrimitiveExecutionOutcome(
                     success=False,
                     completed_actions=list(self.completed_primitive_actions),
@@ -1223,6 +1338,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
 
             self.completed_primitive_actions.append(str(action))
             self._last_action_name = action.action_name
+            self._end_bundle([str(action)], True, None)
 
             # After place or open, silently return to home pose so the next
             # move starts from a clean known configuration

@@ -184,7 +184,7 @@ class FailureEvent:
     def to_dict(self) -> Dict[str, Any]:
         layer = self.failure_layer.value if isinstance(self.failure_layer, FailureLayer) else str(self.failure_layer)
         return {
-            "failure_id": self.failure_id,
+            "failure_id": str(self.failure_id),
             "failure_layer": layer,
             "stage": self.stage.value,
             "source": self.source.value,

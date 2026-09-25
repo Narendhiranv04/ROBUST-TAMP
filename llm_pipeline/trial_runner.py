@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -22,7 +23,10 @@ from llm_pipeline.metrics import (
     score_variant_completion,
     validate_variant_success,
 )
+from llm_pipeline.failures import TerminationReason
+from llm_pipeline.flags import PipelineFlags
 from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
+from llm_pipeline.trial_log import TrialLogger
 
 
 DEFAULT_RUN_OUTPUT_ROOT = ROOT_DIR / 'llm_pipeline' / 'results' / 'llm_runs'
@@ -165,6 +169,36 @@ def _resolve_output_paths(
     return run_dir / 'record.json', run_dir / 'failure_summary.txt'
 
 
+def git_commit_info(root: Path = ROOT_DIR) -> Dict[str, Any]:
+    import subprocess
+
+    def _git(*args: str) -> str:
+        return subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, timeout=10).stdout.strip()
+
+    try:
+        return {'commit': _git('rev-parse', 'HEAD') or None, 'dirty': bool(_git('status', '--porcelain', '-uno'))}
+    except Exception:
+        return {'commit': None, 'dirty': None}
+
+
+def seed_everything(seed: int) -> None:
+    import random
+
+    random.seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed % (2 ** 32))
+    except Exception:
+        pass
+
+
+def trial_log_path_for(json_output_path: Path) -> Path:
+    if json_output_path.name == 'record.json':
+        return json_output_path.parent / 'trial_log.jsonl'
+    return json_output_path.with_suffix('.trial_log.jsonl')
+
+
 def _latest_failure_event(record: Dict[str, Any]) -> Dict[str, Any]:
     summary = record.get('raw_summary') or {}
     failure_event = summary.get('last_failure_event') or {}
@@ -256,8 +290,13 @@ def run_trial(
     quantization: str = '',
     planner_max_new_tokens: int = 4096,
     goal_check_max_new_tokens: int = 128,
+    flags: Optional[PipelineFlags] = None,
+    seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     variant_spec = get_variant_spec(variant_id)
+    flags = flags or PipelineFlags()
+    seed = int(trial_index if seed is None else seed)
+    seed_everything(seed)
     if not variant_spec.model_eval_supported:
         raise RuntimeError(
             f'Variant {variant_spec.variant_id} is not supported for the maintained planner runner: '
@@ -295,6 +334,7 @@ def run_trial(
         scene_state_trace=bool(scene_state_trace),
         show_llm_output=bool(show_llm_output),
         enable_goal_check=bool(goal_check),
+        flags=flags,
     )
     pipeline = LLMOnlyReplanningPipeline(config=config)
 
@@ -307,11 +347,69 @@ def run_trial(
         output_dir=output_dir,
         output_root=output_root,
     )
+    trial_id = (
+        f'{variant_spec.variant_id}_{_safe_path_token(model_alias)}_{_safe_path_token(icl_mode)}'
+        f'_{flags.prompt_version}_trial{int(trial_index):03d}'
+    )
+    condition = {
+        'planner_model': model_alias,
+        'model_type': model_type or ('vlm' if vision else 'llm'),
+        'quantization': quantization or 'none',
+        'vision': bool(vision),
+        'icl_mode': icl_mode,
+        'prompt_version': flags.prompt_version,
+        'goal_check': bool(goal_check),
+        'replan_mode': replan_mode,
+        'max_replans': int(max_replans),
+        'planner_max_new_tokens': int(planner_max_new_tokens),
+        'flags': flags.to_dict(),
+    }
+    trial_logger = TrialLogger(trial_log_path_for(json_output_path), trial_id=trial_id)
+    if hasattr(pipeline, 'set_trial_logger'):
+        pipeline.set_trial_logger(trial_logger)
+    trial_logger.emit(
+        'trial_start',
+        scene=variant_spec.task_family,
+        variant=variant_spec.variant_id,
+        condition=condition,
+        seed=seed,
+        flags=flags.to_dict(),
+        git_commit=git_commit_info(),
+        trial_index=int(trial_index),
+        goal=goal_text,
+        backend=os.environ.get('SIM_BACKEND', 'coppelia'),
+        remote_planner_url=remote_url or None,
+    )
+    trial_started = time.monotonic()
+    trial_end_logged = False
+
+    def _log_trial_end(success, validation, planner_calls, planner_time_s, termination_reason) -> None:
+        nonlocal trial_end_logged
+        if trial_end_logged:
+            return
+        trial_end_logged = True
+        validation = validation or {}
+        trial_logger.emit(
+            'trial_end',
+            success=success,
+            goal_relations_satisfied=validation.get('satisfied_relation_count'),
+            goal_relations_total=validation.get('required_relation_count'),
+            procedure_checks_satisfied=validation.get('satisfied_procedure_count'),
+            procedure_checks_total=validation.get('required_procedure_count'),
+            partial_goal_completion=validation.get('partial_goal_completion'),
+            planner_calls=planner_calls,
+            planner_time_s=planner_time_s,
+            trial_time_s=round(time.monotonic() - trial_started, 3),
+            termination_reason=termination_reason,
+            missing=list(validation.get('missing') or []),
+        )
+
     try:
         if not pipeline.initialize(env=env):
             planner = getattr(pipeline, 'planner', None)
             debug_info = planner.get_debug_info() if hasattr(planner, 'get_debug_info') else {}
             print(f"[TrialRunner] Pipeline initialization failed. Planner debug: {debug_info}")
+            _log_trial_end(None, None, 0, 0.0, TerminationReason.INFRASTRUCTURE)
             raise RuntimeError('pipeline_initialize_failed')
 
         effective_model_type = model_type or ('vlm' if vision else 'llm')
@@ -455,6 +553,17 @@ def run_trial(
                 'raw_summary': summary,
             }
 
+        if preflight_only:
+            _log_trial_end(None, None, 1, None, TerminationReason.PREFLIGHT_ONLY)
+        else:
+            _log_trial_end(
+                episode_success,
+                None if execution_skipped else success_validation,
+                int(summary.get('planner_invocations', 0)),
+                summary.get('total_planner_time_s'),
+                getattr(pipeline, 'termination_reason', None) or TerminationReason.PLAN_COMPLETED,
+            )
+
         record['output_json_path'] = str(json_output_path)
         record['failure_summary_path'] = str(txt_output_path)
 
@@ -463,7 +572,12 @@ def run_trial(
         txt_output_path.parent.mkdir(parents=True, exist_ok=True)
         txt_output_path.write_text(_render_failure_summary(record), encoding='utf-8')
         return record
+    except Exception as exc:
+        _log_trial_end(None, None, None, None, TerminationReason.INFRASTRUCTURE)
+        raise
     finally:
+        if not trial_end_logged:
+            _log_trial_end(None, None, None, None, TerminationReason.INFRASTRUCTURE)
         try:
             pipeline.shutdown()
         except Exception:
@@ -477,7 +591,7 @@ def main() -> None:
     parser.add_argument('--model-type', choices=['', 'llm', 'vlm'], default='', help='Optional explicit model type')
     parser.add_argument('--quantization', choices=['', 'none', 'bnb8', 'bnb4'], default='', help='Expected/local quantization mode. Remote runs read the real mode from server health when available.')
     parser.add_argument('--vision', action='store_true', help='Use the maintained multimodal VLM backend')
-    parser.add_argument('--icl-mode', required=True, choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode to evaluate')
+    parser.add_argument('--icl-mode', default='zero_shot', choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode (ICL is off by default; few_shot_shared_1 needs --flag prompt.version=legacy)')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
     parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
     parser.add_argument('--planner-max-new-tokens', type=int, default=4096, help='Maximum generation tokens for each planner call')
@@ -499,6 +613,9 @@ def main() -> None:
     parser.add_argument('--output', default='', help='Optional JSON output path. Also writes a sibling .txt summary.')
     parser.add_argument('--output-dir', default='', help='Optional run directory. Writes record.json and failure_summary.txt inside it.')
     parser.add_argument('--output-root', default=str(DEFAULT_RUN_OUTPUT_ROOT), help='Root for auto-created run folders when --output/--output-dir are omitted.')
+    parser.add_argument('--flag', action='append', default=[], metavar='NAME=VALUE',
+                        help='plan.md Section 0.7 flag, e.g. --flag termination.mode=evaluator (repeatable)')
+    parser.add_argument('--seed', type=int, default=None, help='Trial seed (default: the trial index); logged in trial_log.jsonl')
     args = parser.parse_args()
 
     record = run_trial(
@@ -525,6 +642,8 @@ def main() -> None:
         quantization=args.quantization,
         planner_max_new_tokens=args.planner_max_new_tokens,
         goal_check_max_new_tokens=args.goal_check_max_new_tokens,
+        flags=PipelineFlags.from_assignments(args.flag),
+        seed=args.seed,
     )
     print(json.dumps(record, indent=2))
 

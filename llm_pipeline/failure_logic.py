@@ -14,48 +14,12 @@ from llm_pipeline.pipeline_types import (
     SegmentationSnapshot,
 )
 from llm_pipeline.region_aliases import normalize_region_name, regions_match_for_target, scene_object_for_region
+from llm_pipeline.failures import FailureCode, LAYER_1_FAILURE_CODES, LAYER_2_FAILURE_CODES
 
 
-LAYER_1_FAILURE_IDS = frozenset({
-    'missing_preceding_move',
-    'invalid_move_target',
-    'invalid_executor_state',
-    'pick_object_missing',
-    'lid_missing',
-    'geometric_discovery_fail',
-    'empty_pick_trajectory',
-    'empty_place_trajectory',
-    'lid_hover_planning_fail',
-    'lid_slide_planning_fail',
-    'pddl_no_plan',
-    'no_ik_solution',
-    'no_motion_plan',
-    'no_grasp_found',
-    'executor_failure',
-    'unsupported_action',
-    'unknown_action_token',
-    'pick_place_mismatch',
-    'orphan_place',
-    'missing_post_pick_place',
-    'consecutive_moves',
-    'dangling_move',
-})
-
-LAYER_2_FAILURE_IDS = frozenset({
-    'grasp_failed',
-    'object_dropped',
-    'object_did_not_move',
-    'object_missing_after_place',
-    'placement_failed',
-    'geometric_placement_failed',
-    'lid_not_open_enough',
-    'lid_not_closed_enough',
-    'new_object_discovered',
-    'grill_lid_closed',
-    'box_lid_closed',
-    'box_lid_obstructed',
-    'goal_not_satisfied',
-})
+# Legacy layer sets (record.json ``failure_layer``), derived from the shared enum.
+LAYER_1_FAILURE_IDS = LAYER_1_FAILURE_CODES
+LAYER_2_FAILURE_IDS = LAYER_2_FAILURE_CODES
 
 
 def failure_layer_for_id(failure_id: str) -> FailureLayer:
@@ -97,7 +61,7 @@ class SegmentationFirstFailureChecker:
             object_name = action.args[0]
             if held_object is not None:
                 return FailureEvent(
-                    failure_id='invalid_executor_state',
+                    failure_id=FailureCode.INVALID_EXECUTOR_STATE,
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.EXECUTOR,
                     action=str(action),
@@ -110,7 +74,7 @@ class SegmentationFirstFailureChecker:
             evidence = snapshot.object_evidence.get(object_name)
             if evidence is None or not evidence.visible:
                 return FailureEvent(
-                    failure_id='pick_object_missing',
+                    failure_id=FailureCode.PICK_OBJECT_MISSING,
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.SEGMENTATION,
                     action=str(action),
@@ -125,7 +89,7 @@ class SegmentationFirstFailureChecker:
             target_region = normalize_region_name(target_region)
             if held_object != object_name:
                 return FailureEvent(
-                    failure_id='invalid_executor_state',
+                    failure_id=FailureCode.INVALID_EXECUTOR_STATE,
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.EXECUTOR,
                     action=str(action),
@@ -139,7 +103,7 @@ class SegmentationFirstFailureChecker:
                 lid_evidence = snapshot.object_evidence.get(lid_name)
                 if lid_evidence is not None and lid_evidence.visible and not self._is_lid_open(snapshot, lid_name):
                     return FailureEvent(
-                        failure_id='box_lid_closed',
+                        failure_id=FailureCode.BOX_LID_CLOSED,
                         stage=FailureStage.BEFORE_EXECUTION,
                         source=FailureSource.SEGMENTATION,
                         action=str(action),
@@ -157,7 +121,7 @@ class SegmentationFirstFailureChecker:
                 lid_evidence = snapshot.object_evidence.get(lid_name)
                 if lid_evidence is not None and lid_evidence.visible and not self._is_lid_open(snapshot, lid_name):
                     return FailureEvent(
-                        failure_id='grill_lid_closed',
+                        failure_id=FailureCode.GRILL_LID_CLOSED,
                         stage=FailureStage.BEFORE_EXECUTION,
                         source=FailureSource.SEGMENTATION,
                         action=str(action),
@@ -174,7 +138,7 @@ class SegmentationFirstFailureChecker:
 
         if held_object is not None:
             return FailureEvent(
-                failure_id='invalid_executor_state',
+                failure_id=FailureCode.INVALID_EXECUTOR_STATE,
                 stage=FailureStage.BEFORE_EXECUTION,
                 source=FailureSource.EXECUTOR,
                 action=str(action),
@@ -188,7 +152,7 @@ class SegmentationFirstFailureChecker:
         lid_evidence = snapshot.object_evidence.get(lid_name)
         if lid_evidence is None or not lid_evidence.visible:
             return FailureEvent(
-                failure_id='lid_missing',
+                failure_id=FailureCode.LID_MISSING,
                 stage=FailureStage.BEFORE_EXECUTION,
                 source=FailureSource.SEGMENTATION,
                 action=str(action),
@@ -205,7 +169,7 @@ class SegmentationFirstFailureChecker:
             if blockers:
                 blockers = sorted(blockers)
                 return FailureEvent(
-                    failure_id='box_lid_obstructed',
+                    failure_id=FailureCode.BOX_LID_OBSTRUCTED,
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.SEGMENTATION,
                     action=str(action),
@@ -236,7 +200,7 @@ class SegmentationFirstFailureChecker:
             if evidence is None or not evidence.visible:
                 return self._maybe_new_visibility_failure(action, snapshot)
             return FailureEvent(
-                failure_id='grasp_failed',
+                failure_id=FailureCode.GRASP_FAILED,
                 stage=FailureStage.AFTER_EXECUTION,
                 source=FailureSource.SEGMENTATION,
                 action=str(action),
@@ -256,7 +220,7 @@ class SegmentationFirstFailureChecker:
             evidence = snapshot.object_evidence.get(object_name)
             if evidence is None or not evidence.visible:
                 return FailureEvent(
-                    failure_id='object_dropped',
+                    failure_id=FailureCode.OBJECT_DROPPED,
                     stage=FailureStage.AFTER_EXECUTION,
                     source=FailureSource.SEGMENTATION,
                     action=str(action),
@@ -266,7 +230,7 @@ class SegmentationFirstFailureChecker:
                 )
 
             return FailureEvent(
-                failure_id='placement_failed',
+                failure_id=FailureCode.PLACEMENT_FAILED,
                 stage=FailureStage.AFTER_EXECUTION,
                 source=FailureSource.GEOMETRY,
                 action=str(action),
@@ -285,7 +249,7 @@ class SegmentationFirstFailureChecker:
         if action.action_name == 'open' and not lid_open:
             lid_evidence = snapshot.object_evidence.get(lid_name)
             return FailureEvent(
-                failure_id='lid_not_open_enough',
+                failure_id=FailureCode.LID_NOT_OPEN_ENOUGH,
                 stage=FailureStage.AFTER_EXECUTION,
                 source=FailureSource.SEGMENTATION,
                 action=str(action),
@@ -296,7 +260,7 @@ class SegmentationFirstFailureChecker:
         if action.action_name == 'close' and lid_open:
             lid_evidence = snapshot.object_evidence.get(lid_name)
             return FailureEvent(
-                failure_id='lid_not_closed_enough',
+                failure_id=FailureCode.LID_NOT_CLOSED_ENOUGH,
                 stage=FailureStage.AFTER_EXECUTION,
                 source=FailureSource.SEGMENTATION,
                 action=str(action),
@@ -311,61 +275,61 @@ class SegmentationFirstFailureChecker:
         stage = FailureStage.BEFORE_EXECUTION
         layer = FailureLayer.LAYER_1
         if 'not found after placement' in lowered:
-            failure_id = 'object_missing_after_place'
+            failure_id = FailureCode.OBJECT_MISSING_AFTER_PLACE
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
         elif "didn't move" in lowered or 'did not move' in lowered:
-            failure_id = 'object_did_not_move'
+            failure_id = FailureCode.OBJECT_DID_NOT_MOVE
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
         elif 'fell' in lowered:
-            failure_id = 'object_dropped'
+            failure_id = FailureCode.OBJECT_DROPPED
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
         elif 'not in target region' in lowered or 'validation failed' in lowered:
-            failure_id = 'placement_failed'
+            failure_id = FailureCode.PLACEMENT_FAILED
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
         elif 'not closed enough' in lowered or "lid didn't slide closed enough" in lowered:
-            failure_id = 'lid_not_closed_enough'
+            failure_id = FailureCode.LID_NOT_CLOSED_ENOUGH
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
         elif "lid didn't slide open enough" in lowered or 'not open enough' in lowered:
-            failure_id = 'lid_not_open_enough'
+            failure_id = FailureCode.LID_NOT_OPEN_ENOUGH
             source = FailureSource.VALIDATION
             stage = FailureStage.AFTER_EXECUTION
             layer = FailureLayer.LAYER_2
         elif 'empty trajectory' in lowered and action.action_name == 'pick':
-            failure_id = 'empty_pick_trajectory'
+            failure_id = FailureCode.EMPTY_PICK_TRAJECTORY
             source = FailureSource.GEOMETRY
         elif 'empty trajectory' in lowered and action.action_name == 'place':
-            failure_id = 'empty_place_trajectory'
+            failure_id = FailureCode.EMPTY_PLACE_TRAJECTORY
             source = FailureSource.GEOMETRY
         elif 'motion to hover' in lowered:
-            failure_id = 'lid_hover_planning_fail'
+            failure_id = FailureCode.LID_HOVER_PLANNING_FAIL
             source = FailureSource.GEOMETRY
         elif 'slide trajectory' in lowered:
-            failure_id = 'lid_slide_planning_fail'
+            failure_id = FailureCode.LID_SLIDE_PLANNING_FAIL
             source = FailureSource.GEOMETRY
         elif 'no pddl plan' in lowered or 'no solution' in lowered:
-            failure_id = 'pddl_no_plan'
+            failure_id = FailureCode.PDDL_NO_PLAN
             source = FailureSource.PDDL
         elif 'ik' in lowered or 'configuration' in lowered:
-            failure_id = 'no_ik_solution'
+            failure_id = FailureCode.NO_IK_SOLUTION
             source = FailureSource.GEOMETRY
         elif 'motion' in lowered or 'path' in lowered or 'trajectory' in lowered:
-            failure_id = 'no_motion_plan'
+            failure_id = FailureCode.NO_MOTION_PLAN
             source = FailureSource.GEOMETRY
         elif 'grasp' in lowered:
-            failure_id = 'no_grasp_found'
+            failure_id = FailureCode.NO_GRASP_FOUND
             source = FailureSource.GEOMETRY
         else:
-            failure_id = 'executor_failure'
+            failure_id = FailureCode.EXECUTOR_FAILURE
             source = FailureSource.EXECUTOR
         return FailureEvent(
             failure_id=failure_id,
@@ -430,7 +394,7 @@ class SegmentationFirstFailureChecker:
             return None
 
         return FailureEvent(
-            failure_id='new_object_discovered',
+            failure_id=FailureCode.NEW_OBJECT_DISCOVERED,
             stage=FailureStage.AFTER_EXECUTION,
             source=FailureSource.SEGMENTATION,
             action=str(action),
@@ -484,7 +448,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
             obj_pose = detector.get_object_pose(obj_name)
             if not obj_pose:
                 return FailureEvent(
-                    failure_id='geometric_discovery_fail',
+                    failure_id=FailureCode.GEOMETRIC_DISCOVERY_FAIL,
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.GEOMETRY,
                     action=str(action),
@@ -500,7 +464,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
             region_pose = detector.get_object_pose(scene_name)
             if not region_pose:
                  return FailureEvent(
-                    failure_id='geometric_discovery_fail',
+                    failure_id=FailureCode.GEOMETRIC_DISCOVERY_FAIL,
                     stage=FailureStage.BEFORE_EXECUTION,
                     source=FailureSource.GEOMETRY,
                     action=str(action),
@@ -550,7 +514,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
                     )
                     if not is_contained:
                         return FailureEvent(
-                            failure_id='geometric_placement_failed',
+                            failure_id=FailureCode.GEOMETRIC_PLACEMENT_FAILED,
                             stage=FailureStage.AFTER_EXECUTION,
                             source=FailureSource.GEOMETRY,
                             action=str(action),

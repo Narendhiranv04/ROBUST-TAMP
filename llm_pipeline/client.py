@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
     HAS_REQUESTS = False
     requests = None
 
+from llm_pipeline.failures import FailureCode
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
 
@@ -152,6 +153,13 @@ class RemoteTextLLMPlanner:
             if images:
                 image_b64 = self._encode_image_base64(images[0])
 
+        # Only objects the robot has observed are sent to the planner server.
+        valid_objects = (
+            self.parser.planner_visible_objects()
+            if hasattr(self.parser, 'planner_visible_objects')
+            else sorted(self.parser.valid_objects)
+        )
+        prompt_version = (getattr(bundle, 'metadata', {}) or {}).get('prompt_version') if bundle is not None else None
         request_data = {
             'system_prompt': system_prompt,
             'user_prompt': user_prompt,
@@ -163,9 +171,11 @@ class RemoteTextLLMPlanner:
             'use_vision': bool(image_b64 is not None),
             'image_present': bool(image_b64 is not None),
             'valid_actions': sorted(self.parser.valid_actions),
-            'valid_objects': sorted(self.parser.valid_objects),
+            'valid_objects': valid_objects,
             'valid_regions': sorted(self.parser.valid_regions),
         }
+        if prompt_version:
+            request_data['prompt_version'] = prompt_version
         if image_b64 is not None:
             request_data['image_base64'] = image_b64
         self.last_request_summary = {
@@ -174,8 +184,9 @@ class RemoteTextLLMPlanner:
             'image_present': bool(image_b64 is not None),
             'text_only': image_b64 is None,
             'valid_actions': sorted(self.parser.valid_actions),
-            'valid_objects': sorted(self.parser.valid_objects),
+            'valid_objects': valid_objects,
             'valid_regions': sorted(self.parser.valid_regions),
+            'prompt_version': prompt_version,
         }
 
         try:
@@ -208,29 +219,36 @@ class RemoteTextLLMPlanner:
                         stage=FailureStage.BEFORE_EXECUTION,
                         source=FailureSource.VALIDATION,
                         action=None,
-                        evidence={'line_number': exc.line_number, 'raw_output': '\n'.join(action_lines)},
+                        evidence={'line_number': exc.line_number, 'raw_output': '\n'.join(action_lines), 'fact': exc.fact},
                         failure_layer=FailureLayer.LAYER_1,
                         should_replan=True,
                         message=str(exc),
                     )
 
+            local_parse_ok = False
             if not actions and raw_output.strip() and failure_event is None:
                 try:
                     actions = self.parser.parse(raw_output, held_object=held_object)
+                    local_parse_ok = True
                 except StrictParseError as exc:
-                    failure_event = FailureEvent(
-                        failure_id=exc.failure_id,
-                        stage=FailureStage.BEFORE_EXECUTION,
-                        source=FailureSource.VALIDATION,
-                        action=None,
-                        evidence={'line_number': exc.line_number, 'raw_output': raw_output},
-                        failure_layer=FailureLayer.LAYER_1,
-                        should_replan=True,
-                        message=str(exc),
-                    )
+                    failure_event = self._plan_check_failure(exc, raw_output)
+            elif not actions and raw_output.strip() and failure_event is not None:
+                # The server parses against observed objects only, so an unobserved object
+                # comes back as unknown_action_token; re-parse locally to report it as
+                # unobserved_object. The legacy VLM parser also rejects a bare NO_ACTIONS.
+                server_code = str(failure_event.failure_id)
+                if server_code in (FailureCode.UNKNOWN_ACTION_TOKEN, FailureCode.PLANNER_OUTPUT_NOT_PARSEABLE):
+                    try:
+                        parsed = self.parser.parse(raw_output, held_object=held_object)
+                    except StrictParseError as exc:
+                        if server_code == FailureCode.UNKNOWN_ACTION_TOKEN:
+                            failure_event = self._plan_check_failure(exc, raw_output)
+                    else:
+                        if server_code == FailureCode.UNKNOWN_ACTION_TOKEN or not parsed:
+                            actions, failure_event, local_parse_ok = parsed, None, True
 
             return PlanResult(
-                success=bool(data.get('success', False) or actions),
+                success=bool(data.get('success', False) or actions or local_parse_ok),
                 actions=actions,
                 raw_output=raw_output,
                 inference_time=float(data.get('inference_time', time.time() - started_at)),
@@ -245,6 +263,19 @@ class RemoteTextLLMPlanner:
                 inference_time=time.time() - started_at,
                 error_message=str(exc),
             )
+
+    @staticmethod
+    def _plan_check_failure(exc: StrictParseError, raw_output: str) -> FailureEvent:
+        return FailureEvent(
+            failure_id=exc.failure_id,
+            stage=FailureStage.BEFORE_EXECUTION,
+            source=FailureSource.VALIDATION,
+            action=None,
+            evidence={'line_number': exc.line_number, 'raw_output': raw_output, 'fact': exc.fact},
+            failure_layer=FailureLayer.LAYER_1,
+            should_replan=True,
+            message=str(exc),
+        )
 
     def check_goal_completion(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
+from llm_pipeline.failures import FailureCode, planner_facing_code
 from llm_pipeline.pipeline_types import (
     BaseContextBuilder, SceneState, PromptBundle, FailureEvent, ICLMode
 )
@@ -192,14 +193,14 @@ class GeometricContextBuilder(BaseContextBuilder):
 
         replan_lines = []
         if failure_event:
-            event_type = 'discovery' if failure_event.failure_id == 'new_object_discovered' else 'failure'
+            event_type = 'discovery' if failure_event.failure_id == FailureCode.NEW_OBJECT_DISCOVERED else 'failure'
             event_stage = getattr(failure_event.stage, 'value', failure_event.stage)
             event_source = getattr(failure_event.source, 'value', failure_event.source)
             event_layer = getattr(failure_event.failure_layer, 'value', failure_event.failure_layer)
             replan_lines = [
                 '### Replanning Event',
                 f'event_type: {event_type}',
-                f'event_id: {failure_event.failure_id}',
+                f'event_id: {planner_facing_code(failure_event.failure_id)}',
                 f'event_stage: {event_stage}',
                 f'event_source: {event_source}',
                 f'event_layer: {event_layer}',

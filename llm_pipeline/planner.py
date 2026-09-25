@@ -264,6 +264,7 @@ class TextLLMPlanner:
             evidence={
                 "line_number": exc.line_number,
                 "raw_output": raw_output,
+                "fact": getattr(exc, "fact", ""),
             },
             failure_layer=FailureLayer.LAYER_1,
             should_replan=True,

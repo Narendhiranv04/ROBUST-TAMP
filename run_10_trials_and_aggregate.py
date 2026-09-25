@@ -60,6 +60,11 @@ def _trial_command(args: argparse.Namespace, trial_index: int, trial_dir: Path) 
         command.append("--goal-check")
     else:
         command.append("--no-goal-check")
+    for flag in getattr(args, "flag", None) or []:
+        command.extend(["--flag", flag])
+    seed_base = getattr(args, "seed_base", None)
+    if seed_base is not None:
+        command.extend(["--seed", str(int(seed_base) + int(trial_index))])
     command.append("--headless" if args.headless else "--gui")
     return command
 
@@ -251,6 +256,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="devstral-24b")
     parser.add_argument("--model-type", choices=["", "llm", "vlm"], default="")
     parser.add_argument("--quantization", choices=["", "none", "bnb8", "bnb4"], default="", help="Expected/local quantization mode to record/pass to trial_runner.")
+    parser.add_argument("--flag", action="append", default=[], metavar="NAME=VALUE", help="plan.md Section 0.7 flag passed to every trial (repeatable)")
+    parser.add_argument("--seed-base", type=int, default=None, help="Trial seed = seed-base + trial index (default: trial_runner uses the trial index)")
     parser.add_argument("--variant", default="K1")
     parser.add_argument("--trials", type=int, default=10)
     parser.add_argument("--icl-mode", choices=["zero_shot", "few_shot_shared_1"], default="zero_shot")

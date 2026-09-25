@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from evaluation.canonical_variants import VARIANTS, get_variant_spec
+from evaluation.metric_definitions import summarize as summarize_metric_definitions
+from llm_pipeline.failures import LegacyMessageCategory
 
 
 ACTION_PATTERN = re.compile(r'^\s*([A-Za-z0-9_-]+)\((.*?)\)\s*$')
@@ -201,38 +203,38 @@ def score_variant_completion(variant_id: str, completed_actions: Sequence[Any]) 
 def classify_failure_message(message: Optional[str]) -> str:
     text = (message or '').strip().lower()
     if not text:
-        return 'unknown'
+        return LegacyMessageCategory.UNKNOWN
     if 'new_object_introduced_in_scene' in text or 'newly visible object' in text:
-        return 'new_object_introduced_in_scene'
+        return LegacyMessageCategory.NEW_OBJECT_INTRODUCED_IN_SCENE
     if 'cannot open lid' in text or 'on top' in text or 'blocked by' in text or 'object_blocked' in text:
-        return 'object_blocked'
+        return LegacyMessageCategory.OBJECT_BLOCKED
     if 'lid is closed' in text or 'lid_closed' in text or 'cannot pick' in text and 'closed' in text:
-        return 'lid_closed'
+        return LegacyMessageCategory.LID_CLOSED
     if 'not found' in text or 'object_not_found' in text:
-        return 'object_not_found'
+        return LegacyMessageCategory.OBJECT_NOT_FOUND
     if 'orphaned' in text and 'place' in text:
-        return 'orphan_place'
+        return LegacyMessageCategory.ORPHAN_PLACE
     if 'pick/place different objects' in text or 'pick mismatch' in text or 'pick_place_mismatch' in text:
-        return 'pick_mismatch'
+        return LegacyMessageCategory.PICK_MISMATCH
     if 'grasp failed' in text or "didn't move" in text or 'not grasped' in text:
-        return 'grasp_failed'
+        return LegacyMessageCategory.GRASP_FAILED
     if 'placement failed' in text or 'not in target region' in text:
-        return 'placement_failed'
+        return LegacyMessageCategory.PLACEMENT_FAILED
     if 'valid joint configuration' in text or 'inverse kinematics' in text or 'ik solution' in text:
-        return 'no_ik_solution'
+        return LegacyMessageCategory.NO_IK_SOLUTION
     if 'motion planner failed' in text or 'no motion plan' in text:
-        return 'no_motion_plan'
+        return LegacyMessageCategory.NO_MOTION_PLAN
     if 'no valid grasp' in text or 'no grasp found' in text:
-        return 'no_grasp_found'
+        return LegacyMessageCategory.NO_GRASP_FOUND
     if 'pddl' in text and 'no plan' in text:
-        return 'pddl_no_plan'
+        return LegacyMessageCategory.PDDL_NO_PLAN
     if 'collision' in text:
-        return 'collision_detected'
+        return LegacyMessageCategory.COLLISION_DETECTED
     if 'dropped' in text or 'fell during transport' in text or 'object fell' in text:
-        return 'object_dropped'
+        return LegacyMessageCategory.OBJECT_DROPPED
     if text in GENERIC_TERMINAL_REASONS:
-        return 'unknown'
-    return 'unknown'
+        return LegacyMessageCategory.UNKNOWN
+    return LegacyMessageCategory.UNKNOWN
 
 
 def collect_failure_occurrences(cycles: Sequence[Dict[str, Any]], failure_reason: Optional[str]) -> Dict[str, Any]:
@@ -379,8 +381,14 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
             if row.get('mean_planner_time_per_invocation_s') is not None
         ]
         times = [float(row.get('episode_time_s', 0.0)) for row in rows if row.get('episode_time_s') is not None]
+        definitions = summarize_metric_definitions(rows)
         variant_summaries[variant_id] = {
             'trials': len(rows),
+            # plan.md Phase 1, step 5 (evaluation/metric_definitions.py)
+            'task_success_rate': definitions['task_success_rate'],
+            'partial_goal_completion': definitions['partial_goal_completion'],
+            'evaluated_trials': definitions['evaluated_trials'],
+            'infrastructure_trials': definitions['infrastructure_trials'],
             'episode_success_rate': _safe_mean(success),
             'raw_execution_success_rate': _safe_mean(raw_success),
             'mean_subtask_completion_rate': _safe_mean(completion),
@@ -421,6 +429,11 @@ def aggregate_model_records(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]
         'supported_variants': sorted(by_variant),
         'variants': variant_summaries,
         'overall': {
+            **{
+                key: value
+                for key, value in summarize_metric_definitions(records).items()
+                if key in ('task_success_rate', 'partial_goal_completion', 'evaluated_trials', 'infrastructure_trials')
+            },
             'episode_success_rate': _safe_mean(success_values),
             'raw_execution_success_rate': _safe_mean(raw_success_values),
             'mean_subtask_completion_rate': _safe_mean(completion_values),

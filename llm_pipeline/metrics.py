@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from evaluation.canonical_variants import get_variant_spec
 from evaluation.metrics import aggregate_model_records, collect_failure_occurrences
+from llm_pipeline.failures import FailureCode
 from llm_pipeline.object_aliases import canonical_object_name
 from llm_pipeline.region_aliases import BOX_STORAGE_REGION, normalize_region_name
 
@@ -439,9 +440,9 @@ def _event_type_for_failure_event(event: Dict[str, Any]) -> str:
     failure_id = str(event.get('failure_id') or '')
     stage = str(event.get('stage') or '')
     source = str(event.get('source') or '')
-    if failure_id == 'new_object_discovered':
+    if failure_id == FailureCode.NEW_OBJECT_DISCOVERED:
         return 'discovery'
-    if source == 'goal_check' or failure_id == 'goal_not_satisfied':
+    if source == 'goal_check' or failure_id == FailureCode.GOAL_NOT_SATISFIED:
         return 'goal_validation_failure'
     if stage == 'before_execution' and source in {'validation', 'parser'}:
         return 'structural_failure'
@@ -496,7 +497,7 @@ def extract_structured_events(
             'cycle_number': int(len(cycles or [])),
             'is_failure': True,
             'is_replan_trigger': False,
-            'failure_id': 'goal_validation_failed',
+            'failure_id': FailureCode.GOAL_VALIDATION_FAILED,
             'failure_layer': 'layer_2',
             'stage': 'after_execution',
             'source': 'validation',

@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from evaluation.canonical_variants import get_variant_spec  # noqa: E402
+from llm_pipeline.failures import FailureCode  # noqa: E402
 from llm_pipeline.pipeline import ExecutionCycleRecord, LLMPipelineConfig, LLMOnlyReplanningPipeline  # noqa: E402
 from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage  # noqa: E402
 
@@ -76,7 +77,7 @@ def _synthetic_discovery_event(args: argparse.Namespace, task_family: str) -> Fa
         action = "open(box_lid)"
     objects = ", ".join(args.synthetic_discovery)
     return FailureEvent(
-        failure_id="new_object_discovered",
+        failure_id=FailureCode.NEW_OBJECT_DISCOVERED,
         stage=FailureStage.AFTER_EXECUTION,
         source=FailureSource.SEGMENTATION,
         action=action,
@@ -295,7 +296,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--discovery-action", default="")
     parser.add_argument("--completed-action", action="append", default=[])
     parser.add_argument("--synthetic-failure", action="store_true")
-    parser.add_argument("--synthetic-failure-id", default="placement_failed")
+    parser.add_argument("--synthetic-failure-id", default=FailureCode.PLACEMENT_FAILED)
     parser.add_argument("--synthetic-failure-action", default="place(object, region)")
     parser.add_argument("--synthetic-failure-message", default="Synthetic failure for prompt inspection.")
     return parser.parse_args()

@@ -43,6 +43,7 @@ from llm_pipeline.pipeline_types import (
     SegmentationObjectEvidence,
     SegmentationSnapshot,
 )
+from llm_pipeline.failures import LegacyFailureId
 from llm_pipeline.strict_parser import StrictParseError
 
 
@@ -236,7 +237,7 @@ class ExecutorOnlyFailureChecker:
 
     def classify_runtime_error(self, action, error_message):
         return FailureEvent(
-            failure_id="TAMP_EXECUTION_ERROR",
+            failure_id=LegacyFailureId.TAMP_EXECUTION_ERROR,
             stage=FailureStage.AFTER_EXECUTION,
             source=FailureSource.EXECUTOR,
             action=str(action),
@@ -987,7 +988,7 @@ def main() -> int:
                 "success": False,
                 "completed_actions": [],
                 "last_failure_event": {
-                    "failure_id": "DEBUG_EXECUTION_ERROR",
+                    "failure_id": LegacyFailureId.DEBUG_EXECUTION_ERROR,
                     "failure_layer": "layer_1",
                     "source": "debug_execution",
                     "message": str(exc),
