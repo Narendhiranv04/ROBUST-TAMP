@@ -4,11 +4,11 @@
     python mujoco_port/tools/render_semantic_views.py G2 --out results/visuals/G2
 
 Writes, for the variant's initial state (MuJoCo backend):
-- isometric.png: orthographic isometric view of the whole scene;
-- cameras_rgb.png: the 5 camera RGB images (left, right, overhead, wrist, front);
-- cameras_semantic.png: per camera, the segmentation-mask pixels the pipeline
-  sees, coloured by object, with each visible object labelled by the region the
-  pipeline resolves for it (planner-facing names, as in prompt v2);
+- isometric.png: isometric view from behind the robot;
+- cameras_rgb.png: the 5 camera images (left, right, overhead, wrist, front);
+- cameras_semantic.png: per camera, the objects the segmentation sees (flat colour,
+  from the pipeline's masks) and the pipeline's region boxes (outlines), on a
+  faded camera image, with one legend (object -> resolved region);
 - semantic_state.json: visible objects, their regions, and pixel counts per camera.
 """
 
@@ -29,19 +29,28 @@ os.environ.setdefault('SIM_BACKEND', 'mujoco')
 import sim_backend  # noqa: E402,F401
 
 CAMERAS = ('left', 'right', 'overhead', 'wrist', 'front')
-REGION_PALETTE = [(120, 120, 255), (255, 160, 90), (120, 220, 160), (220, 120, 220), (200, 200, 90), (90, 200, 220)]
-REGION_COLORS = {}
-PALETTE = [
-    (230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48), (145, 30, 180),
-    (70, 240, 240), (240, 50, 230), (210, 245, 60), (250, 190, 212), (0, 128, 128), (170, 110, 40),
-]
+CAMERA_ALIASES = {
+    'left': ('left', 'cam_over_shoulder_left'), 'right': ('right', 'cam_over_shoulder_right'),
+    'overhead': ('overhead', 'cam_overhead'), 'wrist': ('wrist', 'cam_wrist'), 'front': ('front', 'cam_front'),
+}
+# Objects: saturated fills. Regions: distinct outline colours.
+OBJECT_PALETTE = [(230, 57, 70), (29, 120, 200), (46, 170, 90), (255, 170, 0), (0, 185, 190),
+                  (240, 110, 170), (150, 200, 40)]
+REGION_PALETTE = [(106, 61, 154), (140, 86, 75), (190, 0, 120), (0, 70, 130), (120, 120, 0),
+                  (70, 70, 70), (0, 120, 110), (160, 60, 0)]
+BACKGROUND = (246, 246, 244)
+INK = (40, 40, 40)
+MUTED = (120, 120, 120)
 
 
-def _font(size):
+def _font(size, bold=False):
     from PIL import ImageFont
-    for path in ('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf'):
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
+    names = ['DejaVuSans-Bold.ttf'] if bold else ['DejaVuSans.ttf']
+    for folder in ('/usr/share/fonts/truetype/dejavu', '/usr/share/fonts/dejavu'):
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
 
@@ -56,7 +65,8 @@ def load_env(variant):
     return env
 
 
-def isometric(env, out: Path, size=(1200, 900)):
+def isometric(env, out: Path, size=(1400, 1000)):
+    """Isometric view from behind and to the side of the robot, looking over its base."""
     import mujoco
     from PIL import Image
     world = env.pr._world
@@ -67,51 +77,60 @@ def isometric(env, out: Path, size=(1200, 900)):
     opt.geomgroup[2] = 1
     cam = mujoco.MjvCamera()
     bid = mujoco.mj_name2id(world.m, mujoco.mjtObj.mjOBJ_BODY, 'diningTable')
-    center = world.m.body_pos[bid] + np.array([0.0, 0.0, 0.45]) if bid >= 0 else world.m.stat.center
-    cam.lookat[:] = center
-    cam.distance = 2.4  # stays inside the room (walls 2.5 m from the centre)
-    cam.azimuth = 225.0
-    cam.elevation = -35.264  # isometric elevation; narrow perspective angle below
-    world.m.vis.global_.fovy = 32.0
+    table = world.m.body_pos[bid] if bid >= 0 else world.m.stat.center
+    cam.lookat[:] = np.array([table[0] + 0.05, table[1], table[2] + 0.475])
+    cam.distance = 2.3       # stays inside the room (walls 2.5 m from the centre)
+    cam.azimuth = -35.0      # robot base on the -x side facing +x: camera behind its right shoulder
+    cam.elevation = -35.264  # isometric elevation, narrow perspective angle below
+    world.m.vis.global_.fovy = 34.0
     renderer.update_scene(world.d, cam, scene_option=opt)
     Image.fromarray(renderer.render()).save(out / 'isometric.png')
 
 
 def camera_sensors(env):
     cams = getattr(env, 'cams', {}) or {}
-    aliases = {'left': ('left', 'cam_over_shoulder_left'), 'right': ('right', 'cam_over_shoulder_right'),
-               'overhead': ('overhead', 'cam_overhead'), 'wrist': ('wrist', 'cam_wrist'), 'front': ('front', 'cam_front')}
-    return {name: next((cams[a] for a in aliases[name] if a in cams), None) for name in CAMERAS}
+    return {name: next((cams[a] for a in CAMERA_ALIASES[name] if a in cams), None) for name in CAMERAS}
 
 
 def project(cam, points):
     """World points -> pixel (u, v) for a PyRep vision sensor (RLBench convention)."""
     K = cam.get_intrinsic_matrix()
-    E = np.array(cam.get_matrix()).reshape(4, 4) if np.array(cam.get_matrix()).size == 16 else np.vstack(
-        [np.array(cam.get_matrix()).reshape(3, 4), [0, 0, 0, 1]])
+    M = np.array(cam.get_matrix())
+    E = M.reshape(4, 4) if M.size == 16 else np.vstack([M.reshape(3, 4), [0, 0, 0, 1]])
     R, C = E[:3, :3], E[:3, 3]
     ext = np.concatenate([R.T, -R.T @ C[:, None]], axis=1)
-    homo = np.concatenate([points, np.ones((len(points), 1))], axis=1)
-    cam_pts = (ext @ homo.T).T
-    ok = cam_pts[:, 2] > 0.01
+    cam_pts = (ext @ np.concatenate([points, np.ones((len(points), 1))], axis=1).T).T
     uvw = (K @ cam_pts.T).T
-    uv = uvw[:, :2] / uvw[:, 2:3]
-    return uv, ok
+    return uvw[:, :2] / uvw[:, 2:3], cam_pts[:, 2] > 0.01
 
 
-def camera_frames(env):
-    cams = getattr(env, 'cams', {}) or {}
-    aliases = {'left': ('left', 'cam_over_shoulder_left'), 'right': ('right', 'cam_over_shoulder_right'),
-               'overhead': ('overhead', 'cam_overhead'), 'wrist': ('wrist', 'cam_wrist'), 'front': ('front', 'cam_front')}
-    frames = {}
-    for name in CAMERAS:
-        cam = next((cams[a] for a in aliases[name] if a in cams), None)
-        if cam is None:
-            continue
-        cam.handle_explicitly()
-        rgb = np.asarray(cam.capture_rgb())
-        frames[name] = (np.clip(rgb * 255.0, 0, 255).astype(np.uint8) if rgb.dtype != np.uint8 else rgb)
-    return frames
+def capture_rgb(cam):
+    cam.handle_explicitly()
+    rgb = np.asarray(cam.capture_rgb())
+    return np.clip(rgb * 255.0, 0, 255).astype(np.uint8) if rgb.dtype != np.uint8 else rgb
+
+
+def faded(image, amount=0.72):
+    """Desaturated, lightened camera image used as quiet context."""
+    gray = image.astype(float).mean(axis=2, keepdims=True)
+    return (amount * 255 + (1 - amount) * gray).repeat(3, axis=2).astype(np.uint8)
+
+
+def outline(mask):
+    edge = np.zeros_like(mask)
+    edge[1:, :] |= mask[1:, :] != mask[:-1, :]
+    edge[:, 1:] |= mask[:, 1:] != mask[:, :-1]
+    return edge & mask
+
+
+def label_chip(draw, xy, text, color, font, bounds):
+    x, y = xy
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    w, h = right - left + 10, bottom - top + 6
+    x = int(min(max(x, 2), bounds[0] - w - 2))
+    y = int(min(max(y - h - 3, 2), bounds[1] - h - 2))
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=4, fill=color)
+    draw.text((x + 5, y + 3 - top), text, fill=(255, 255, 255), font=font)
 
 
 def main():
@@ -124,7 +143,7 @@ def main():
 
     from PIL import Image, ImageDraw
     from llm_pipeline.object_aliases import canonical_object_name
-    from llm_pipeline.region_aliases import normalize_region_name, planner_region_name
+    from llm_pipeline.region_aliases import normalize_region_name, planner_region_name, scene_object_for_region
     from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
 
     env = load_env(args.variant)
@@ -133,13 +152,10 @@ def main():
     adapter.refresh_visibility(event='initial')
     snapshot = adapter.capture_snapshot(event='initial')
     detector = adapter.detector
-    visible = [name for name in snapshot.visible_objects]
+    visible = list(snapshot.visible_objects)
     regions = dict(snapshot.object_region_map or {})
-    colors = {name: PALETTE[i % len(PALETTE)] for i, name in enumerate(sorted(set(visible) | set(regions)))}
+    object_colors = {name: OBJECT_PALETTE[i % len(OBJECT_PALETTE)] for i, name in enumerate(visible)}
 
-    rgb = camera_frames(env)
-    camera_objects = camera_sensors(env)
-    from llm_pipeline.region_aliases import scene_object_for_region
     region_boxes = {}
     for region in adapter.symbol_registry.regions:
         try:
@@ -148,84 +164,87 @@ def main():
             box = None
         if box:
             region_boxes[normalize_region_name(region)] = (np.array(box[0]), np.array(box[1]))
-    font, small = _font(18), _font(14)
+    region_colors = {name: REGION_PALETTE[i % len(REGION_PALETTE)] for i, name in enumerate(region_boxes)}
+
+    sensors = camera_sensors(env)
+    tag = _font(14, bold=True)
     rgb_tiles, sem_tiles, pixels = [], [], {}
     for name in CAMERAS:
+        cam = sensors.get(name)
         mask = detector._capture_mask(name) if name in detector.cameras else None
-        image = rgb.get(name)
-        if image is None or mask is None:
+        if cam is None or mask is None:
             continue
-        rgb_tiles.append((name, image))
-        semantic = (0.35 * image.astype(float) + 0.65 * 60).astype(np.uint8)  # dim background
+        image = capture_rgb(cam)
+        rgb_tiles.append((name, Image.fromarray(image)))
+        canvas = faded(image)
         pixels[name] = {}
-        centroids = {}
-        region_centroids = {}
         for handle, label in detector.handle_to_task_name.items():
             obj = canonical_object_name(label)
-            if obj not in colors:
+            if obj not in object_colors:
                 continue
             hit = mask == int(handle)
-            count = int(hit.sum())
-            if count == 0:
+            if not hit.any():
                 continue
-            semantic[hit] = colors[obj]
-            pixels[name][obj] = pixels[name].get(obj, 0) + count
-            ys, xs = np.nonzero(hit)
-            centroids.setdefault(obj, []).append((xs.mean(), ys.mean(), count))
-        tile = Image.fromarray(semantic)
+            canvas[hit] = object_colors[obj]
+            canvas[outline(hit)] = (60, 60, 60)
+            pixels[name][obj] = pixels[name].get(obj, 0) + int(hit.sum())
+        tile = Image.fromarray(canvas)
         draw = ImageDraw.Draw(tile)
-        cam_obj = camera_objects.get(name)
-        if cam_obj is not None:
-            for region, (lo, hi) in region_boxes.items():
-                corners = np.array([[lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]], [hi[0], hi[1], hi[2]], [lo[0], hi[1], hi[2]]])
-                uv, ok = project(cam_obj, corners)
-                if not ok.all():
-                    continue
-                color = tuple(int(c) for c in REGION_COLORS.setdefault(region, REGION_PALETTE[len(REGION_COLORS) % len(REGION_PALETTE)]))
-                pts = [tuple(map(float, p)) for p in uv]
-                draw.line(pts + [pts[0]], fill=color, width=3)
-                cx, cy = uv.mean(axis=0)
-                if 0 <= cx < tile.width and 0 <= cy < tile.height:
-                    draw.text((cx - 30, cy - 8), f'[{planner_region_name(region)}]', fill=color, font=small)
-        for obj, points in centroids.items():
-            x = sum(p[0] * p[2] for p in points) / sum(p[2] for p in points)
-            y = sum(p[1] * p[2] for p in points) / sum(p[2] for p in points)
-            region = regions.get(obj)
-            text = f'{obj} @ {planner_region_name(region)}' if region else obj
-            draw.text((x + 1, y + 1), text, fill=(0, 0, 0), font=small)
-            draw.text((x, y), text, fill=(255, 255, 255), font=small)
-        sem_tiles.append((name, np.asarray(tile)))
+        for region, (lo, hi) in region_boxes.items():
+            corners = np.array([[lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]], [hi[0], hi[1], hi[2]], [lo[0], hi[1], hi[2]]])
+            uv, in_front = project(cam, corners)
+            if not in_front.all():
+                continue
+            if uv[:, 0].max() < 0 or uv[:, 0].min() > tile.width or uv[:, 1].max() < 0 or uv[:, 1].min() > tile.height:
+                continue
+            points = [tuple(map(float, p)) for p in uv]
+            draw.line(points + [points[0]], fill=region_colors[region], width=2, joint='curve')
+            top = min(points, key=lambda p: p[1])
+            label_chip(draw, top, planner_region_name(region), region_colors[region], tag, tile.size)
+        sem_tiles.append((name, tile))
 
-    def grid(tiles, title):
-        h, w = tiles[0][1].shape[:2]
+    def sheet(tiles, title, legend):
+        w, h = tiles[0][1].size
+        pad, head, cap = 18, 64, 30
         cols = 3
         rows = (len(tiles) + cols - 1) // cols
-        canvas = Image.new('RGB', (cols * w, rows * h + 40), (25, 25, 25))
-        draw = ImageDraw.Draw(canvas)
-        draw.text((10, 8), title, fill=(255, 255, 255), font=font)
+        width = cols * w + (cols + 1) * pad
+        height = head + rows * (h + cap) + (rows + 1) * pad
+        page = Image.new('RGB', (width, height), BACKGROUND)
+        draw = ImageDraw.Draw(page)
+        draw.text((pad, 16), title, fill=INK, font=_font(24, bold=True))
         for i, (name, image) in enumerate(tiles):
-            x, y = (i % cols) * w, 40 + (i // cols) * h
-            canvas.paste(Image.fromarray(image), (x, y))
-            draw.text((x + 8, y + 6), name, fill=(255, 255, 0), font=font)
-        # legend in the empty last cell
-        if len(tiles) < rows * cols:
-            x, y = (len(tiles) % cols) * w + 20, 40 + (len(tiles) // cols) * h + 20
-            draw.text((x, y), 'objects: name @ resolved region', fill=(255, 255, 255), font=font)
-            j = 0
-            for j, (obj, color) in enumerate(sorted(colors.items())):
-                region = regions.get(obj)
-                draw.rectangle([x, y + 34 + 26 * j, x + 18, y + 52 + 26 * j], fill=color)
-                label = f'{obj} @ {planner_region_name(region)}' if region else f'{obj} (lid)'
-                draw.text((x + 28, y + 32 + 26 * j), label, fill=(230, 230, 230), font=small)
-            y2 = y + 34 + 26 * (j + 2)
-            draw.text((x, y2), '[regions] (projected region boxes)', fill=(255, 255, 160), font=font)
-            for k, (region, color) in enumerate(sorted(REGION_COLORS.items())):
-                draw.rectangle([x, y2 + 34 + 26 * k, x + 18, y2 + 52 + 26 * k], fill=tuple(int(c) for c in color))
-                draw.text((x + 28, y2 + 32 + 26 * k), planner_region_name(region), fill=(230, 230, 230), font=small)
-        return canvas
+            x = pad + (i % cols) * (w + pad)
+            y = head + pad + (i // cols) * (h + cap + pad)
+            draw.text((x, y), name, fill=MUTED, font=_font(17, bold=True))
+            page.paste(image, (x, y + cap))
+            draw.rectangle([x - 1, y + cap - 1, x + w, y + cap + h], outline=(210, 210, 210))
+        if legend and len(tiles) < rows * cols:
+            x = pad + (len(tiles) % cols) * (w + pad) + 10
+            y = head + pad + (len(tiles) // cols) * (h + cap + pad)
+            legend(draw, x, y)
+        return page
 
-    grid(rgb_tiles, f'{args.variant}: camera RGB (initial state)').save(out / 'cameras_rgb.png')
-    grid(sem_tiles, f'{args.variant}: segmentation masks by object (colour) and region boxes (outlines)').save(
+    def legend(draw, x, y):
+        head, body = _font(17, bold=True), _font(16)
+        draw.text((x, y), 'Objects  (resolved region)', fill=INK, font=head)
+        y += 32
+        for obj, color in object_colors.items():
+            draw.rounded_rectangle([x, y + 2, x + 18, y + 20], radius=3, fill=color, outline=(60, 60, 60))
+            region = regions.get(obj)
+            draw.text((x + 30, y), obj, fill=INK, font=body)
+            draw.text((x + 150, y), planner_region_name(region) if region else '(lid)', fill=MUTED, font=body)
+            y += 28
+        y += 18
+        draw.text((x, y), 'Regions  (outlines)', fill=INK, font=head)
+        y += 32
+        for region, color in region_colors.items():
+            draw.line([(x, y + 11), (x + 18, y + 11)], fill=color, width=4)
+            draw.text((x + 30, y), planner_region_name(region), fill=INK, font=body)
+            y += 26
+
+    sheet(rgb_tiles, f'{args.variant}  ·  camera images (initial state)', None).save(out / 'cameras_rgb.png')
+    sheet(sem_tiles, f'{args.variant}  ·  what the pipeline sees: objects (segmentation) and regions', legend).save(
         out / 'cameras_semantic.png')
     (out / 'semantic_state.json').write_text(json.dumps({
         'variant': args.variant,
