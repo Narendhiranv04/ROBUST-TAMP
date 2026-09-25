@@ -101,8 +101,12 @@ Implementation order is IF → WHERE → WHEN (not IF → WHEN → WHERE) on pur
 | `replan.output_mode` | `full_replan` (previous system: regenerate the whole remaining plan) / `corrective` | `full_replan` |
 | `replan.insertion_mode` | `planner` (planner model decides urgency and insertion point) / `always_front` / `always_end` | `planner` |
 | `parallel.enabled` | `true` / `false` | `false` |
+| `termination.mode` | `agent` (the agent alone decides when the trial ends; the evaluator only scores) / `evaluator` (previous system: the evaluator's ground truth may drive the stop condition) | `agent` |
+| `prompt.version` | `v2` (rewritten prompts, docs/PROMPTS.md) / `legacy` (previous prompts) | `v2` |
 
 With all flags at their defaults, behavior must equal the Phase 1 baseline.
+
+Flags are set on the command line with `--flag name=value` (e.g. `--flag termination.mode=evaluator`); values of flags whose phase is not implemented yet are rejected. In-context examples are off (`--icl-mode zero_shot`); `prompt.version=v2` has none. All runs use `--goal-check` off.
 
 ---
 
@@ -149,6 +153,8 @@ With all flags at their defaults, behavior must equal the Phase 1 baseline.
 5. **Metric definitions (fix the old paper's formulas in code):**
    - **Task success rate** = successful trials / total trials.
    - **Partial goal completion** = (satisfied goal relations + satisfied procedure checks) / (total goal relations + total procedure checks), averaged over trials.
+5b. **Partial-observability fixes.** Objects never observed never reach the planner (no names, regions or other information, including the `valid_objects` sent to the planner server), and the plan check rejects actions on never-observed objects (`unobserved_object`, shown to the planner exactly like an unknown name). Lid states from joint values may stay, documented in `docs/ARCHITECTURE.md` as a stand-in for camera perception. A test proves an unseen object cannot appear in any prompt or pass the plan check.
+5c. **Prompt rewrite.** Rewrite every planner prompt (initial plan, replan, goal check, system prompt) to contain only: the planner's role; the action set with generic preconditions and effects; the exact output format; the goal verbatim; the current state (visible objects with regions, articulation states, and from Phase 2 remembered objects); and for replans the completed actions, the remaining plan with action ids and the trigger as plain facts. One template for both scenes, no task strategies or hints, no variant-specific content, no expected answers, no in-context examples. Old prompts stay reachable with `prompt.version=legacy`. Deliverable: `docs/PROMPTS.md` (inventory, list of biased content, new templates, one rendered example per scene) and snapshot tests. **The user reviews the new prompts before any trial runs.**
 6. **Baseline run.** All flags at defaults, all currently ported variants, the user's chosen planner model(s). Save under `results/baseline/`. Log every trial's seed.
 
 ### Definition of Done
@@ -498,7 +504,14 @@ To keep compute manageable, not every family runs in every condition:
 - **Cardinality (family C):** for C1, plot success, first-proposal urgency accuracy, corrective sub-plan length, and planner latency against n; for C2, plot robot idle time saved and total trial time against w (and the number of independent actions actually executed).
 - Phase 7 diagnostics tables and chart.
 
-### 8.3 Output
+### 8.3 External baselines
+VLM-TAMP, OWL-TAMP and EPoG-TAMP are compared against the full system (sources: `https://github.com/Narendhiranv04/GRAB-TAMP`, branch `baseline_executions`, cloned read-only into `external/GRAB-TAMP`; see `docs/ARCHITECTURE.md`, "External baselines").
+- Run each baseline on all final variants, with the same scenes, trial count and seeds as our conditions.
+- Use the same planner model as our full system wherever the method allows it.
+- Convert each baseline's outputs to our JSONL trial-log schema (`llm_pipeline/trial_log.py`) so the same metrics (Phase 1, step 5) and diagnostics (Phase 7) apply.
+- Document every deviation from the original method in `docs/BASELINES.md`.
+
+### 8.4 Output
 `results/final/` with all tables, charts, and `SUMMARY.md` (tables plus a short list of notable findings, no interpretation beyond the numbers).
 
 ---
@@ -516,15 +529,15 @@ To keep compute manageable, not every family runs in every condition:
 ---
 
 ## 10. Open questions — ask the user before the relevant phase
-1. **(Phase 1)** Confirm the overcooked rule: a cooked meat inside the grill during another close→reopen cycle fails the task. This is what makes cooked-meat urgency meaningful.
+1. **(Phase 1)** Confirm the overcooked rule: a cooked meat inside the grill during another close→reopen cycle fails the task. This is what makes cooked-meat urgency meaningful. **Answered:** overcooked fails that meat's procedure check (the trial fails; partial goal completion still counts the other meats). "Another cycle" = any close→reopen while an already-cooked meat is inside the grill, so a `cooked_meat` that starts in the grill is overcooked by the first close→reopen.
 2. **(Phase 3)** In G1/G2, where should urgently removed `cooked_meat` go: directly onto the plate in the serving area, or any region outside the grill?
 3. **(Phase 3)** In K1, where may the phone be moved: any region outside the box's placement area, or a specific parking region?
 4. **(Phase 3)** Confirm how the box and grill placement areas are defined (config values), and exact hidden-object positions for "overlapping" vs "non-overlapping".
 5. **(Phase 3)** Old variants not in the final set: keep for regression testing only (default), or also report them?
 6. **(Phase 3)** Add one variant for the "goal-attained object → no replan" branch of the IF rule (e.g., a mug already in the box)? Default: no.
-7. **(Phase 2)** Confirm the definition of `step` (observation counter, incremented at every planning event and after every executed action/bundle).
+7. **(Phase 2)** Confirm the definition of `step` (observation counter, incremented at every planning event and after every executed action/bundle). **Answered:** one step per observation; an observation happens after every bundle finishes (success or failure) and at every planning event; plan-check re-queries within one planning event do not add steps.
 8. **(Phase 4)** Confirm that "relevant" comes from a per-scene config of goal categories (kitchen: mug, grocery; grill: raw_meat, cooked_meat).
-9. **(Phase 1/2)** Should the agent decide on its own that the task is complete (visible state + memory), instead of stopping when the simulator's evaluator reports success? Currently the evaluator's ground truth may drive the stop condition.
+9. **(Phase 1/2)** Should the agent decide on its own that the task is complete (visible state + memory), instead of stopping when the simulator's evaluator reports success? Currently the evaluator's ground truth may drive the stop condition. **Answered:** new flag `termination.mode` (`agent` default, `evaluator` for the previous behavior); all runs use `--goal-check` off; the evaluator only scores.
 10. **(Phase 6)** Which regions are parking/temporary regions in each scene?
 11. **(Phase 8)** Trials per condition, planner models to include, and whether initial poses can be randomized.
 12. **(Phase 3)** Base-layout counts and sweep sizes: how many groceries are on the table in the base layout, and are the proposed counts (C1: n = 1, 2, 3; C2: w = 0, 2, 4) physically feasible and acceptable?

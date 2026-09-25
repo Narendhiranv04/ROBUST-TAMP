@@ -1,8 +1,8 @@
 # ROBUST TAMP — Architecture map (Phase 1, step 1)
 
-Read-only map of the repository as of branch `phase-1-logging` (base
-`naren/variants-scenes-execution`, commit `380d04ad`). No existing file was
-changed to produce it. Terminology follows `plan.md` Section 0.6; where the
+Map of the repository, written read-only at branch `phase-1-logging` (base
+`naren/variants-scenes-execution`, commit `380d04ad`), and updated after
+Phase 1 steps 2–5c (see "Phase 1 changes" below). Terminology follows `plan.md` Section 0.6; where the
 code uses a different word, the code identifier is quoted and the conflict is
 listed in [Terminology conflicts](#terminology-conflicts-with-plan-md-06).
 
@@ -87,6 +87,12 @@ How it is built:
    open when `|joint − _closed_lid_angle| > 0.25` rad. `lid_states` only lists
    visible lids (pipeline.py:580), but the grill lid fact enters `pddl_state`
    regardless (:574).
+   **Stand-in for perception (decision, Phase 1 step 5b):** lid open/closed
+   states are read from the simulator's joint and pose values instead of
+   being estimated from camera images. This is the one piece of simulator
+   state the planner may see about objects it cannot currently observe. With
+   `prompt.version=v2` every lid of the scene is reported this way (legacy:
+   visible lids only).
 5. **Grill semantic facts.** `derive_grill_semantic_facts` (grill_geometry.py:138)
    → `SceneState.pddl_state`: `grill_lid_open/closed`, `inside_grill(m)`,
    `on_plate(m)`, `in_prep_area(m)`, `on_table(m)`, `cooked(m)`/`raw(m)`,
@@ -398,11 +404,48 @@ scene accessibility, execution deviation, plan inconsistency) is **Table II** in
 both `IROS_Project-5.pdf` and `RA_L_Project-1.pdf` (Table I there compares
 frameworks). Every condition in it has a matching code above.
 
+## Phase 1 changes (steps 2–5c)
+
+| Area | What changed | Where |
+|---|---|---|
+| Failure codes | One `FailureCode` enum. Code values equal the `failure_id` strings in `record.json`. Each code records its check (`plan_check`, `pre_action_check`, `execution_failure`, `trigger`, `goal_check`, `evaluation`, `replan`, `infrastructure`, later-phase checks) and its failure-taxonomy condition (Table II). `LAYER_1/2_FAILURE_IDS` are derived from it, and all `llm_pipeline`/`evaluation` modules use it | `llm_pipeline/failures.py` |
+| Flags | plan.md Section 0.7 flags plus `termination.mode` and `prompt.version`. Set with `--flag name=value`. Values of flags whose phase is not built yet are rejected | `llm_pipeline/flags.py`, `LLMPipelineConfig.flags` |
+| Trial log | `trial_log.jsonl` next to `record.json`, plus `prompts/` holding one file per planner call. Events: `trial_start`, `observation` (one `step` per observation: at every planning event except a plan-check re-query, and after every bundle), `planning_event`, `plan_check`, `pre_action_check` (via `LoggingFailureChecker`), `action_start`/`action_end` (executor hooks), `trial_end`. `validate_trial_log` checks the schema. `record.json` is unchanged | `llm_pipeline/trial_log.py`, `pipeline.py`, `executor.py`, `trial_runner.py` |
+| Termination | `termination.mode=agent` (default): `_deterministic_goal_completion_from_scene` returns `None`, so the evaluator never runs inside the loop. `evaluator` keeps the previous override. The reason a trial ended is recorded as `pipeline.termination_reason` | `pipeline.py` |
+| Completed actions | Replan prompts take the executor's cumulative list, instead of concatenating the per-cycle cumulative lists, which duplicated actions | `pipeline.plan_once` |
+| Partial observability | Before every planner call the parser gets `observed_objects()`: the adapter's `known_visible`, plus the objects of earlier observations, plus the scene's lids. Only those names go to the planner server (`valid_objects`). Actions on other scene objects are rejected as `unobserved_object`, shown to the planner exactly like an unknown name | `strict_parser.py`, `client.py`, `pipeline.py` |
+| Evaluator | Label-based rules for the Phase 3 scene files: `raw_meat`/`cooked_meat`, cooking cycles, overcooked, served raw, and the phone vs the placement area. They are used only for variants in `LABELED_RULE_VARIANTS`, which is empty today. `meat_procedure_status` is the single procedure implementation, for Phase 4 to reuse with agent-only inputs | `evaluation/labeled_rules.py` |
+| Metrics | Task success rate and partial goal completion as plan.md defines them, over evaluated trials. Infrastructure trials are excluded and counted. Both are added to the aggregate summaries | `evaluation/metric_definitions.py`, `evaluation/metrics.py` |
+| Prompts | `prompt.version=v2` (`PromptV2Builder`) is the default; legacy stays available. v2 requests disable the server-side format-repair call | `llm_pipeline/prompt_v2.py`, `docs/PROMPTS.md` |
+| Smoke test | Full-pipeline trial with a ground-truth oracle planner, no GPU | `llm_pipeline/oracle_trial_runner.py` |
+
+## External baselines
+
+Source: `https://github.com/Narendhiranv04/GRAB-TAMP`, branch `baseline_executions`, commit `f2976cc`. It is cloned read-only into `external/GRAB-TAMP`, which is git-ignored. Nothing was run or modified.
+
+| | VLM-TAMP | OWL-TAMP | EPoG-TAMP |
+|---|---|---|---|
+| Where | `vlm_tamp_baseline/` (`planner.py`, `prompt.py`, `executive.py`, `pddlstream_refiner.py`, `pddl/*.pddl`) | `owl_tamp_baseline/` (`planner.py`, `domain.py`, `constraints.py`, `refinement.py`, `replanning.py`, `receding_horizon.py`); reimplemented from arXiv:2411.08253, no official code | **Not in the repository** (no match for "epog"). Closest: `llm3_baseline/` (LLM3, kitchen only) and `retrieval_baseline/` (CLIP, no LLM) |
+| One episode | `python -m vlm_tamp_baseline.run_kitchen --variant K1 --output-dir <dir> --seed 0 [--camera-count 1\|3\|5] [--physical-execution]` | `python -m owl_tamp_baseline.run_kitchen --variant K1 --output-dir <dir> --seed 1 [--protocol native\|replanning\|receding_horizon]` | — |
+| Method | 1. The VLM turns images plus the goal into English subgoals.<br>2. A second call turns those into formal predicates.<br>3. PDDLStream refines each subgoal.<br>4. On a failure, it re-prompts with a typed failure code | 1. One VLM call gives an action sketch plus goal literals.<br>2. One constraint call per action (a geometric DSL).<br>3. Search, then sampling.<br>4. The native protocol is single-shot (never replans) | — |
+| Planner model | Any OpenAI-compatible `/chat/completions` server (`VLM_TAMP_MODEL_BASE_URL`, `--model`). Default `qwen35-9b`; `qwen3-vl-8b-thinking` is available in `inference_server/models.json` | Same (`OWL_TAMP_*`) | — |
+| Scenes and robot | Their own MuJoCo scenes (kitchen K1–K12, living room L1–L10, workshop W1–W10; YAML variant configs in `mujoco_scenes/configs/`) with a Google Robot and their own skills (`mujoco_scenes/tamp/`) | Same | — |
+| Output | Per-episode directory: `model_calls/`, `episode_result.json`, `benchmark_execution_result.json`, a plan-vs-GT comparison. Distilled into `logs/*_action_sequences.jsonl` | Same (`model_trace.json`) | — |
+
+What it would take to run them on our final variants and log in our JSONL schema:
+1. **Observation adapter** from our scenes to their `baseline_common.models.Observation`: alias-annotated camera images from our segmentation, plus the textual state.
+2. **Executor adapter** implementing their `Executor` protocol on top of our `DirectPrimitiveExecutor` (pick/place/open/close). `baseline_common/execution.py` imports their MuJoCo skills directly, and `physical_benchmark.write_execution_result` rejects scenes other than kitchen, living_room and workshop.
+3. **VLM-TAMP:** new PDDL domain and stream files and samplers for our kitchen and grill. This is the largest item.
+4. **OWL-TAMP:** grounding and constraint helpers for our geometry. It must run with `--protocol replanning` to ever see hidden objects.
+5. **Model access:** either their own vLLM server with our planner model, or an OpenAI-compatible endpoint on our planner server.
+6. **Export** of each episode to `trial_log.jsonl` (`trial_start` … `trial_end`) so our metrics and diagnostics apply.
+7. **EPoG-TAMP:** implement from the paper, or choose a replacement (question in `docs/BASELINES.md`).
+
 ---
 
 ## Gaps and risks
 
-1. **Evaluator ground truth drives the stop condition.** With `--goal-check`,
+1. **(Resolved: `termination.mode=agent`, goal check off.) Evaluator ground truth drives the stop condition.** With `--goal-check`,
    `_check_goal_completion_with_deterministic_override` (pipeline.py:734) runs
    the evaluator inside the loop and overrides the planner model; a failed
    evaluation also becomes a `goal_not_satisfied` replan trigger. This conflicts
@@ -412,7 +455,7 @@ frameworks). Every condition in it has a matching code above.
    ground truth.** `final_object_region_map` only contains objects the
    segmentation has seen; unseen objects score as `unknown`. Regions do come from
    simulator poses.
-3. **Simulator state leaks into the planner-visible state.** Regions of all
+3. **(Partly resolved in step 5b: never-observed objects no longer reach the planner or pass the plan check; lid states stay as a documented stand-in; previously seen but now hidden objects still carry live simulator regions in the legacy prompt, which Phase 2 memory replaces.) Simulator state leaks into the planner-visible state.** Regions of all
    seen objects use simulator poses and AABBs; objects no longer visible keep
    live simulator regions (`tracked_non_visible_objects`, pipeline.py:551–561);
    lid states come from simulator joint and pose values; the symbol registry
@@ -431,18 +474,18 @@ frameworks). Every condition in it has a matching code above.
    cycle does not check that the meat stayed inside during the close→open.
    Phase 1 step 4 and Phase 4 "goal-attained" need one shared function fed with
    different inputs.
-6. **No structured logging.** One JSON at trial end; no events, timestamps,
+6. **(Resolved: `trial_log.jsonl`; `local_retries_used` is logged as null because adapter-internal retries are not counted yet.) No structured logging.** One JSON at trial end; no events, timestamps,
    per-action durations, adapter or local-retry counts, seeds, git commit, or
    flags such as `max_replans`. The JSONL log must be threaded through the
    pipeline, executor and checkers.
-7. **Failure codes are scattered strings** in 5+ modules, some defined but never
+7. **(Resolved: `llm_pipeline/failures.py`; the keyword classifier `classify_runtime_error` is unchanged.) Failure codes are scattered strings** in 5+ modules, some defined but never
    emitted, and many runtime codes come from keyword matching on free-text
    adapter errors (`classify_runtime_error`); mapping these onto one enum
    without changing behavior needs care.
 8. **Discovery trigger is hard-coded** (`replan_on_new_visibility=True`) and
    fires inside `postcheck`, mixed with failure detection. The IF rule (Phase 4)
    has to be separated from failure checking.
-9. **Full-replan prompt has no remaining plan or action ids**, which Phase 5
+9. **(Resolved in prompt v2 and the completed-actions fix.) Full-replan prompt has no remaining plan or action ids**, which Phase 5
    insertion needs; `Completed Actions` in replan prompts contains duplicates
    because cumulative per-cycle lists are concatenated (pipeline.py:408–412 with
    :922) — a baseline behavior bug to confirm before fixing.
@@ -456,7 +499,7 @@ frameworks). Every condition in it has a matching code above.
 13. **Unseeded, but decoding is greedy**; trial-to-trial variation comes from
     physics and segmentation timing. "Seed" in the log will mostly be nominal
     unless initial poses are randomized (open question 11).
-14. **Four unit tests fail on this base** (`test_repeated_runner.py`,
+14. **(Resolved.) Four unit tests fail on this base** (`test_repeated_runner.py`,
     `args.quantization` missing in `run_10_trials_and_aggregate.py`), on both
     simulator backends; unrelated to the MuJoCo port.
 15. **Scene paths in `VariantSpec`** point at root-level `task1_variation*.ttt`;
@@ -483,3 +526,10 @@ Not renamed (Phase 1 step 1 is read-only).
 | action | `subtask`/`bucket` in the old metric; GT `stage`s (`move`, `pick`, …) inside an action | metrics.py:140, executor.py:489 |
 | step | `step` means simulator step (`_on_sim_step`, `_sim_step_counter`, `step(pr, n)`) — plan.md uses it for the observation counter | pipeline.py:1086, copy.py:181 |
 | goal | `goal_text` (consistent); GT orchestrators print "TASK: …" headers | ground_truth_orchestrator.py |
+
+New gaps found during Phase 1 (details in the Phase 1 report):
+
+16. **The grasp post-check misfires on MuJoCo.** `grasp_failed` is reported when the grasped object is visible only in the wrist camera, because the gripper never appears in the wrist camera's mask. The robot then holds the object while the pipeline believes the gripper is empty, and later picks of that object fail with `pddl_no_plan` until the replan budget runs out. It was observed in K1 (`can_of_beans`). It is rare on CoppeliaSim.
+17. **G3 ground-truth execution is flaky on MuJoCo.** Placing the chicken on the plate fails validation in about half of the runs (the third meat on the plate lands near its edge), with both the old and the new code. `place(mug3, table_staging_area)` is occasionally rejected by the geometric containment post-check.
+18. **`mujoco_port/tools/` was not pushed** with the MuJoCo port (the root `.gitignore` has a blanket `tools/` rule). It is committed on `phase-1-logging` and missing from `naren/variants-scenes-execution`.
+19. **EPoG-TAMP is missing** from the external baseline repository, and the other ports are tied to their own scenes and robot.
