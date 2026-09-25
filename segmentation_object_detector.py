@@ -18,6 +18,7 @@ Usage:
 import numpy as np
 import re
 import os
+import sim_backend  # noqa: F401  (SIM_BACKEND=mujoco selects the MuJoCo port)
 from pyrep.backend import sim
 from pyrep.objects.vision_sensor import VisionSensor
 import colorsys

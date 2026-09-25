@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import colorsys
 import re
+import sim_backend  # noqa: F401  (SIM_BACKEND=mujoco selects the MuJoCo port)
 from pyrep.backend import sim
 
 

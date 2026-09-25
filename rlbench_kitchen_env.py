@@ -2,6 +2,7 @@
 import os
 import time
 import numpy as np
+import sim_backend  # noqa: F401  (SIM_BACKEND=mujoco selects the MuJoCo port)
 from pyrep import PyRep
 from pyrep.robots.arms.panda import Panda
 from pyrep.robots.end_effectors.panda_gripper import PandaGripper

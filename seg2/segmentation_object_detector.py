@@ -18,6 +18,12 @@ Usage:
 import numpy as np
 import re
 import os
+try:
+    import sim_backend  # noqa: F401  (SIM_BACKEND=mujoco selects the MuJoCo port)
+except ImportError:  # run from a subdirectory without the repo root on sys.path
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    import sim_backend  # noqa: F401
 from pyrep.backend import sim
 from pyrep.objects.vision_sensor import VisionSensor
 import colorsys

@@ -26,6 +26,7 @@ def _ensure_cv2():
         cv2 = _cv2
     return cv2
 
+import sim_backend  # noqa: F401  (SIM_BACKEND=mujoco selects the MuJoCo port)
 from pyrep.backend import sim
 from pyrep.objects.shape import Shape
 from pyrep.objects.vision_sensor import VisionSensor

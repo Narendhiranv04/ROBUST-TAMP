@@ -42,6 +42,12 @@ import time
 import json
 import numpy as np
 
+try:
+    import sim_backend  # noqa: F401  (SIM_BACKEND=mujoco selects the MuJoCo port)
+except ImportError:  # run from a subdirectory without the repo root on sys.path
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    import sim_backend  # noqa: F401
 from pyrep.objects.shape import Shape
 from pyrep.objects.dummy import Dummy
 from pyrep.objects.joint import Joint
