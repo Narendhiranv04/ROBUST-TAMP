@@ -103,6 +103,8 @@ Implementation order is IF → WHERE → WHEN (not IF → WHEN → WHERE) on pur
 | `parallel.enabled` | `true` / `false` | `false` |
 | `termination.mode` | `agent` (the agent alone decides when the trial ends; the evaluator only scores) / `evaluator` (previous system: the evaluator's ground truth may drive the stop condition) | `agent` |
 | `prompt.version` | `v2` (rewritten prompts, docs/PROMPTS.md) / `legacy` (previous prompts) | `v2` |
+| `grasp.confirmation` | `gripper_state` (a pick is confirmed from the gripper's grasp state: grasped/attached object or finger contact; stand-in for perception) / `segmentation` (previous mask-proximity check) | `gripper_state` |
+| `scene.randomization` | `pose_jitter` (seeded ±3 cm, ±20° jitter of each variant's free objects, overlaps rejected) / `off` | `pose_jitter` |
 
 With all flags at their defaults, behavior must equal the Phase 1 baseline.
 

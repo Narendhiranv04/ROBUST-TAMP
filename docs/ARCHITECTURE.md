@@ -93,6 +93,18 @@ How it is built:
    state the planner may see about objects it cannot currently observe. With
    `prompt.version=v2` every lid of the scene is reported this way (legacy:
    visible lids only).
+   **Grasp confirmation, same stand-in (decision, Phase 1):** with
+   `grasp.confirmation=gripper_state` (default) the pick post-check confirms a
+   grasp from the gripper's state (`failure_logic.held_objects_from_gripper`):
+   the object is in `gripper.get_grasped_objects()`, is parented to the robot
+   tip or gripper attach point, or both fingers are not fully open and a finger
+   is within 1 cm of it (the scripted cupboard pick carries the mug this way).
+   The previous mask-proximity check (`segmentation`) misfired on MuJoCo when the
+   object was visible only in the wrist camera.
+   **Initial poses (Phase 1):** with `scene.randomization=pose_jitter` (default)
+   each trial jitters its variant's free objects from the trial seed
+   (`llm_pipeline/randomization.py`); the record is logged in
+   `trial_start.randomization`.
 5. **Grill semantic facts.** `derive_grill_semantic_facts` (grill_geometry.py:138)
    → `SceneState.pddl_state`: `grill_lid_open/closed`, `inside_grill(m)`,
    `on_plate(m)`, `in_prep_area(m)`, `on_table(m)`, `cooked(m)`/`raw(m)`,
@@ -529,7 +541,7 @@ Not renamed (Phase 1 step 1 is read-only).
 
 New gaps found during Phase 1 (details in the Phase 1 report):
 
-16. **The grasp post-check misfires on MuJoCo.** `grasp_failed` is reported when the grasped object is visible only in the wrist camera, because the gripper never appears in the wrist camera's mask. The robot then holds the object while the pipeline believes the gripper is empty, and later picks of that object fail with `pddl_no_plan` until the replan budget runs out. It was observed in K1 (`can_of_beans`). It is rare on CoppeliaSim.
-17. **G3 ground-truth execution is flaky on MuJoCo.** Placing the chicken on the plate fails validation in about half of the runs (the third meat on the plate lands near its edge), with both the old and the new code. `place(mug3, table_staging_area)` is occasionally rejected by the geometric containment post-check.
-18. **`mujoco_port/tools/` was not pushed** with the MuJoCo port (the root `.gitignore` has a blanket `tools/` rule). It is committed on `phase-1-logging` and missing from `naren/variants-scenes-execution`.
+16. **(Resolved: `grasp.confirmation=gripper_state`.) The grasp post-check misfires on MuJoCo.** `grasp_failed` is reported when the grasped object is visible only in the wrist camera, because the gripper never appears in the wrist camera's mask. The robot then holds the object while the pipeline believes the gripper is empty, and later picks of that object fail with `pddl_no_plan` until the replan budget runs out. It was observed in K1 (`can_of_beans`). It is rare on CoppeliaSim.
+17. **(Resolved for the plate: G3 GT 10/10 after the fix.) G3 ground-truth execution was flaky on MuJoCo.** Root cause: after release the grill executor let the object fall freely for 30 steps (1.5 s) before freezing it and attaching it to the plate; the drumstick (convex pieces, no rolling resistance) rolled off the small convex plate in about half of the runs. Plate-top placements now use a 6-step drop (`GRILL_PLATE_TOP_DROP_STEPS`). `place(mug3, table_staging_area)` is occasionally rejected by the geometric containment post-check.
+18. **(Resolved: pushed to `naren/variants-scenes-execution` as 748a27ba.) `mujoco_port/tools/` was not pushed** with the MuJoCo port (the root `.gitignore` has a blanket `tools/` rule). It is committed on `phase-1-logging` and missing from `naren/variants-scenes-execution`.
 19. **EPoG-TAMP is missing** from the external baseline repository, and the other ports are tied to their own scenes and robot.

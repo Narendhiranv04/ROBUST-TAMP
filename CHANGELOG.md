@@ -35,11 +35,21 @@ One entry per phase of `plan.md`: what changed, which flags, which tests.
 - **Repeated-runner tests.** Four tests failed because their argparse fixture lacked `quantization` (separate commit).
 - **`mujoco_port/tools/` was never committed.** The root `.gitignore` has a blanket `tools/` rule; an exception was added.
 
+### Changed after the STOP POINT 1 review
+- `grasp.confirmation=gripper_state`: a pick is confirmed from the gripper's grasp state (grasped or attached object, or finger contact with the fingers not fully open) instead of mask proximity (`failure_logic.held_objects_from_gripper`).
+- `scene.randomization=pose_jitter`: seeded +/-3 cm, +/-20 degree jitter of each variant's free objects, overlaps rejected, fixed objects kept (`llm_pipeline/randomization.py`); seeds 0-9 per variant.
+- Grill plate-top placements drop for 6 steps instead of 30 before being frozen on the plate (`GRILL_PLATE_TOP_DROP_STEPS`); G3 ground truth 10/10 instead of about 50%.
+- Prompt v2 parses only after the last `FINAL ACTIONS:` line; the reasoning is logged (`planning_event.reasoning`).
+- `llm_pipeline/run_trial_matrix.py`: seeded oracle/model trial matrices with per-variant summaries.
+- plan.md 8.3: external baselines become re-implementations inside our pipeline.
+
 ### Flags
 | Flag | Values | Default |
 |---|---|---|
 | `termination.mode` | `agent`, `evaluator` | `agent` |
 | `prompt.version` | `v2`, `legacy` | `v2` |
+| `grasp.confirmation` | `gripper_state`, `segmentation` | `gripper_state` |
+| `scene.randomization` | `pose_jitter`, `off` | `pose_jitter` |
 
 The Section 0.7 flags of later phases accept only their defaults for now. In-context examples are off: `--icl-mode` defaults to `zero_shot`, and v2 refuses few-shot.
 
@@ -56,6 +66,7 @@ The suite has 195 tests; 49 are new, with the files below.
   - the server payload never contains them;
   - `termination.mode` agent vs evaluator.
 - `test_labeled_rules.py`: hand-made histories (correct cycle, served raw, overcooked after two cycles, cooked meat left in the grill, meat removed before closing), grill and kitchen goal scoring, and the metric definitions.
+- `test_grasp_and_randomization.py`: gripper-state grasp confirmation (grasped, tip-parented, not held, previous behavior) and seeded, bounded pose jitter with overlap rejection and fixed objects.
 - `test_prompt_v2.py`: golden snapshots for the system, initial, replan and goal-check prompts in both scenes; one template for both scenes; no strategy hints or banned content; ICL refused.
 
 Integration checks, with the GT oracle planner and no model:

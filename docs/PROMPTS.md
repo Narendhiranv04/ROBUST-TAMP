@@ -1,6 +1,6 @@
 # Planner prompts (Phase 1, step 5c)
 
-**Status: for review.** No trial may run on the new prompts until they are approved.
+**Status: approved** (2026-09-25), with the answers in section 5.
 
 - `prompt.version = v2` (the default) selects the new prompts.
 - `prompt.version = legacy` reproduces the previous system's prompts exactly.
@@ -264,9 +264,19 @@ Regions: table, prep_area, inside_grill, plate_top, serving_area, dish_rack
 - After open(grill_lid), these objects became visible and had not been seen earlier in this trial: steak (inside_grill).
 ```
 
-## 5. Decisions needed from you
+## 5. Decisions (approved)
 
-1. **No cook status in v2.** Today's grill objects are named `chicken`, `steak` and `steak1`. In the G2 example above, the planner cannot tell whether `steak` (found inside the grill) is cooked. From Phase 3 the label names (`raw_meat`, `cooked_meat`) carry it. Keep it out of v2 now (as written), or add an observed `cooked`/`raw` fact until Phase 3?
-2. **Lid top-surface precondition.** "No object is on the top surface of l" is stated generically in `open(l)`. This is the one physical precondition I added: the executor enforces it (`box_lid_obstructed`), and without it the precondition list would be incomplete. Keep?
-3. **Region names only, no descriptions.** In v2, `table` and `table_staging_area` appear without descriptions. Acceptable?
-4. **`Reasoning is allowed.`** v2 permits free reasoning before `FINAL ACTIONS:`, where the legacy prompt forbade it. Keep?
+1. **Cook status is not shown in v2.** With today's grill names (`chicken`, `steak`, `steak1`) the planner cannot tell whether a meat found inside the grill (G2/G3 `steak`) is already cooked. The baseline summary reports this limitation. From Phase 3 the labels (`raw_meat`, `cooked_meat`) carry the status.
+2. **`open(l)` precondition** "no object is on the top surface of l": accepted.
+3. **Region names only**, without descriptions: accepted. Names that hint at a purpose, with proposed neutral renames (not applied yet):
+
+   | Region | Hint | Proposed name | Why |
+   |---|---|---|---|
+   | `table_staging_area` | "staging" suggests a temporary holding place, i.e. how to use it | `table_center_area` | centre of the table, in front of the robot |
+   | `pantry_area` | "pantry" says groceries belong or start there | `table_right_area` | right side of the table from the robot's view |
+   | `prep_area` | "prep" suggests uncooked meat is prepared there (a raw/cooked hint) | `grill_side_area` | the surface beside the grill |
+   | `serving_area` | purpose-named, but it is the goal's own wording ("in the serving area") | keep | renaming would break the link to the goal text |
+   | `table`, `cupboard_shelf`, `inside_box`, `box_lid_top`, `inside_grill`, `plate_top`, `dish_rack` | none: physical descriptions | keep | — |
+
+   A rename changes only the planner-facing names (`region_aliases.py` keeps the old names as aliases). It is a small change and would give a new prompt version; tell me whether to apply it before or after the baseline.
+4. **Reasoning before `FINAL ACTIONS:`** is allowed. For `prompt.version=v2` the client parses only the text after the last `FINAL ACTIONS:` line; an answer without that line is a plan-check failure (`planner_output_not_parseable`). The text before it is logged as `planning_event.reasoning` in `trial_log.jsonl`, and the full raw output as `raw_output`.

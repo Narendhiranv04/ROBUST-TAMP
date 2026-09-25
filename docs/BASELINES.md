@@ -1,6 +1,6 @@
 # External comparison baselines
 
-plan.md Phase 8.3 asks for VLM-TAMP, OWL-TAMP and EPoG-TAMP to be run on our final variants, with the same scenes, trial counts and seeds. This file records every deviation from the original methods.
+plan.md Phase 8.3 (decision 2026-09-25): VLM-TAMP, OWL-TAMP and EPoG-TAMP are **re-implemented** as planner modules inside our pipeline (their planning and replanning logic on our robot, executor, scenes and log schema), not ported with their original stacks. They are labeled "re-implementations" everywhere. This file records every difference from the original methods. Not started yet.
 
 - **Source:** https://github.com/Narendhiranv04/GRAB-TAMP, branch `baseline_executions`, commit `f2976cc`, cloned read-only into `external/GRAB-TAMP` (git-ignored).
 - **Status:** inspected only. Nothing has been run or modified.
