@@ -41,6 +41,12 @@ One entry per phase of `plan.md`: what changed, which flags, which tests.
 - Grill plate-top placements drop for 6 steps instead of 30 before being frozen on the plate (`GRILL_PLATE_TOP_DROP_STEPS`); G3 ground truth 10/10 instead of about 50%.
 - Prompt v2 parses only after the last `FINAL ACTIONS:` line; the reasoning is logged (`planning_event.reasoning`).
 - `llm_pipeline/run_trial_matrix.py`: seeded oracle/model trial matrices with per-variant summaries.
+- Executor fixes found by the executor-ceiling run (oracle planner, target 100%):
+  - Kitchen box placements pad by the object's half-footprint plus 1 cm: mugs were placed against the box walls and knocked out by later placements.
+  - Kitchen staging-area and cupboard placement branches in `sample_stable_pose` compared against pre-normalization region names and never ran, so those placements ignored occupied spots.
+  - Grill plate-top placements lower the released object kinematically until it touches the plate (`GRILL_PLATE_TOP_SETTLE=kinematic`, fallback `drop` = 6-step drop): meat that tipped over in the grill tumbled off the plate.
+  - The oracle planner re-picks an object before placing it after a failed place.
+- Prompt v2 uses neutral region names (`table_center_area`, `table_right_area`, `grill_side_area`); the parser maps them back, logs keep canonical names.
 - plan.md 8.3: external baselines become re-implementations inside our pipeline.
 
 ### Flags
