@@ -18,7 +18,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from llm_pipeline.failures import FailureCode, planner_facing_code
 from llm_pipeline.pipeline_types import BaseContextBuilder, FailureEvent, ICLMode, PromptBundle, SceneState
-from llm_pipeline.region_aliases import PLANNER_HIDDEN_REGIONS, normalize_region_name
+from llm_pipeline.region_aliases import (
+    PLANNER_HIDDEN_REGIONS,
+    normalize_region_name,
+    planner_action_text,
+    planner_region_name,
+)
 
 PROMPT_VERSION = 'v2'
 
@@ -88,7 +93,7 @@ class IdentifiedAction:
     action: str
 
     def render(self) -> str:
-        return f'{self.action_id}: {self.action}'
+        return f'{self.action_id}: {planner_action_text(self.action)}'
 
 
 @dataclass
@@ -124,15 +129,16 @@ def state_section(state: SceneState, regions: Sequence[str], lids: Sequence[str]
     objects = [name for name in state.visible_objects if name not in LID_OBJECTS]
     if objects:
         for name in objects:
-            lines.append(f'- {name}: {normalize_region_name(object_region_map.get(name)) or "unknown"}')
+            region = object_region_map.get(name)
+            lines.append(f'- {name}: {planner_region_name(region) if region else "unknown"}')
     else:
         lines.append('- (none)')
     lines.append('Lids:')
     lid_states = _lid_states(state, lids)
     if lid_states:
         for lid, is_open in lid_states.items():
-            closes_off = ', '.join(LID_REGIONS.get(lid, ())) or '(none)'
-            top = f'; top surface: {LID_TOP_REGIONS[lid]}' if lid in LID_TOP_REGIONS else ''
+            closes_off = ', '.join(planner_region_name(r) for r in LID_REGIONS.get(lid, ())) or '(none)'
+            top = f'; top surface: {planner_region_name(LID_TOP_REGIONS[lid])}' if lid in LID_TOP_REGIONS else ''
             lines.append(f'- {lid}: {"open" if is_open else "closed"} (closes off {closes_off}{top})')
     else:
         lines.append('- (none)')
@@ -146,11 +152,12 @@ def trigger_facts(failure_event: FailureEvent, object_region_map: Dict[str, str]
     """Render the replan trigger as plain facts (no advice)."""
     code = planner_facing_code(failure_event.failure_id)
     evidence = dict(failure_event.evidence or {})
-    action = failure_event.action
+    action = planner_action_text(failure_event.action) if failure_event.action else failure_event.action
     if code == FailureCode.NEW_OBJECT_DISCOVERED:
         objects = list(evidence.get('newly_visible_objects') or [])
         rendered = ', '.join(
-            f'{name} ({normalize_region_name(object_region_map.get(name)) or "unknown"})' for name in objects
+            f'{name} ({planner_region_name(object_region_map.get(name)) if object_region_map.get(name) else "unknown"})'
+            for name in objects
         ) or '(none)'
         return [f'- After {action}, these objects became visible and had not been seen earlier in this trial: {rendered}.']
     if code == FailureCode.GOAL_NOT_SATISFIED:
@@ -204,8 +211,8 @@ class PromptV2Builder(BaseContextBuilder):
         ordered = []
         for region in state.valid_regions:
             name = normalize_region_name(region)
-            if name and name not in hidden and name not in ordered:
-                ordered.append(name)
+            if name and name not in hidden and planner_region_name(name) not in ordered:
+                ordered.append(planner_region_name(name))
         return ordered
 
     # -- prompts --------------------------------------------------------------
@@ -269,7 +276,7 @@ class PromptV2Builder(BaseContextBuilder):
             '## Goal', goal_text, '',
             *state_section(state, self._regions(state), self._lids()), '',
             '## Completed actions',
-            *([f'- {action}' for action in completed_actions] or ['- (none)']),
+            *([f'- {planner_action_text(action)}' for action in completed_actions] or ['- (none)']),
         ]
         return goal_check_system_prompt(), '\n'.join(lines)
 

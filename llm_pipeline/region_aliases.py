@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable, Mapping, MutableMapping, TypeVar
 
 
@@ -20,6 +21,9 @@ KITCHEN_REGION_ALIASES = {
     "groceries_boundary": "pantry_area",
     "table_target_area": "table_staging_area",
     "placement_boundary": "table_staging_area",
+    # Neutral planner-facing names (prompt v2, docs/PROMPTS.md section 5).
+    "table_center_area": "table_staging_area",
+    "table_right_area": "pantry_area",
 }
 
 GRILL_REGION_ALIASES = {
@@ -29,6 +33,7 @@ GRILL_REGION_ALIASES = {
     "plate-boundary": "serving_area",
     "plate_boundary": "serving_area",
     "prep-area": "prep_area",
+    "grill_side_area": "prep_area",
 }
 
 CANONICAL_KITCHEN_REGION_ORDER = (
@@ -77,6 +82,29 @@ REGION_SEMANTICS = {
     "serving_area": "serving destination area where the plate should be placed",
     "dish_rack": "rack area where the plate starts",
 }
+
+
+# prompt.version=v2 shows these neutral names instead of purpose-named regions;
+# everything else (logs, evaluator, executor) keeps the canonical names.
+PLANNER_REGION_NAMES = {
+    "table_staging_area": "table_center_area",
+    "pantry_area": "table_right_area",
+    "prep_area": "grill_side_area",
+}
+
+
+def planner_region_name(region_name: str | None) -> str:
+    canonical = normalize_region_name(region_name)
+    return PLANNER_REGION_NAMES.get(canonical, canonical)
+
+
+def planner_action_text(action: str) -> str:
+    """Render an action string with planner-facing region names."""
+    text = str(action)
+    match = re.match(r"^(\s*place\(\s*[^,]+,\s*)([^)]+?)(\s*\)\s*)$", text)
+    if not match:
+        return text
+    return f"{match.group(1)}{planner_region_name(match.group(2))}{match.group(3)}"
 
 
 def normalize_region_name(region_name: str | None) -> str:

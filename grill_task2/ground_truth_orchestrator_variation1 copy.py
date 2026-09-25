@@ -1071,6 +1071,37 @@ def settle_placed_object(env, pr, target_obj, drop_steps=20, settle_steps=12):
     step(pr, max(1, int(settle_steps)))
 
 
+def lower_onto_support(env, pr, target_obj, support_obj, step_m=0.002, max_m=0.12):
+    """Lower a released object kinematically until it touches its support, then freeze it.
+
+    No free fall, so round objects cannot roll or tumble off a small support.
+    """
+    if target_obj is None:
+        return
+    try:
+        target_obj.set_dynamic(False)
+        target_obj.set_collidable(True)
+        target_obj.set_respondable(True)
+    except Exception:
+        pass
+    if support_obj is None:
+        step(pr, 4)
+        return
+    moved = 0.0
+    while moved < max_m:
+        try:
+            if target_obj.check_collision(support_obj):
+                break
+        except Exception:
+            break
+        pos = list(target_obj.get_position())
+        pos[2] -= step_m
+        target_obj.set_position(pos)
+        moved += step_m
+        step(pr, 1)
+    step(pr, 4)
+
+
 def settle_on_region_without_snap(
     env,
     pr,
@@ -4876,17 +4907,24 @@ class GrillPrimitiveTransferExecutor(GrillPrimitiveExecutorBase):
             # The object is released ~2 mm above its support. On the small plate a
             # long free drop lets round meat (drumsticks) roll off the edge before it
             # is frozen and attached to the plate, so plate-top uses a short drop.
-            if self.target_region == "plate-top":
-                drop_steps = int(os.environ.get("GRILL_PLATE_TOP_DROP_STEPS", "6"))
+            plate_mode = os.environ.get("GRILL_PLATE_TOP_SETTLE", "kinematic")
+            if self.target_region == "plate-top" and plate_mode == "kinematic":
+                # Meat tipped over in the grill is released a few cm above the plate
+                # (its tilted bounding box overestimates the bottom offset) and tumbled
+                # off during a free drop: lower it without dynamics until it touches.
+                lower_onto_support(self.env, self.pr, self.target_obj, _region_object(self.env, "plate"))
             else:
-                drop_steps = int(os.environ.get("GRILL_OBJECT_POST_RETREAT_DROP_STEPS", "30"))
-            settle_placed_object(
-                self.env,
-                self.pr,
-                self.target_obj,
-                drop_steps=drop_steps,
-                settle_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_SETTLE_STEPS", "14")),
-            )
+                if self.target_region == "plate-top":
+                    drop_steps = int(os.environ.get("GRILL_PLATE_TOP_DROP_STEPS", "6"))
+                else:
+                    drop_steps = int(os.environ.get("GRILL_OBJECT_POST_RETREAT_DROP_STEPS", "30"))
+                settle_placed_object(
+                    self.env,
+                    self.pr,
+                    self.target_obj,
+                    drop_steps=drop_steps,
+                    settle_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_SETTLE_STEPS", "14")),
+                )
             _attach_to_plate_after_place(self.env, self.pr, self.target_obj, self.target_region)
         step(self.pr, 10)
         self._move_back_home("place->home")

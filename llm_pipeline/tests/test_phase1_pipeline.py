@@ -275,7 +275,7 @@ def test_steps_count_observations_and_plan_check_requeries_share_a_step(tmp_path
 def test_replan_prompt_has_completed_and_remaining_plan_with_ids(tmp_path) -> None:
     _, planner, _, _ = _run_logged(tmp_path, [PLAN_1, PLAN_UNSEEN, PLAN_3])
     replan_prompt = planner.bundles[1].user_prompt
-    assert '## Completed actions\n- a1: pick(mug2)\n- a2: place(mug2, table_staging_area)\n- a3: open(box_lid)' in replan_prompt
+    assert '## Completed actions\n- a1: pick(mug2)\n- a2: place(mug2, table_center_area)\n- a3: open(box_lid)' in replan_prompt
     assert '## Remaining plan (not executed yet)\n- a4: pick(mug2)\n- a5: place(mug2, inside_box)' in replan_prompt
     assert f'After open(box_lid), these objects became visible and had not been seen earlier in this trial: {REVEALED} (inside_box).' in replan_prompt
     requery = planner.bundles[2].user_prompt

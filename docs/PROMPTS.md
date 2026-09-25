@@ -209,11 +209,11 @@ move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
 Visible objects and the region each one is in:
 - mug2: box_lid_top
 - mug3: cupboard_shelf
-- spam: pantry_area
+- spam: table_right_area
 Lids:
 - box_lid: closed (closes off inside_box; top surface: box_lid_top)
 Gripper: empty
-Regions: table, table_staging_area, cupboard_shelf, inside_box, pantry_area, box_lid_top
+Regions: table, table_center_area, cupboard_shelf, inside_box, table_right_area, box_lid_top
 ```
 
 The `can_of_beans` hidden inside the box is not mentioned anywhere, and it is not sent to the server.
@@ -235,13 +235,13 @@ COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the 
 ## Current state
 Visible objects and the region each one is in:
 - steak: inside_grill
-- steak1: prep_area
-- chicken: prep_area
+- steak1: grill_side_area
+- chicken: grill_side_area
 - plate: dish_rack
 Lids:
 - grill_lid: open (closes off inside_grill)
 Gripper: empty
-Regions: table, prep_area, inside_grill, plate_top, serving_area, dish_rack
+Regions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack
 
 ## Completed actions
 - a1: open(grill_lid)
@@ -278,5 +278,5 @@ Regions: table, prep_area, inside_grill, plate_top, serving_area, dish_rack
    | `serving_area` | purpose-named, but it is the goal's own wording ("in the serving area") | keep | renaming would break the link to the goal text |
    | `table`, `cupboard_shelf`, `inside_box`, `box_lid_top`, `inside_grill`, `plate_top`, `dish_rack` | none: physical descriptions | keep | — |
 
-   A rename changes only the planner-facing names (`region_aliases.py` keeps the old names as aliases). It is a small change and would give a new prompt version; tell me whether to apply it before or after the baseline.
+   **Applied** (approved 2026-09-25) in prompt v2 only: v2 prompts and the `valid_regions` sent to the server use the neutral names; the parser maps them back (`region_aliases.PLANNER_REGION_NAMES`), and logs, evaluator and executor keep the canonical names. Legacy prompts are unchanged.
 4. **Reasoning before `FINAL ACTIONS:`** is allowed. For `prompt.version=v2` the client parses only the text after the last `FINAL ACTIONS:` line; an answer without that line is a plan-check failure (`planner_output_not_parseable`). The text before it is logged as `planning_event.reasoning` in `trial_log.jsonl`, and the full raw output as `raw_output`.

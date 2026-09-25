@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover
     requests = None
 
 from llm_pipeline.failures import FailureCode
+from llm_pipeline.region_aliases import planner_region_name
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
 
@@ -160,6 +161,9 @@ class RemoteTextLLMPlanner:
             else sorted(self.parser.valid_objects)
         )
         prompt_version = (getattr(bundle, 'metadata', {}) or {}).get('prompt_version') if bundle is not None else None
+        valid_regions = sorted(self.parser.valid_regions)
+        if prompt_version == 'v2':
+            valid_regions = sorted({planner_region_name(region) for region in valid_regions})
         request_data = {
             'system_prompt': system_prompt,
             'user_prompt': user_prompt,
@@ -172,7 +176,7 @@ class RemoteTextLLMPlanner:
             'image_present': bool(image_b64 is not None),
             'valid_actions': sorted(self.parser.valid_actions),
             'valid_objects': valid_objects,
-            'valid_regions': sorted(self.parser.valid_regions),
+            'valid_regions': valid_regions,
         }
         if prompt_version:
             request_data['prompt_version'] = prompt_version
@@ -185,7 +189,7 @@ class RemoteTextLLMPlanner:
             'text_only': image_b64 is None,
             'valid_actions': sorted(self.parser.valid_actions),
             'valid_objects': valid_objects,
-            'valid_regions': sorted(self.parser.valid_regions),
+            'valid_regions': valid_regions,
             'prompt_version': prompt_version,
         }
 

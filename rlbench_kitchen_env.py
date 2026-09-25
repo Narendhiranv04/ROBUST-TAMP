@@ -463,6 +463,19 @@ class RLBenchKitchenEnv:
         if is_box_region:
             # In boxes, keep a small padding and bias to free XY to avoid unnecessary planner failures.
             box_padding = float(os.environ.get("BOX_REGION_SAMPLE_PADDING", "0.015"))
+            # Keep the whole object footprint inside the box: pad by its half-extent
+            # (a mug with its handle is ~10 cm long) plus a margin. With only the fixed
+            # padding, corner samples put mugs into the walls, where later placements
+            # knocked them out of the box.
+            try:
+                o_min_x, o_max_x, o_min_y, o_max_y, _, _ = self._get_world_bounding_box(obj)
+                half_extent = 0.5 * max(o_max_x - o_min_x, o_max_y - o_min_y)
+                box_padding = max(
+                    box_padding,
+                    half_extent + float(os.environ.get("BOX_REGION_WALL_MARGIN", "0.01")),
+                )
+            except Exception:
+                pass
             if (w_max_x - w_min_x) < 2 * box_padding:
                 box_padding = max(0.0, 0.1 * (w_max_x - w_min_x))
             if (w_max_y - w_min_y) < 2 * box_padding:
@@ -492,7 +505,10 @@ class RLBenchKitchenEnv:
             sample_z = w_min_z + float(os.environ.get("BOX_REGION_SAMPLE_Z_OFFSET", "0.012"))
             if is_mug:
                 sample_z = max(sample_z, MUG_PLACEMENT_MIN_SAMPLE_Z)
-        elif region_name == 'placement_boundary':
+        # region_name is normalized above (placement_boundary -> table_staging_area,
+        # cupboard_lower -> cupboard_shelf); the old comparisons never matched, so these
+        # placements ignored occupied spots.
+        elif region_name in ('placement_boundary', 'table_staging_area'):
             placement_padding = float(os.environ.get("PLACEMENT_BOUNDARY_SAMPLE_PADDING", str(padding)))
             if (w_max_x - w_min_x) < 2 * placement_padding:
                 placement_padding = 0
@@ -521,7 +537,7 @@ class RLBenchKitchenEnv:
                 sample_z = w_min_z + 0.005
             if is_mug:
                 sample_z = max(sample_z, MUG_PLACEMENT_MIN_SAMPLE_Z)
-        elif region_name == 'cupboard_lower':
+        elif region_name in ('cupboard_lower', 'cupboard_shelf'):
             cupboard_padding = float(os.environ.get("CUPBOARD_LOWER_SAMPLE_PADDING", str(padding)))
             if (w_max_x - w_min_x) < 2 * cupboard_padding:
                 cupboard_padding = 0

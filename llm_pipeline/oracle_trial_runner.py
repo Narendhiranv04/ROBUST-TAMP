@@ -90,8 +90,23 @@ class OraclePlanner:
                 continue
             chosen.append(remaining[index])
             index += 1
-        raw = 'FINAL ACTIONS:\n' + ('\n'.join(chosen) if chosen else 'NO_ACTIONS')
         held = (bundle.metadata or {}).get('held_object')
+        # After a failed place the pick is already in the history: pick the object
+        # again before placing it (the gripper is empty after a failed place).
+        repaired: List[str] = []
+        holding = held
+        for action in chosen:
+            parsed = parse_action_string(action) or {}
+            obj = (parsed.get('args') or [None])[0]
+            if parsed.get('action') == 'place' and holding != obj:
+                repaired.append(f'pick({obj})')
+            if parsed.get('action') == 'pick':
+                holding = obj
+            elif parsed.get('action') == 'place':
+                holding = None
+            repaired.append(action)
+        chosen = repaired
+        raw = 'FINAL ACTIONS:\n' + ('\n'.join(chosen) if chosen else 'NO_ACTIONS')
         try:
             actions = self.parser.parse(raw, held_object=held)
         except StrictParseError as exc:

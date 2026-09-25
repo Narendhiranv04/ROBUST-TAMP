@@ -14,6 +14,7 @@ from llm_pipeline.executable_symbols import ACTION_SYMBOLS, GRILL_ACTION_SYMBOLS
 from llm_pipeline.failures import FailureCode
 from llm_pipeline.pipeline_types import FailureEvent, FailureSource, FailureStage, SceneState
 from llm_pipeline.prompt_v2 import IdentifiedAction, PromptV2Builder, ReplanContext
+from llm_pipeline.region_aliases import planner_region_name
 
 SNAPSHOT_DIR = Path(__file__).parent / 'snapshots'
 
@@ -118,6 +119,7 @@ def test_one_template_for_both_scenes() -> None:
     def skeleton(scene, text):
         data = SCENES[scene]
         names = list(data['registry'].objects) + list(data['registry'].regions) + [data['goal']]
+        names += [planner_region_name(region) for region in data['registry'].regions]
         for name in sorted(names, key=len, reverse=True):
             text = text.replace(name, '<X>')
         text = re.sub(r'(<X>(, )?)+', '<X>', text)
