@@ -738,6 +738,16 @@ def _classify_meats(env, meats):
 
 
 def _region_slot_pose(env, obj, region_name, slot_idx=0, slot_count=1):
+    fixed_xy = (getattr(env, 'placement_poses', None) or {}).get(region_name)
+    if fixed_xy is not None:
+        # Final variants: always place into the region's placement area (one slot).
+        pose = _region_slot_pose_unfixed(env, obj, region_name, 0, 1)
+        pose[0], pose[1] = float(fixed_xy[0]), float(fixed_xy[1])
+        return pose
+    return _region_slot_pose_unfixed(env, obj, region_name, slot_idx, slot_count)
+
+
+def _region_slot_pose_unfixed(env, obj, region_name, slot_idx=0, slot_count=1):
     region = _region_object(env, region_name)
     if _is_plate_region(region_name) and not _is_plate_object(obj):
         live_plate = _region_object(env, "plate")

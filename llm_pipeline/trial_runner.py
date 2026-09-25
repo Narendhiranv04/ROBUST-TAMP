@@ -266,6 +266,31 @@ def _render_failure_summary(record: Dict[str, Any]) -> str:
     return '\n'.join(lines).rstrip() + '\n'
 
 
+def _validate_trial(variant_spec, summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Final variants: labeled rules on simulator ground truth; today's variants: llm_pipeline.metrics."""
+    from evaluation.final_variants import get_final_variant
+    from evaluation.labeled_rules import uses_labeled_rules, validate_labeled_goal
+
+    completed = summary.get('completed_actions', [])
+    if not uses_labeled_rules(variant_spec.variant_id):
+        return validate_variant_success(variant_spec.variant_id, summary.get('final_object_region_map', {}), completed)
+    spec = get_final_variant(variant_spec.variant_id)
+    initial = summary.get('initial_ground_truth') or {}
+    final = summary.get('final_ground_truth') or {}
+    result = validate_labeled_goal(
+        spec.scene,
+        spec.variant_id,
+        final.get('object_region_map', {}),
+        completed,
+        initial.get('object_region_map', {}),
+        placement_area_objects=final.get('placement_area_objects', {}),
+        box_trigger_objects=[h.label for h in spec.hidden if h.region == 'inside_box' and h.overlapping],
+    )
+    result['details']['initial_ground_truth'] = initial
+    result['details']['final_ground_truth'] = final
+    return result
+
+
 def run_trial(
     variant_id: str,
     model_alias: str,
@@ -469,11 +494,7 @@ def run_trial(
         else:
             summary = pipeline.run(goal_text)
             completion = score_variant_completion(variant_spec.variant_id, summary.get('completed_actions', []))
-            success_validation = validate_variant_success(
-                variant_spec.variant_id,
-                summary.get('final_object_region_map', {}),
-                summary.get('completed_actions', []),
-            )
+            success_validation = _validate_trial(variant_spec, summary)
             execution_skipped = bool(summary.get('execution_skipped', False))
             episode_success = None if execution_skipped else bool(success_validation.get('success', False))
             total_replans = int(summary.get('total_replans', 0))

@@ -179,7 +179,12 @@ def collapse_actions_to_subtasks(actions: Sequence[Any]) -> List[str]:
 def score_variant_completion(variant_id: str, completed_actions: Sequence[Any]) -> Dict[str, Any]:
     spec = get_variant_spec(variant_id)
     expected = dict(spec.expected_subtask_buckets)
-    observed_buckets = collapse_actions_to_subtasks(completed_actions)
+    if spec.variant_id.startswith('FINAL.'):
+        from evaluation.final_variants import final_subtasks
+
+        observed_buckets = final_subtasks(completed_actions)
+    else:
+        observed_buckets = collapse_actions_to_subtasks(completed_actions)
     observed_counts = Counter(observed_buckets)
     bucket_breakdown: Dict[str, Dict[str, int]] = {}
     matched_total = 0

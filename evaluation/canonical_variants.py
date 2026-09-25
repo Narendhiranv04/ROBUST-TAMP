@@ -160,8 +160,36 @@ DEFAULT_VLM_MODEL_ALIASES = ['qwen-vl', 'gsarch', 'ms-phi4', 'internvl-3.5']
 DEFAULT_LLM_MODEL_ALIASES = ['qwen', 'selene', 'deepseek-r1', 'mistral-nemo']
 
 
+def _final_variant_spec(variant_id: str) -> Optional[VariantSpec]:
+    """VariantSpec for a Phase 3 variant (``FINAL.K1``; evaluation/final_variants.py)."""
+    from collections import Counter
+
+    from evaluation.final_variants import final_subtasks, get_final_variant
+
+    spec = get_final_variant(variant_id)
+    if spec is None:
+        return None
+    buckets = dict(Counter(final_subtasks(spec.gt_actions)))
+    return VariantSpec(
+        variant_id=spec.variant_id,
+        task_family=spec.scene,
+        scene_path=str(spec.scene_dir),
+        action_sequence_length=len(spec.gt_actions),
+        gt_total_subtasks=sum(buckets.values()),
+        gt_runner_path=None,
+        goal_text=spec.goal,
+        expected_subtask_buckets=buckets,
+        model_eval_supported=True,
+    )
+
+
 def get_variant_spec(variant_id: str) -> VariantSpec:
     key = (variant_id or '').strip().upper()
+    if key.startswith('FINAL.'):
+        final = _final_variant_spec(key)
+        if final is None:
+            raise KeyError(f'Unknown variant: {variant_id}')
+        return final
     if key not in VARIANTS:
         raise KeyError(f'Unknown variant: {variant_id}')
     return VARIANTS[key]

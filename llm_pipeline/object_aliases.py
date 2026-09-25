@@ -14,6 +14,14 @@ SCENE_OBJECT_ALIASES = {
 }
 
 
+def set_variant_labels(labels: Mapping[str, str]) -> None:
+    """Final variants: scene object name -> planner/evaluator label (e.g. chicken -> raw_meat_1)."""
+    for scene_name, label in (labels or {}).items():
+        if scene_name != label:
+            OBJECT_ALIASES[scene_name] = label
+            SCENE_OBJECT_ALIASES[label] = scene_name
+
+
 def canonical_object_name(object_name: str | None) -> str:
     token = str(object_name or "").strip()
     return OBJECT_ALIASES.get(token, token)

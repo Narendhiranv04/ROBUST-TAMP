@@ -212,6 +212,9 @@ class LLMOnlyReplanningPipeline:
 
             env = ENV
         self.env = env
+        from llm_pipeline.final_variant_setup import configure_env
+
+        self.final_variant = configure_env(env, self.config.variant_id)
 
         if hasattr(self.context_builder, 'set_env'):
             self.context_builder.set_env(env)
@@ -335,8 +338,19 @@ class LLMOnlyReplanningPipeline:
         self._settle_environment()
         if self.segmentation_adapter is not None:
             self.segmentation_adapter.refresh_visibility(event='initial')
+        self.initial_ground_truth = self._final_variant_ground_truth()
         self._update_live_action_sequence([], None)
         return True
+
+    def _final_variant_ground_truth(self) -> Optional[Dict[str, Any]]:
+        """Simulator ground truth for the labeled evaluator (final variants only)."""
+        spec = getattr(self, 'final_variant', None)
+        if spec is None:
+            return None
+        from llm_pipeline.final_variant_setup import ground_truth_state
+
+        detector = getattr(self.segmentation_adapter, 'detector', None)
+        return ground_truth_state(self.env, spec, detector, self.symbol_registry.regions)
 
     # ---------------------------------------------------------------- trial log
     def set_trial_logger(self, trial_logger) -> None:
@@ -1280,6 +1294,8 @@ class LLMOnlyReplanningPipeline:
             'held_object': held_object,
             'final_scene_state': final_scene_state,
             'final_object_region_map': dict(final_scene_state.get('object_region_map', {}) or {}),
+            'initial_ground_truth': getattr(self, 'initial_ground_truth', None),
+            'final_ground_truth': self._final_variant_ground_truth(),
             'final_lid_states': dict(final_scene_state.get('lid_states', {}) or {}),
             'last_goal_check': next(
                 (cycle.goal_check for cycle in reversed(self.cycles) if cycle.goal_check),

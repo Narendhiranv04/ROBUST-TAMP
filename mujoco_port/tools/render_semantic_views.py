@@ -45,23 +45,38 @@ INK = (40, 40, 40)
 MUTED = (120, 120, 120)
 
 
-def _font(size, bold=False):
+FONT_FILE = Path(__file__).resolve().parent / 'fonts' / 'OpenSans.ttf'   # Open Sans (OFL, fonts/OFL.txt)
+SCALE = 2          # overlays are drawn on the camera image upscaled by this factor (crisper, larger text)
+TABLE_REGION = 'table'
+
+
+def _font(size, bold=False, weight=None):
     from PIL import ImageFont
-    names = ['DejaVuSans-Bold.ttf'] if bold else ['DejaVuSans.ttf']
-    for folder in ('/usr/share/fonts/truetype/dejavu', '/usr/share/fonts/dejavu'):
-        for name in names:
-            path = os.path.join(folder, name)
-            if os.path.exists(path):
-                return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+    try:
+        font = ImageFont.truetype(str(FONT_FILE), size)
+        font.set_variation_by_name(weight or ('Bold' if bold else 'Regular'))
+        return font
+    except Exception:
+        return ImageFont.load_default()
 
 
 def load_env(variant):
     os.chdir(tempfile.mkdtemp(prefix='render_'))
     from llm_pipeline import debug_execution as de
-    seq = de._load_default_sequence(variant, de.DEFAULT_SEQUENCE_DIR)
+    from evaluation.final_variants import is_final_variant
+
+    if is_final_variant(variant):
+        from evaluation.canonical_variants import get_variant_spec
+        from llm_pipeline.final_variant_setup import configure_env
+
+        spec = get_variant_spec(variant)
+        seq = de.DebugSequence(name=variant, variant=spec.variant_id, goal=spec.goal_text, actions=())
+    else:
+        seq = de._load_default_sequence(variant, de.DEFAULT_SEQUENCE_DIR)
     de._configure_scene_env(seq, headless=True)
     env = de._load_env_for_sequence(seq)
+    if is_final_variant(variant):
+        configure_env(env, variant)
     for _ in range(50):
         env.pr.step()
     return env
@@ -144,20 +159,20 @@ def _free_spot(x, y, w, h, bounds, placed):
 def label_chip(draw, xy, text, color, font, bounds, placed=()):
     """Object tag: filled with the object colour, white text."""
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-    w, h = right - left + 10, bottom - top + 6
-    rect = _free_spot(xy[0], xy[1] - h - 2, w, h, bounds, placed)
-    draw.rounded_rectangle(rect, radius=4, fill=color)
-    draw.text((rect[0] + 5, rect[1] + 3 - top), text, fill=(255, 255, 255), font=font)
+    w, h = right - left + 20, bottom - top + 14
+    rect = _free_spot(xy[0], xy[1] - h - 4, w, h, bounds, placed)
+    draw.rounded_rectangle(rect, radius=8, fill=color, outline=(255, 255, 255), width=2)
+    draw.text((rect[0] + 10, rect[1] + 7 - top), text, fill=(255, 255, 255), font=font)
     return rect
 
 
 def outlined_chip(draw, xy, text, color, font, bounds, placed=()):
     """Region tag: white box with a coloured border and coloured text."""
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-    w, h = right - left + 12, bottom - top + 8
-    rect = _free_spot(xy[0], xy[1] - h - 3, w, h, bounds, placed)
-    draw.rounded_rectangle(rect, radius=4, fill=(255, 255, 255), outline=color, width=2)
-    draw.text((rect[0] + 6, rect[1] + 4 - top), text, fill=color, font=font)
+    w, h = right - left + 22, bottom - top + 16
+    rect = _free_spot(xy[0], xy[1] - h - 6, w, h, bounds, placed)
+    draw.rounded_rectangle(rect, radius=8, fill=(255, 255, 255, 235), outline=color, width=3)
+    draw.text((rect[0] + 11, rect[1] + 8 - top), text, fill=color, font=font)
     return rect
 
 
@@ -204,36 +219,50 @@ def main():
             box = None
         if box:
             region_boxes[normalize_region_name(region)] = (np.array(box[0]), np.array(box[1]))
+    # The table region is shown as the whole tabletop, not the executor's drop zone.
+    try:
+        table_box = detector.get_bounding_box('diningTable')
+    except Exception:
+        table_box = None
+    if table_box:
+        region_boxes[TABLE_REGION] = (np.array(table_box[0]), np.array(table_box[1]))
+    table_handles = []
+    try:
+        table_obj = env.get_object('diningTable')
+        table_handles = [int(table_obj.get_handle())] + [int(o.get_handle()) for o in table_obj.get_objects_in_tree()]
+    except Exception:
+        pass
     region_colors = {name: REGION_PALETTE[i % len(REGION_PALETTE)] for i, name in enumerate(region_boxes)}
 
     def save_single(path, camera, tile, objects, shown_regions):
         """One camera's semantic map with a legend strip for what appears in it."""
-        body, head = _font(15), _font(16, bold=True)
-        pad, row = 14, 24
+        body, head = _font(26), _font(28, bold=True)
+        pad, row = 28, 42
         strip = 44 + row * max(len(objects), len(shown_regions), 1)
-        page = Image.new('RGB', (tile.width + 2 * pad, tile.height + 2 * pad + 34 + strip), BACKGROUND)
+        strip = 80 + row * max(len(objects), len(shown_regions), 1)
+        page = Image.new('RGB', (tile.width + 2 * pad, tile.height + 2 * pad + 64 + strip), BACKGROUND)
         draw = ImageDraw.Draw(page)
-        draw.text((pad, pad), f'{args.variant}  ·  {camera} camera', fill=INK, font=_font(19, bold=True))
-        page.paste(tile, (pad, pad + 34))
-        y0 = pad + 34 + tile.height + 14
+        draw.text((pad, pad), f'{args.variant}  ·  {camera} camera', fill=INK, font=_font(34, bold=True))
+        page.paste(tile, (pad, pad + 64))
+        y0 = pad + 64 + tile.height + 26
         draw.text((pad, y0), 'Objects (resolved region)', fill=INK, font=head)
         draw.text((pad + tile.width // 2, y0), 'Regions', fill=INK, font=head)
         for i, obj in enumerate(objects):
-            y = y0 + 30 + i * row
-            draw.rounded_rectangle([pad, y + 2, pad + 16, y + 18], radius=3, fill=object_colors[obj], outline=(60, 60, 60))
+            y = y0 + 52 + i * row
+            draw.rounded_rectangle([pad, y + 4, pad + 28, y + 32], radius=6, fill=object_colors[obj], outline=(60, 60, 60))
             region = regions.get(obj)
-            draw.text((pad + 26, y), f'{obj}  —  {planner_region_name(region) if region else "lid"}', fill=INK, font=body)
+            draw.text((pad + 44, y), f'{obj}  —  {planner_region_name(region) if region else "lid"}', fill=INK, font=body)
         if not objects:
-            draw.text((pad, y0 + 30), 'no task objects visible', fill=MUTED, font=body)
+            draw.text((pad, y0 + 52), 'no task objects visible', fill=MUTED, font=body)
         for i, region in enumerate(shown_regions):
-            y = y0 + 30 + i * row
+            y = y0 + 52 + i * row
             x = pad + tile.width // 2
-            draw.line([(x, y + 10), (x + 16, y + 10)], fill=region_colors[region], width=4)
-            draw.text((x + 26, y), planner_region_name(region), fill=INK, font=body)
+            draw.line([(x, y + 18), (x + 28, y + 18)], fill=region_colors[region], width=7)
+            draw.text((x + 44, y), planner_region_name(region), fill=INK, font=body)
         page.save(path)
 
     sensors = camera_sensors(env)
-    tag = _font(14, bold=True)
+    tag = _font(26, weight='SemiBold')
     rgb_tiles, sem_tiles, pixels = [], [], {}
     for name in CAMERAS:
         cam = sensors.get(name)
@@ -241,8 +270,10 @@ def main():
         if cam is None or mask is None:
             continue
         image = capture_rgb(cam)
+        big_size = (image.shape[1] * SCALE, image.shape[0] * SCALE)
         rgb_tiles.append((name, Image.fromarray(image)))
-        base = Image.fromarray(dimmed(image)).convert('RGBA')
+        base = Image.fromarray(dimmed(image)).resize(big_size, Image.LANCZOS).convert('RGBA')
+        mask = np.repeat(np.repeat(mask, SCALE, axis=0), SCALE, axis=1)
         overlay = Image.new('RGBA', base.size, (0, 0, 0, 0))
         odraw = ImageDraw.Draw(overlay)
         pixels[name] = {}
@@ -260,17 +291,42 @@ def main():
             corners = np.array([[x, y, z] for z in (lo[2], hi[2]) for x, y in
                                 ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))])
             uv, in_front = project(cam, corners)
+            uv = uv * SCALE
             if not in_front.all():
                 continue
             if uv[:, 0].max() < 0 or uv[:, 0].min() > base.width or uv[:, 1].max() < 0 or uv[:, 1].min() > base.height:
                 continue
             color = region_colors[region]
             bottom, top = [tuple(map(float, p)) for p in uv[:4]], [tuple(map(float, p)) for p in uv[4:]]
+            if region == TABLE_REGION:
+                # The whole table as the camera sees it (its segmentation pixels, so
+                # occluders stay on top): a soft fill and a contour, under everything else.
+                tmask = np.isin(mask, table_handles) if table_handles else np.zeros(mask.shape, bool)
+                table_layer = Image.new('RGBA', base.size, (0, 0, 0, 0))
+                if tmask.any():
+                    layer = np.zeros(tmask.shape + (4,), dtype=np.uint8)
+                    layer[tmask] = color + (55,)
+                    edge = outline(tmask)
+                    from scipy import ndimage
+                    edge = ndimage.binary_dilation(edge, iterations=2) & tmask
+                    layer[edge] = color + (230,)
+                    table_layer = Image.fromarray(layer, 'RGBA')
+                    ys, xs = np.nonzero(tmask)
+                    top_row = ys.min()
+                    anchor = (int(xs[ys <= top_row + 4].min()) + 16, int(top_row) + 60)
+                else:
+                    ImageDraw.Draw(table_layer).polygon(top, fill=color + (45,), outline=color + (220,))
+                    anchor = (24, base.height - 24)
+                overlay = Image.alpha_composite(table_layer, overlay)
+                odraw = ImageDraw.Draw(overlay)
+                region_tags.append((anchor, planner_region_name(region), color))
+                shown_regions.append(region)
+                continue
             odraw.polygon(top, fill=color + (70,))
             for ring in (bottom, top):
-                odraw.line(ring + [ring[0]], fill=color + (230,), width=2)
+                odraw.line(ring + [ring[0]], fill=color + (230,), width=4)
             for a, b in zip(bottom, top):
-                odraw.line([a, b], fill=color + (230,), width=2)
+                odraw.line([a, b], fill=color + (230,), width=4)
             region_tags.append((min(top, key=lambda q: q[1]), planner_region_name(region), color))
             shown_regions.append(region)
         # Objects on top: translucent fill, solid contour, 2D bounding box.
@@ -282,9 +338,9 @@ def main():
             fill[outline(hit)] = color + (255,)
             overlay = Image.alpha_composite(overlay, Image.fromarray(fill, 'RGBA'))
             box = main_blob_box(hit)
-            ImageDraw.Draw(overlay).rectangle(box, outline=color + (255,), width=2)
+            ImageDraw.Draw(overlay).rectangle(box, outline=color + (255,), width=4)
             object_tags.append(((box[0], box[1]), obj, color))
-            pixels[name][obj] = int(hit.sum())
+            pixels[name][obj] = int(hit.sum()) // (SCALE * SCALE)
         tile = Image.alpha_composite(base, overlay).convert('RGB')
         draw = ImageDraw.Draw(tile)
         placed = []
@@ -299,43 +355,43 @@ def main():
 
     def sheet(tiles, title, legend):
         w, h = tiles[0][1].size
-        pad, head, cap = 18, 64, 30
+        pad, head, cap = 30, 100, 52
         cols = 3
         rows = (len(tiles) + cols - 1) // cols
         width = cols * w + (cols + 1) * pad
         height = head + rows * (h + cap) + (rows + 1) * pad
         page = Image.new('RGB', (width, height), BACKGROUND)
         draw = ImageDraw.Draw(page)
-        draw.text((pad, 16), title, fill=INK, font=_font(24, bold=True))
+        draw.text((pad, 26), title, fill=INK, font=_font(44, bold=True))
         for i, (name, image) in enumerate(tiles):
             x = pad + (i % cols) * (w + pad)
             y = head + pad + (i // cols) * (h + cap + pad)
-            draw.text((x, y), name, fill=MUTED, font=_font(17, bold=True))
+            draw.text((x, y), name, fill=MUTED, font=_font(32, weight='SemiBold'))
             page.paste(image, (x, y + cap))
             draw.rectangle([x - 1, y + cap - 1, x + w, y + cap + h], outline=(210, 210, 210))
         if legend and len(tiles) < rows * cols:
-            x = pad + (len(tiles) % cols) * (w + pad) + 10
+            x = pad + (len(tiles) % cols) * (w + pad) + 20
             y = head + pad + (len(tiles) // cols) * (h + cap + pad)
             legend(draw, x, y)
         return page
 
     def legend(draw, x, y):
-        head, body = _font(17, bold=True), _font(16)
+        head, body = _font(34, bold=True), _font(30)
         draw.text((x, y), 'Objects  (resolved region)', fill=INK, font=head)
-        y += 32
+        y += 60
         for obj, color in object_colors.items():
-            draw.rounded_rectangle([x, y + 2, x + 18, y + 20], radius=3, fill=color, outline=(60, 60, 60))
+            draw.rounded_rectangle([x, y + 5, x + 34, y + 39], radius=6, fill=color, outline=(60, 60, 60))
             region = regions.get(obj)
-            draw.text((x + 30, y), obj, fill=INK, font=body)
-            draw.text((x + 150, y), planner_region_name(region) if region else '(lid)', fill=MUTED, font=body)
-            y += 28
-        y += 18
+            draw.text((x + 52, y), obj, fill=INK, font=body)
+            draw.text((x + 330, y), planner_region_name(region) if region else '(lid)', fill=MUTED, font=body)
+            y += 52
+        y += 30
         draw.text((x, y), 'Regions  (outlines)', fill=INK, font=head)
-        y += 32
+        y += 60
         for region, color in region_colors.items():
-            draw.line([(x, y + 11), (x + 18, y + 11)], fill=color, width=4)
-            draw.text((x + 30, y), planner_region_name(region), fill=INK, font=body)
-            y += 26
+            draw.line([(x, y + 21), (x + 34, y + 21)], fill=color, width=8)
+            draw.text((x + 52, y), planner_region_name(region), fill=INK, font=body)
+            y += 48
 
     sheet(rgb_tiles, f'{args.variant}  ·  camera images (initial state)', None).save(out / 'cameras_rgb.png')
     sheet(sem_tiles, f'{args.variant}  ·  what the pipeline sees: objects (segmentation) and regions', legend).save(

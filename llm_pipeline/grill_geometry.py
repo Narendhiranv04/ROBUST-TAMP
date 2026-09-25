@@ -12,6 +12,9 @@ MEAT_STATUS_PATTERN = re.compile(r"^(raw|cooked)\(([A-Za-z0-9_-]+)\)$")
 
 
 def _is_grill_meat(object_name: str) -> bool:
+    # Final variants label meats raw_meat_<n> / cooked_meat_<n>.
+    if re.match(r'^(raw|cooked)_meat(_\d+)?$', object_name or ''):
+        return True
     for prefix in MEAT_PREFIXES:
         suffix = object_name.removeprefix(prefix)
         if suffix != object_name and (not suffix or suffix.isdigit()):

@@ -384,10 +384,16 @@ class RLBenchKitchenEnv:
         except Exception:
             is_mug = False
 
-        def sample_clear_xy(min_x, max_x, min_y, max_y, grid_n, occ_pad_xy, occ_pad_z, mode="best"):
+        def sample_clear_xy(min_x, max_x, min_y, max_y, grid_n, occ_pad_xy, occ_pad_z, mode="best", exclude=(),
+                            keep=None):
             xs = np.linspace(min_x, max_x, grid_n).tolist()
             ys = np.linspace(min_y, max_y, grid_n).tolist()
             candidates = [(float(x), float(y)) for x in xs for y in ys]
+            if exclude or keep:
+                kept = [c for c in candidates
+                        if not any(r[0] <= c[0] <= r[2] and r[1] <= c[1] <= r[3] for r in exclude)
+                        and (keep is None or keep(c))]
+                candidates = kept or candidates
 
             occupied_xy = []
             seen_handles = set()
@@ -440,7 +446,8 @@ class RLBenchKitchenEnv:
                 ):
                     occupied_xy.append(np.array([ox, oy], dtype=float))
 
-            if occupied_xy:
+            if occupied_xy or exclude:
+                occupied_xy = occupied_xy or [np.array([1e3, 1e3])]
                 # Pick the candidate with maximum clearance to occupied objects.
                 def _clearance_score(xy):
                     p = np.array([xy[0], xy[1]], dtype=float)
@@ -461,6 +468,11 @@ class RLBenchKitchenEnv:
 
         is_box_region = region_name in { BOX_STORAGE_REGION}
         if is_box_region:
+            # Final variants: place only inside the box's placement area (x/y rectangle).
+            area = (getattr(self, 'placement_areas', None) or {}).get(BOX_STORAGE_REGION)
+            if area is not None:
+                w_min_x, w_max_x = max(w_min_x, area[0]), min(w_max_x, area[2])
+                w_min_y, w_max_y = max(w_min_y, area[1]), min(w_max_y, area[3])
             # In boxes, keep a small padding and bias to free XY to avoid unnecessary planner failures.
             box_padding = float(os.environ.get("BOX_REGION_SAMPLE_PADDING", "0.015"))
             # Keep the whole object footprint inside the box: pad by its half-extent
@@ -559,6 +571,49 @@ class RLBenchKitchenEnv:
             )
 
             # Keep the previous lower-cupboard Z behavior; only choose clearer XY.
+            sample_z = w_max_z + 0.005
+        elif region_name == 'table':
+            # Anywhere on the table except inside another region: the box (whose floor
+            # is at table height), the open box lid, the cupboard, and the placement areas.
+            # The transfer check tests 'table' against position + local bounding box
+            # (x -0.075..0.675 in the kitchen scenes); the table mesh itself is larger.
+            try:
+                t_min_x, t_max_x, t_min_y, t_max_y, _, _ = region.get_bounding_box()
+                t_x, t_y, _ = region.get_position()
+                w_min_x, w_max_x = max(w_min_x, t_x + t_min_x), min(w_max_x, t_x + t_max_x)
+                w_min_y, w_max_y = max(w_min_y, t_y + t_min_y), min(w_max_y, t_y + t_max_y)
+            except Exception:
+                pass
+            margin = 0.06
+            exclude = []
+            for other in (getattr(self, 'box_boundary', None), getattr(self, 'box', None),
+                          getattr(self, 'box_lid', None), getattr(self, 'cupboard_boundary', None),
+                          getattr(self, 'cupboard', None)):
+                if other is None:
+                    continue
+                try:
+                    bx0, bx1, by0, by1, _, _ = self._get_world_bounding_box(other)
+                except Exception:
+                    continue
+                exclude.append((bx0 - margin, by0 - margin, bx1 + margin, by1 + margin))
+            for area in (getattr(self, 'placement_areas', None) or {}).values():
+                exclude.append((area[0] - margin, area[1] - margin, area[2] + margin, area[3] + margin))
+            # Within the arm's comfortable reach: a ring around the robot base.
+            try:
+                rx, ry, _ = self.robot.get_position()
+            except Exception:
+                rx, ry = None, None
+            reach = None
+            if rx is not None:
+                reach_min, reach_max = 0.35, 0.62
+                reach = lambda c: reach_min <= float(np.hypot(c[0] - rx, c[1] - ry)) <= reach_max  # noqa: E731
+            sample_x, sample_y = sample_clear_xy(
+                w_min_x + padding, w_max_x - padding, w_min_y + padding, w_max_y - padding,
+                max(3, int(os.environ.get("TABLE_SAMPLE_GRID", "16"))),
+                float(os.environ.get("TABLE_OCCUPANCY_PAD_XY", "0.04")),
+                float(os.environ.get("TABLE_OCCUPANCY_PAD_Z", "0.12")),
+                mode="top_random", exclude=exclude, keep=reach,
+            )
             sample_z = w_max_z + 0.005
         else:
             sample_x = np.random.uniform(w_min_x + padding, w_max_x - padding)
@@ -1036,6 +1091,19 @@ class RLBenchKitchenEnv:
             for angle in angles:
                 q = quaternion_from_euler(np.pi, 0, angle)
                 grasp_quats.append(q)
+            # An elongated object (e.g. a phone lying flat) wider than the gripper
+            # opening in one direction: try first the grasps whose fingers close
+            # across its shorter side (the fingers close along the grasp frame's x axis).
+            ext_x, ext_y = (w_max_x - w_min_x), (w_max_y - w_min_y)
+            if abs(ext_x - ext_y) > 0.01 and max(ext_x, ext_y) > 0.07:
+                long_axis = np.array([1.0, 0.0, 0.0]) if ext_x > ext_y else np.array([0.0, 1.0, 0.0])
+
+                def _closing_alignment(q):
+                    x, y, z, w = q
+                    closing = np.array([1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)])
+                    return abs(float(np.dot(closing, long_axis)))
+
+                grasp_quats.sort(key=_closing_alignment)
             
             # 4. Iterate and Solve
             if adaptive_pick_mode:

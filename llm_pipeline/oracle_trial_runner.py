@@ -42,6 +42,10 @@ def _canonical_action(line: str) -> str:
 
 
 def load_gt_actions(variant_id: str) -> List[str]:
+    from evaluation.final_variants import get_final_variant, is_final_variant
+
+    if is_final_variant(variant_id):
+        return list(get_final_variant(variant_id).gt_actions)
     path = SEQUENCE_DIR / f'{variant_id.upper()}_gt_as_is.txt'
     actions = []
     for line in path.read_text(encoding='utf-8').splitlines():

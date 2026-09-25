@@ -237,20 +237,23 @@ class GrillBundlingHandler(AbstractBundlingHandler):
         if self.grill_gt is None:
             return None, target_region, gt_target_region, "Grill GT not available"
 
-        target_obj = self.env.get_object(obj_name)
+        scene_name = scene_object_for_object(obj_name, self.env)
+        target_obj = self.env.get_object(scene_name)
         if target_obj is None:
             return None, target_region, gt_target_region, f"Object {obj_name} not found"
 
         count = self.placed_counts.get(gt_target_region, 0)
         target_pose = None
         if not is_plate:
-            target_pose = self.grill_gt._region_slot_pose(self.env, target_obj, gt_target_region, slot_idx=count, slot_count=3)
+            slot_count = max(3, int(getattr(self.env, 'plate_slot_count', 3) or 3)) if gt_target_region == "plate-top" else 3
+            target_pose = self.grill_gt._region_slot_pose(self.env, target_obj, gt_target_region, slot_idx=count,
+                                                          slot_count=slot_count)
             self.placed_counts[gt_target_region] = count + 1
 
         gt_executor = self.grill_gt.GrillPrimitiveTransferExecutor(
             self.env,
             self.env.pr,
-            obj_name=obj_name,
+            obj_name=scene_name,
             target_region=gt_target_region,
             task_name=f"LLM Bundle: {obj_name} -> {target_region}",
             is_plate=is_plate,

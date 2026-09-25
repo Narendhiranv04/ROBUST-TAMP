@@ -2072,7 +2072,12 @@ class CupboardPrimitiveTransferExecutor(PrimitiveTransferExecutorBase):
         try:
             place_pose = self.env.find_best_placement(self.mug, self.target_region)
         except Exception:
-            place_pose = [0.0, 0.3, 0.77, 0, 0, 0, 1]
+            # No collision-free reachable spot found: fall back to the region's
+            # occupancy-aware sampler (the old fixed fallback (0.0, 0.3) is inside the box).
+            try:
+                place_pose = self.env.sample_stable_pose(self.mug, self.target_region)
+            except Exception:
+                place_pose = [0.0, 0.3, 0.77, 0, 0, 0, 1]
 
         min_x, _max_x, _min_y, _max_y, min_z, _max_z = self.mug.get_bounding_box()
         stable_table_pose = None

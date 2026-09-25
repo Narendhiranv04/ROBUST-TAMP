@@ -1,6 +1,6 @@
 # Final variant set (plan.md Phase 3)
 
-**Status: for approval.** No scene file will change until you approve this document. Section 7 lists the decisions needed from you: plan.md Section 10, questions Q2–Q6 and Q12.
+**Status: approved, built.** Section 7 records the decisions (plan.md Section 10, Q2–Q6 and Q12). The registry is `evaluation/final_variants.py`, the scenes are `mujoco_port/scenes/final_<name>/` (built by `mujoco_port/tools/compose_variant.py`), and variant ids are `FINAL.<name>` (`--variant final.K1`).
 
 Terminology follows plan.md 0.6. Region names are the canonical internal ones; prompt v2 shows `table_staging_area` as `table_center_area`, `pantry_area` as `table_right_area` and `prep_area` as `grill_side_area`.
 
@@ -44,11 +44,11 @@ Executor ceiling today: 60/60 oracle trials (`results/executor_ceiling/`).
 
 In K3 today, spam starts in the cupboard. In the base layout it moves to the table, so it becomes independent work.
 
-**Grill base layout.** Derived from G2 and G3:
-- two raw meats beside the grill (`raw_meat_1`, `raw_meat_2` on prep_area; these are today's chicken and steak1);
+**Grill base layout.** Derived from G2 (`grill_variation2`, steak and steak1 removed; Q12):
+- exactly one raw meat beside the grill (`raw_meat_1` on prep_area; today's chicken);
 - `plate` in the dish_rack.
 
-So a cooking cycle is always required (plan.md 3.2).
+So a cooking cycle is always required (plan.md 3.2), and up to three hidden meats fit in the grill's far slots.
 
 **Labels.**
 - Meats are renamed `raw_meat_<n>` or `cooked_meat_<n>`. They keep today's meshes: the drumstick for `raw_meat_1`, and steak meshes for the others.
@@ -64,10 +64,10 @@ A *placement area* is the part of a region that the remaining plan's `place` act
 | Region | Proposed placement area | Rest of the region | Why |
 |---|---|---|---|
 | `inside_box` | robot-side half of the interior: x ∈ [−0.054, 0.111], y ∈ [0.187, 0.473] (16.5 × 28.6 cm, room for 4 mugs at their footprint) | far half x ∈ [0.111, 0.276]: used for *non-overlapping* hidden objects | K2/K4 need a place inside the box where a hidden object does not block mug placements |
-| `inside_grill` | the two grill slots nearest the robot: y ∈ [−0.343, −0.20] | y ∈ [−0.20, −0.112]: where hidden meats are placed | plan.md: meat revealed in the grill is always non-overlapping |
+| `inside_grill` | the single grill slot nearest the robot: x ∈ [0.287, 0.352], y ∈ [−0.189, −0.112]; the executor places every meat at (0.3195, −0.150) | y ∈ [−0.343, −0.189]: the far slots, where hidden meats are placed (2 meats at y = −0.300, −0.237; 3 at −0.316, −0.264, −0.212) | plan.md: meat revealed in the grill is always non-overlapping (Q12) |
 | `plate_top`, `cupboard_shelf`, `table_staging_area` | whole region | — | no hidden objects there |
 
-The kitchen executor's box sampler is restricted to the placement area (build item B3), and the grill slot poses already lie in the proposed band. An automated test (B6) checks each hidden object's overlap status against its spec.
+The kitchen executor's box sampler is restricted to the placement area (`env.placement_areas`, `rlbench_kitchen_env.sample_stable_pose`), and the grill executor places into the fixed placement pose (`env.placement_poses`, `_region_slot_pose`). An automated check (`python -m evaluation.check_final_variants`) tests each hidden object's overlap status against its spec, footprint against placement area.
 
 ## 4. Variant specs
 
@@ -79,7 +79,7 @@ Two IF decisions come up repeatedly:
 
 Hard-constraint keys:
 - **HC-box:** the trigger objects are out of the box placement area before the next `place` into the box.
-- **HC-grill:** every `cooked_meat` is out of the grill before the next `close(grill_lid)`.
+- **HC-grill:** every `cooked_meat` is out of the grill before the next `close(grill_lid)`. Where it goes is the planner's choice (Q2); the goal still requires it on the plate at the end.
 - **HC-raw:** every `raw_meat` completes one cooking cycle before it is plated.
 
 ### Family A: basic
@@ -93,8 +93,8 @@ Hard-constraint keys:
 
 **G0**
 - **Proves:** the grill reference, i.e. the normal cook-and-serve procedure without a replan.
-- **Hidden:** none; the grill opens empty. Adapted from G2 by removing the steak.
-- **R:** raw_meat_1, raw_meat_2 → plate_top; plate → serving_area. **P:** raw_meat_1 and raw_meat_2 each cooked, not overcooked, not served raw.
+- **Hidden:** none; the grill opens empty.
+- **R:** raw_meat_1 → plate_top; plate → serving_area. **P:** raw_meat_1 cooked, not overcooked, not served raw.
 - **IF:** no replan. **Urgency:** —. **Constraints:** HC-raw.
 - **Success:** R and P satisfied.
 
@@ -103,9 +103,9 @@ Hard-constraint keys:
 **K1**
 - **Proves:** an irrelevant object triggers a replan only when it overlaps, and it must be cleared before any mug goes in.
 - **Hidden:** phone inside the box, **overlapping** (centre in the placement area, e.g. (0.03, 0.33)). The phone is a new asset for the kitchen scene, taken from the grill scene.
-- **R:** base R, plus the phone ends outside the box placement area. **P:** none.
+- **R:** base R, plus the phone ends outside every region's placement area (anywhere else; the planner decides, Q3). **P:** none.
 - **IF:** IF-irr for the phone. **Urgency:** phone `urgent`.
-- **Reference sub-plan:** `pick(phone)`, `place(phone, <region outside the placement area>)` (Q3).
+- **Reference sub-plan (oracle):** `pick(phone)`, `place(phone, table)`. Any region outside every placement area is accepted (Q3).
 - **Constraints:** HC-box. **Success:** R satisfied and HC-box respected.
 
 **K2**
@@ -132,23 +132,23 @@ Hard-constraint keys:
 
 **G1**
 - **Proves:** all corrective actions are urgent: stop and take both cooked meats out before continuing.
-- **Hidden:** `cooked_meat_1` and `cooked_meat_2` inside the grill, outside its placement area. Adapted from G3: the phone is removed, and the steak plus a second steak become cooked_meat_1/2.
-- **R:** all 4 meats → plate_top; plate → serving_area. **P:** each meat cooked, not overcooked, not served raw.
+- **Hidden:** `cooked_meat_1` and `cooked_meat_2` inside the grill, in the far slots (outside the placement area).
+- **R:** all 3 meats → plate_top; plate → serving_area. **P:** each meat cooked, not overcooked, not served raw; HC-grill for each cooked meat.
 - **IF:** IF-rel for both. **Urgency:** both `urgent`.
 - **Reference sub-plan:** take both out (to the plate or elsewhere, Q2) before the next close.
 - **Constraints:** HC-grill, HC-raw. **Success:** R and P.
 
 **G2**
 - **Proves:** one replan with split urgency: the cooked meat comes out now, the raw meat stays to be cooked.
-- **Hidden:** `cooked_meat_1` and `raw_meat_3` inside the grill. Adapted from G2: the steak becomes cooked_meat_1, and a raw meat is added.
-- **R:** all 4 meats → plate_top; plate → serving_area. **P:** as G1.
-- **IF:** IF-rel for both. **Urgency:** cooked_meat_1 `urgent`; raw_meat_3 `deferred`.
+- **Hidden:** `cooked_meat_1` and `raw_meat_2` inside the grill, in the far slots.
+- **R:** all 3 meats → plate_top; plate → serving_area. **P:** as G1.
+- **IF:** IF-rel for both. **Urgency:** cooked_meat_1 `urgent`; raw_meat_2 `deferred`.
 - **Constraints:** HC-grill, HC-raw. **Success:** R and P.
 
 **G3**
 - **Proves:** a replan with no urgency: the raw meat stays, is cooked in the normal cycle and is served later.
-- **Hidden:** `raw_meat_3` and `raw_meat_4` inside the grill.
-- **R:** all 4 meats → plate_top; plate → serving_area. **P:** as G1.
+- **Hidden:** `raw_meat_2` and `raw_meat_3` inside the grill, in the far slots.
+- **R:** all 3 meats → plate_top; plate → serving_area. **P:** each meat cooked, not overcooked, not served raw.
 - **IF:** IF-rel for both. **Urgency:** both `deferred`.
 - **Constraints:** HC-raw. **Success:** R and P.
 
@@ -175,8 +175,10 @@ Each sweep changes exactly one count, and everything else equals the core varian
 | Variant | Hidden | Extra groceries on the table (→ cupboard) | w |
 |---|---|---|---|
 | K1 | overlapping phone | 0 | 0 |
-| K1-w2 | same | +2 | 2 |
-| K1-w4 | same | +4 | 4 |
+| K1-w1 | same | +1 (`can_of_beans` on the table) | 1 |
+| K1-w2 | same | +2 (`can_of_beans`, `can_of_beans_2`) | 2 |
+
+(Reduced from w = 0, 2, 4 by Q12: the cupboard shelf holds about 4 groceries.)
 
 The extra groceries go to the cupboard, so they don't touch the phone's replan (box, phone, region outside the placement area).
 
@@ -198,37 +200,35 @@ The extra groceries go to the cupboard, so they don't touch the phone's replan (
 
 One variant covers each point in families A and B, and one family covers each trend.
 
-## 6. Old → new mapping and feasibility
+## 6. How each variant is built
 
-| Final | Built from | Change |
+All kitchen variants start from `task1_variation3` with the soup removed from the box and spam moved to the table at (0.27, −0.35); all grill variants start from `grill_variation2` with steak and steak1 removed. Edits are listed in `evaluation/final_variants.py` and applied by `compose_variant.py` (remove, move, or copy an object subtree from any extracted scene with new handles, names, geometry keys and textures). The source `.ttt` files are untouched.
+
+| Final | Edits on the base | Scene objects → labels |
 |---|---|---|
-| K0 | K1 (`task1_variation1`) + K3 table layout | remove the soup from the box; base layout on the table |
-| K1 / K2 | K0 | add a phone (asset from the grill scene) inside the box, in or outside the placement area |
-| K3 / K4 | K0 | the soup in the box, in or outside the placement area (K3 = today's K1 position) |
-| K3-n2 / K3-n3 | K3 | 1 or 2 more cans in the placement area |
-| K1-w2 / K1-w4 | K1 | +2 or +4 groceries on the table |
-| G0 | G2 (`grill_variation2`) | remove the steak; relabel chicken/steak1 → raw_meat_1/2 |
-| G1 / G1-n1 / G1-n3 | G3 (`grill_variation3`) | remove the phone; 2, 1 or 3 cooked_meat in the grill |
-| G2 | G2 | steak → cooked_meat_1; add raw_meat_3 in the grill |
-| G3 | G0 | add raw_meat_3 and raw_meat_4 in the grill |
+| K0 | — | mug1–3, spam, sugar |
+| K1 / K2 | phone copied from `grill_variation1` to (0.03, 0.33) / (0.20, 0.33) on the box floor | + phone |
+| K3 / K4 | soup moved to (0.07, 0.33) / (0.20, 0.33) | + soup → can_of_beans |
+| K3-n2 | soup at (0.02, 0.26), copy soup2 at (0.02, 0.40) | + can_of_beans, can_of_beans_2 |
+| K3-n3 | as K3-n2, plus soup3 at (0.075, 0.33) | + can_of_beans_3 |
+| K1-w1 / K1-w2 | K1, plus soup on the table at (−0.10, −0.36) / plus soup2 at (0.42, −0.30) | + can_of_beans (, can_of_beans_2) |
+| G0 | — | chicken → raw_meat_1, plate |
+| G1 | steak moved and steak2 copied into the far slots | + cooked_meat_1, cooked_meat_2 |
+| G2 | steak and steak1 into the far slots | + cooked_meat_1, raw_meat_2 |
+| G3 | steak and steak2 into the far slots | + raw_meat_2, raw_meat_3 |
+| G1-n1 | steak into the far slot | + cooked_meat_1 |
+| G1-n3 | steak, steak2, steak3 into the three far slots | + cooked_meat_1–3 |
 
-Old variants K1–K3 and G1–G3 stay in the repository, and in the executor-ceiling and GT runs, for regression only (Q5).
+Scene objects keep the names the executor knows. The planner, the trial log and the evaluator use the labels (`llm_pipeline/object_aliases.set_variant_labels`). Old variants K1–K3 and G1–G3 stay in the repository for regression only and are not reported (Q5).
 
-Physical feasibility estimates, to be verified by the build tests:
-- **Box, K3-n3:** 3 cans (5.5 cm) in the 16.5 × 28.6 cm placement area, then 3 mugs after the cans are removed. **Fits.**
-- **Grill, G1-n3:** 3 cooked meats (10.5 × 5 cm) in the grill's 6.5 × 23 cm interior, with the band outside the placement area (7–9 cm long) holding at most 2. **Does not fit as specified.**
-  - Option (a): allow hidden meats in the placement area for G1-n3 only. Meat is always relevant, so overlap does not change its IF decision.
-  - Option (b): reduce the sweep to n = 1, 2.
-- **Cupboard, K1-w4:** the base groceries (spam, sugar) plus 4 extra on a 9.3 × 37 cm single-row shelf is about 6 items of 3.5–10 cm. **At the limit.** The upper shelf is only 1.6 cm deep in its bounding box, so it's unusable. Option: w = 0, 1, 2 (or 0, 2, 3).
+## 7. Decisions (answered)
 
-## 7. Decisions needed
-
-1. **Q2:** where urgently removed `cooked_meat` goes in G1/G2: directly onto the plate in the serving area, or any region outside the grill? This decides the reference sub-plans and HC-grill only; the planner is not told.
-2. **Q3:** where the phone may go in K1: any region outside the box placement area, or a specific one (e.g. `table`)?
-3. **Q4:** the placement areas in section 3 (the robot-side half of the box; the two nearest grill slots), and the hidden-object positions in section 4.
-4. **Q5:** keep today's K1–K3 and G1–G3 for regression only (default), or report them too?
-5. **Q6:** add a variant for the "goal-attained object → no replan" branch? Today's K2 has mug1 already in the box and K3 has spam already in the cupboard, so one is easy to derive. Default: no.
-6. **Q12:** the base-layout counts (3 mugs; spam and sugar on the table) and the sweeps: C1 grill as n = 1, 2, 3 with option (a), or n = 1, 2; C2 as w = 0, 2, 4, or reduced to w = 0, 1, 2.
+1. **Q2:** a cooked meat removed urgently may go anywhere outside the grill; the planner decides. Evaluator: HC-grill (out of the grill before the next `close(grill_lid)`) plus the goal (on the plate at the end).
+2. **Q3:** the phone may go anywhere outside the box's placement area, but not into any other region's placement area; the planner decides.
+3. **Q4:** placement areas approved, with the grill area changed to the single nearest slot (Q12). Verify with the oracle that in K2 and K4 all mugs fit in the box without moving the hidden object.
+4. **Q5:** today's K1–K3 and G1–G3 for regression only, not reported.
+5. **Q6:** no goal-attained variant.
+6. **Q12:** grill placement area = the single slot nearest the robot for every grill variant; exactly one raw meat outside the grill in the base layout, so G1-n3's three hidden meats fit in the far slots (if not, cut the sweep to n = 1, 2). C2 is w = 0, 1, 2.
 
 ## 8. Build plan after approval
 

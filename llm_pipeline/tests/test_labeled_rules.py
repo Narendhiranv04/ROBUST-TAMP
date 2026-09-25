@@ -82,9 +82,45 @@ def test_grill_goal_counts_relations_and_procedures_per_meat() -> None:
     )
     assert result['success'] is False
     assert result['required_relation_count'] == 3 and result['satisfied_relation_count'] == 3
-    assert result['required_procedure_count'] == 2 and result['satisfied_procedure_count'] == 1
-    assert result['partial_goal_completion'] == pytest.approx(4 / 5)
+    # procedures: raw_meat_1 ok; cooked_meat_1 overcooked; HC-grill for cooked_meat_1 violated
+    assert result['required_procedure_count'] == 3 and result['satisfied_procedure_count'] == 1
+    assert result['partial_goal_completion'] == pytest.approx(4 / 6)
     assert result['details']['procedures']['cooked_meat_1']['overcooked'] is True
+    assert any(m.startswith('HC-grill violated: cooked_meat_1') for m in result['missing_procedures'])
+
+
+def test_cooked_meat_may_leave_the_grill_to_any_region_before_the_close() -> None:
+    history = [OPEN, 'pick(cooked_meat_1)', 'place(cooked_meat_1, table)', 'pick(raw_meat_1)',
+               'place(raw_meat_1, inside_grill)', CLOSE, OPEN, 'pick(raw_meat_1)', 'place(raw_meat_1, plate_top)',
+               'pick(cooked_meat_1)', 'place(cooked_meat_1, plate_top)', 'pick(plate)', 'place(plate, serving_area)']
+    result = validate_labeled_goal(
+        'grill', 'FINAL.G1-n1',
+        object_region_map={'raw_meat_1': 'plate_top', 'cooked_meat_1': 'plate_top', 'plate': 'serving_area'},
+        completed_actions=history,
+        initial_object_region_map={'raw_meat_1': 'prep_area', 'cooked_meat_1': 'inside_grill', 'plate': 'dish_rack'},
+    )
+    assert result['success'] is True, result['missing']
+
+
+def test_box_constraint_requires_the_trigger_cleared_before_any_other_place_into_the_box() -> None:
+    final = {'mug1': 'inside_box', 'can_of_beans': 'cupboard_shelf'}
+    initial = {'mug1': 'table', 'can_of_beans': 'inside_box'}
+    good = ['open(box_lid)', 'pick(can_of_beans)', 'place(can_of_beans, cupboard_shelf)',
+            'pick(mug1)', 'place(mug1, inside_box)']
+    bad = ['open(box_lid)', 'pick(mug1)', 'place(mug1, inside_box)',
+           'pick(can_of_beans)', 'place(can_of_beans, cupboard_shelf)']
+    ok = validate_labeled_goal('kitchen', 'FINAL.K3', final, good, initial, box_trigger_objects=['can_of_beans'])
+    assert ok['success'] is True
+    violated = validate_labeled_goal('kitchen', 'FINAL.K3', final, bad, initial, box_trigger_objects=['can_of_beans'])
+    assert violated['success'] is False and violated['missing_relation_count'] == 0
+    assert violated['missing_procedures'] == ['HC-box violated: mug1 placed into the box before can_of_beans was cleared']
+
+
+def test_phone_must_not_end_in_any_placement_area() -> None:
+    final = {'mug1': 'inside_box', 'phone': 'inside_grill'}
+    result = validate_labeled_goal('kitchen', 'FINAL.K1', final, [], {'phone': 'inside_box'},
+                                   {'inside_box': ['mug1'], 'inside_grill': ['phone']})
+    assert 'phone is in the inside_grill placement area' in result['missing_relations']
 
 
 def test_kitchen_phone_must_not_be_in_the_box_placement_area() -> None:
@@ -99,8 +135,9 @@ def test_kitchen_phone_must_not_be_in_the_box_placement_area() -> None:
         validate_labeled_goal('kitchen', 'K1', final, [], initial, None)
 
 
-def test_labeled_rules_are_not_used_for_todays_variants() -> None:
+def test_labeled_rules_are_used_for_the_final_variants_only() -> None:
     assert not LABELED_RULE_VARIANTS & {'K1', 'K2', 'K3', 'G1', 'G2', 'G3'}
+    assert len(LABELED_RULE_VARIANTS) == 14 and 'FINAL.G1-N1' in LABELED_RULE_VARIANTS
 
 
 def test_metric_definitions_follow_plan_formulas() -> None:

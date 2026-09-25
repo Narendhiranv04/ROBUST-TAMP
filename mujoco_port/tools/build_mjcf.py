@@ -51,7 +51,7 @@ GRIPPER_JOINTS = ['Panda_gripper_joint1', 'Panda_gripper_joint2']
 # Task objects that the GT/LLM executors pick, carry, re-parent or drop.
 MOVABLE_PATTERNS = [
     r'^mug\d*$',
-    r'^(spam|soup|sugar|mustard|crackers|tuna|coffee|strawberry_jello|chocolate_jello)$',
+    r'^(spam|soup|sugar|mustard|crackers|tuna|coffee|strawberry_jello|chocolate_jello)\d*$',
     r'^(steak|chicken)\d*$',
     r'^plate$',
     r'^phone$',

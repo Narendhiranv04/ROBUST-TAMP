@@ -45,6 +45,26 @@ MOVABLE_OBJECTS: Dict[str, tuple] = {
 }
 
 
+# Final variants (evaluation/final_variants.py): the table objects are free; the
+# cupboard mug, the plate and every hidden object keep their pose.
+FINAL_KITCHEN_FREE = ('spam', 'sugar', 'mug1', 'mug2')
+
+
+def _variant_objects(variant: str):
+    from evaluation.final_variants import get_final_variant, is_final_variant
+
+    if not is_final_variant(variant):
+        return FREE_OBJECTS.get(variant, ()), MOVABLE_OBJECTS.get(variant, ())
+    spec = get_final_variant(variant)
+    hidden = {scene for scene, label in spec.labels.items() if label in {h.label for h in spec.hidden}}
+    movable = tuple(sorted(set(spec.labels) | ({'plate'} if spec.scene == 'grill' else set())))
+    if spec.scene == 'grill':
+        free = ('chicken',)
+    else:
+        free = FINAL_KITCHEN_FREE + tuple(sorted(s for s in spec.labels if s.startswith('soup') and s not in hidden))
+    return free, movable
+
+
 def _lookup(env, name):
     return (getattr(env, 'name_to_obj', {}) or {}).get(name)
 
@@ -98,9 +118,10 @@ def apply_pose_jitter(env, variant_id: str, seed: int, xy_range: float = XY_RANG
         'mode': 'pose_jitter', 'seed': int(seed), 'xy_range_m': xy_range, 'yaw_range_deg': yaw_range_deg,
         'objects': {}, 'fixed': [],
     }
-    movable = [(name, _lookup(env, name)) for name in MOVABLE_OBJECTS.get(variant, ())]
+    free_names, movable_names = _variant_objects(variant)
+    movable = [(name, _lookup(env, name)) for name in movable_names]
     movable = [(name, obj) for name, obj in movable if obj is not None]
-    free = [name for name in FREE_OBJECTS.get(variant, ())]
+    free = list(free_names)
     record['fixed'] = [name for name, _ in movable if name not in free]
     for name in free:
         obj = _lookup(env, name)

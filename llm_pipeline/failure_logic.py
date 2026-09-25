@@ -15,7 +15,7 @@ from llm_pipeline.pipeline_types import (
 )
 from llm_pipeline.region_aliases import normalize_region_name, regions_match_for_target, scene_object_for_region
 from llm_pipeline.failures import FailureCode, LAYER_1_FAILURE_CODES, LAYER_2_FAILURE_CODES
-from llm_pipeline.object_aliases import canonical_object_name
+from llm_pipeline.object_aliases import canonical_object_name, scene_object_for_object
 
 
 # Legacy layer sets (record.json ``failure_layer``), derived from the shared enum.
@@ -557,7 +557,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
 
         if action.action_name == 'pick':
             obj_name = action.args[0]
-            obj_pose = detector.get_object_pose(obj_name)
+            obj_pose = detector.get_object_pose(scene_object_for_object(obj_name, self.env))
             if not obj_pose:
                 return FailureEvent(
                     failure_id=FailureCode.GEOMETRIC_DISCOVERY_FAIL,
@@ -598,7 +598,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
             obj_name = action.args[0]
             detector = getattr(self.adapter, 'detector', None)
             if detector:
-                obj_pose = detector.get_object_pose(obj_name)
+                obj_pose = detector.get_object_pose(scene_object_for_object(obj_name, self.env))
                 # If object is too far from gripper, it's a grasp failure
                 if obj_pose:
                     # Logic here would involve robot flange pos, simplified for now
@@ -615,7 +615,7 @@ class GeometricFailureChecker(SegmentationFirstFailureChecker):
 
             detector = getattr(self.adapter, 'detector', None)
             if detector:
-                obj_pose = detector.get_object_pose(obj_name)
+                obj_pose = detector.get_object_pose(scene_object_for_object(obj_name, self.env))
                 scene_name = scene_object_for_region(region_name)
                 region_pose = detector.get_object_pose(scene_name)
                 

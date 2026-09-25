@@ -13,8 +13,13 @@ plan.md Phase 1, step 4, with the decisions from Section 10:
 * A ``raw_meat`` placed on the plate before its cycle ("served raw") fails its
   procedure check.
 * Goal: every meat on the plate, the plate in the serving area, every mug in
-  the box, every grocery in the cupboard. The phone must not be in the box's
-  placement area at the end (anywhere else is fine).
+  the box, every grocery in the cupboard. The phone must not be in any
+  region's placement area at the end (anywhere else is fine; Q3).
+* Hard constraints (docs/VARIANTS.md): HC-grill, every cooked meat is out of
+  the grill at every ``close(grill_lid)`` (a removed cooked meat may go anywhere
+  outside the grill; Q2); HC-raw, a raw meat is not plated before its cycle
+  (the served-raw check); HC-box, every overlapping trigger object in the box
+  is picked before any other object is placed into the box.
 
 These rules apply only to variants listed in :data:`LABELED_RULE_VARIANTS`
 (the Phase 3 scene files); today's scenes keep ``llm_pipeline.metrics``
@@ -33,7 +38,13 @@ from llm_pipeline.metrics import _normalize_region, _normalize_token, _validator
 
 # Variant ids evaluated with these rules. Filled in Phase 3 when the final scene
 # files exist; until then every variant uses llm_pipeline.metrics.
-LABELED_RULE_VARIANTS: Set[str] = set()
+def _final_variant_ids() -> Set[str]:
+    from evaluation.final_variants import FINAL_VARIANTS
+
+    return set(FINAL_VARIANTS)
+
+
+LABELED_RULE_VARIANTS: Set[str] = _final_variant_ids()
 
 GRILL_LID = 'grill_lid'
 INSIDE_GRILL = 'inside_grill'
@@ -75,6 +86,7 @@ class MeatProcedureStatus:
     cooked: bool = False
     overcooked: bool = False
     served_raw: bool = False
+    cooked_inside_at_close: bool = False       # HC-grill
     events: List[str] = field(default_factory=list)
 
     @property
@@ -126,6 +138,9 @@ def meat_procedure_status(
                 status.events.append(f'served raw: {raw}')
         elif name == 'close_lid' and target == GRILL_LID:
             inside_at_close = inside
+            if inside and level >= 1:
+                status.cooked_inside_at_close = True
+                status.events.append(f'cooked and inside the grill at: {raw}')
         elif name in ('open_lid', 'open_grill') and target == GRILL_LID and inside_at_close is not None:
             if inside_at_close:
                 if level >= 1:
@@ -145,13 +160,15 @@ def validate_labeled_goal(
     completed_actions: Sequence[object],
     initial_object_region_map: Mapping[str, str],
     placement_area_objects: Optional[Mapping[str, Iterable[str]]] = None,
+    box_trigger_objects: Sequence[str] = (),
 ) -> Dict[str, object]:
     """Goal relations and procedure checks for a Phase 3 variant.
 
     ``object_region_map`` / ``initial_object_region_map``: ground-truth final and
     initial regions of every object in the scene. ``placement_area_objects``:
     region -> objects whose footprint is in that region's placement area at the
-    end (needed when a phone is present).
+    end (needed when a phone is present). ``box_trigger_objects``: hidden objects
+    that start in the box placement area (HC-box).
     """
     scene = str(scene).strip().lower()
     if scene not in SCENE_GOAL_CATEGORIES:
@@ -183,12 +200,21 @@ def validate_labeled_goal(
     if phones:
         if placement_area_objects is None:
             raise ValueError('placement_area_objects is required when a phone is present')
-        in_box_area = {_normalize_token(name) for name in (placement_area_objects.get('inside_box') or ())}
         for name in phones:
-            if name in in_box_area:
-                missing_relations.append(f'{name} is in the inside_box placement area')
+            areas = sorted(region for region, names in placement_area_objects.items()
+                           if name in {_normalize_token(n) for n in (names or ())})
+            if areas:
+                missing_relations.append(f'{name} is in the {", ".join(areas)} placement area')
             else:
-                satisfied_relations.append(f'{name} not in inside_box placement area')
+                satisfied_relations.append(f'{name} not in any placement area')
+
+    for name in box_trigger_objects:
+        name = _normalize_token(name)
+        violation = box_constraint_violation(name, completed_actions)
+        if violation:
+            missing_procedures.append(violation)
+        else:
+            satisfied_procedures.append(f'HC-box: {name} cleared before any other object was placed into the box')
 
     for name in all_objects:
         category = object_category(name)
@@ -208,6 +234,13 @@ def validate_labeled_goal(
             satisfied_procedures.append(check)
         else:
             missing_procedures.append(status.failure_reason())
+        if category == 'cooked_meat':
+            hc = f'HC-grill: {name} out of the grill at every close(grill_lid) after it was cooked'
+            if status.cooked_inside_at_close:
+                missing_procedures.append(f'HC-grill violated: {name} inside the grill at close(grill_lid) after it was cooked')
+            else:
+                satisfied_procedures.append(hc)
+        procedure_details[name]['cooked_inside_at_close'] = status.cooked_inside_at_close
 
     return _validator_result(
         str(variant_id).strip().upper(),
@@ -224,11 +257,27 @@ def validate_labeled_goal(
     )
 
 
+def box_constraint_violation(trigger: str, completed_actions: Sequence[object]) -> Optional[str]:
+    """HC-box: ``trigger`` must be picked before another object is placed into the box."""
+    for raw in completed_actions:
+        action = parse_action_string(raw) if not isinstance(raw, dict) else raw
+        if action is None:
+            continue
+        args = list(action.get('args') or [])
+        if action.get('action') == 'pick' and args and args[0] == trigger:
+            return None
+        if (action.get('action') == 'place' and len(args) >= 2 and args[0] != trigger
+                and _normalize_region(args[1]) == 'inside_box'):
+            return f'HC-box violated: {args[0]} placed into the box before {trigger} was cleared'
+    return f'HC-box violated: {trigger} never cleared from the box placement area'
+
+
 def uses_labeled_rules(variant_id: str) -> bool:
     return str(variant_id or '').strip().upper() in LABELED_RULE_VARIANTS
 
 
 __all__ = [
+    'box_constraint_violation',
     'CATEGORY_GOAL_REGIONS',
     'LABELED_RULE_VARIANTS',
     'MeatProcedureStatus',
