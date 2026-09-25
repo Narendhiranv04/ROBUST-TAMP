@@ -91,8 +91,9 @@ def test_default_flags_match_plan_section_0_7() -> None:
         'parallel.enabled': 'false',
         'termination.mode': 'agent',
         'prompt.version': 'v2',
+        'grasp.confirmation': 'gripper_state',
+        'scene.randomization': 'pose_jitter',
     }
-    assert [spec.name for spec in FLAG_SPECS][-2:] == ['termination.mode', 'prompt.version']
 
 
 def test_flags_parse_cli_assignments() -> None:

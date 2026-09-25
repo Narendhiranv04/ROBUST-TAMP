@@ -22,7 +22,7 @@ from llm_pipeline.planner import TextLLMPlanner
 from llm_pipeline.prompt_builder import TextOnlyContextBuilder
 from llm_pipeline.quantization import normalize_quantization
 from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
-from llm_pipeline.strict_parser import StrictActionParser
+from llm_pipeline.strict_parser import StrictActionParser, split_reasoning
 from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_region
 from llm_pipeline.region_geometry import resolve_object_regions
 from llm_pipeline.grill_geometry import (
@@ -103,6 +103,8 @@ class LLMPipelineConfig:
     context_builder_type: str = 'geometric'  # IMPROVED ACCURACY: Default to 3D geometric reasoning
     # plan.md Section 0.7 flags (termination.mode, prompt.version, ...).
     flags: PipelineFlags = field(default_factory=PipelineFlags)
+    # Trial seed; with scene.randomization=pose_jitter it seeds the initial-pose jitter.
+    seed: Optional[int] = None
 
     def resolve_model_name(self) -> Tuple[str, str]:
         model_type = (self.model_type or ('vlm' if self.enable_vision else 'llm')).strip().lower()
@@ -266,6 +268,8 @@ class LLMOnlyReplanningPipeline:
             self.executor.set_event_sink(self._log_executor_event)
         if hasattr(self.executor, 'set_bundle_end_callback'):
             self.executor.set_bundle_end_callback(self._on_bundle_end)
+        if hasattr(self.failure_checker, 'grasp_confirmation'):
+            self.failure_checker.grasp_confirmation = self.config.flags.grasp_confirmation
         if not isinstance(self.failure_checker, LoggingFailureChecker):
             self.failure_checker = LoggingFailureChecker(
                 self.failure_checker,
@@ -315,6 +319,14 @@ class LLMOnlyReplanningPipeline:
         if not getattr(self.planner, 'loaded', False):
             if not self.planner.load_model():
                 return False
+
+        self.randomization_record = None
+        if self.config.flags.scene_randomization == 'pose_jitter' and self.config.seed is not None:
+            from llm_pipeline.randomization import apply_pose_jitter
+
+            variant_id = self._variant_id_for_goal_check()
+            self.randomization_record = apply_pose_jitter(env, variant_id, self.config.seed)
+            print(f'[RANDOMIZE] seed={self.config.seed} {self.randomization_record["objects"]}')
 
         self.reset_episode_state()
         self._settle_environment()
@@ -525,6 +537,8 @@ class LLMOnlyReplanningPipeline:
         planner_parser = getattr(self.planner, 'parser', None)
         if planner_parser is not None and hasattr(planner_parser, 'set_observed_objects'):
             planner_parser.set_observed_objects(self.observed_objects())
+        if planner_parser is not None and hasattr(planner_parser, 'require_final_marker'):
+            planner_parser.require_final_marker = self.config.flags.prompt_version == 'v2'
 
         # 2. Build prompt bundle via modular context builder. Completed actions come from
         # the executor's cumulative list; concatenating per-cycle lists duplicated them.
@@ -621,6 +635,7 @@ class LLMOnlyReplanningPipeline:
             prompt_path=prompt_path,
             image_present=bool(bundle.images),
             raw_output=result.raw_output,
+            reasoning=split_reasoning(result.raw_output)[0],
             parsed_output=parsed,
             planner_call_latency_s=float(result.inference_time or 0.0),
             wall_latency_s=round(float(wall_latency_s), 4),

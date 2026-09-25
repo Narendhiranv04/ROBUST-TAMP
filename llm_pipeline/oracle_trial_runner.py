@@ -106,7 +106,8 @@ class OraclePlanner:
 
 
 def run_oracle_trial(variant_id: str, output_dir: Path, headless: bool = True,
-                     flags: Optional[PipelineFlags] = None, max_replans: int = 10) -> dict:
+                     flags: Optional[PipelineFlags] = None, max_replans: int = 10,
+                     seed: Optional[int] = None) -> dict:
     gt_actions = load_gt_actions(variant_id)
 
     class OraclePipeline(LLMOnlyReplanningPipeline):
@@ -125,6 +126,8 @@ def run_oracle_trial(variant_id: str, output_dir: Path, headless: bool = True,
             output_dir=output_dir,
             live_masks=False,
             flags=flags,
+            seed=seed,
+            trial_index=(seed + 1 if seed is not None else 1),
         )
     finally:
         trial_runner.LLMOnlyReplanningPipeline = original
@@ -137,10 +140,12 @@ def main() -> None:
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--flag', action='append', default=[], metavar='NAME=VALUE')
     parser.add_argument('--max-replans', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--headless', action='store_true', help='(default)')
     args = parser.parse_args()
     record = run_oracle_trial(args.variant, Path(args.output_dir), headless=not args.gui,
-                              flags=PipelineFlags.from_assignments(args.flag), max_replans=args.max_replans)
+                              flags=PipelineFlags.from_assignments(args.flag), max_replans=args.max_replans,
+                              seed=args.seed)
     print(json.dumps({key: record.get(key) for key in (
         'variant_id', 'episode_success', 'partial_goal_completion', 'total_cycles', 'total_replans',
         'completed_actions', 'failure_reason')}, indent=2))

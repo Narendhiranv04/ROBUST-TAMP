@@ -15,11 +15,101 @@ from llm_pipeline.pipeline_types import (
 )
 from llm_pipeline.region_aliases import normalize_region_name, regions_match_for_target, scene_object_for_region
 from llm_pipeline.failures import FailureCode, LAYER_1_FAILURE_CODES, LAYER_2_FAILURE_CODES
+from llm_pipeline.object_aliases import canonical_object_name
 
 
 # Legacy layer sets (record.json ``failure_layer``), derived from the shared enum.
 LAYER_1_FAILURE_IDS = LAYER_1_FAILURE_CODES
 LAYER_2_FAILURE_IDS = LAYER_2_FAILURE_CODES
+
+
+def held_objects_from_gripper(env) -> Optional[set]:
+    """Canonical names of the objects the gripper holds, from the simulator's grasp state.
+
+    An object counts as held when the gripper reports it as grasped (attached to the
+    gripper's attach point by ``Gripper.grasp``) or when it is parented to the robot
+    tip or the gripper attach point (the grill executor's manual attach). This is a
+    stand-in for perception, like the lid states. Returns ``None`` when the env has
+    no gripper, so the caller can fall back to the segmentation check.
+    """
+    gripper = getattr(env, 'gripper', None)
+    if gripper is None or not hasattr(gripper, 'get_grasped_objects'):
+        return None
+    names = set()
+    try:
+        for obj in gripper.get_grasped_objects() or []:
+            names.add(canonical_object_name(obj.get_name()))
+    except Exception:
+        return None
+    holders = set()
+    for getter in (lambda: env.robot.get_tip(), lambda: gripper.get_attach_point() if hasattr(gripper, 'get_attach_point') else None):
+        try:
+            holder = getter()
+            if holder is not None:
+                holders.add(int(holder.get_handle()))
+        except Exception:
+            pass
+    fingers = _finger_shapes(env)
+    closed = _gripper_not_fully_open(gripper)
+    for name, obj in (getattr(env, 'name_to_obj', {}) or {}).items():
+        try:
+            parent = obj.get_parent() if obj is not None else None
+            if parent is not None and int(parent.get_handle()) in holders:
+                names.add(canonical_object_name(name))
+                names.add(canonical_object_name(obj.get_name()))
+                continue
+            # Scripted picks (e.g. the cupboard mug) close the fingers on the object and
+            # carry it kinematically without attaching it: count finger contact.
+            if closed and fingers and obj is not None and _finger_distance(fingers, obj) <= FINGER_CONTACT_M:
+                names.add(canonical_object_name(name))
+                names.add(canonical_object_name(obj.get_name()))
+        except Exception:
+            continue
+    return names
+
+
+FINGER_CONTACT_M = 0.01
+FINGER_SHAPE_NAMES = ('Panda_leftfinger_respondable', 'Panda_rightfinger_respondable')
+
+
+def _finger_shapes(env) -> list:
+    cached = getattr(env, '_grasp_check_finger_shapes', None)
+    if cached is not None:
+        return cached
+    shapes = []
+    try:
+        from pyrep.objects.shape import Shape
+
+        for name in FINGER_SHAPE_NAMES:
+            try:
+                shapes.append(Shape(name))
+            except Exception:
+                pass
+    except Exception:
+        shapes = []
+    try:
+        env._grasp_check_finger_shapes = shapes
+    except Exception:
+        pass
+    return shapes
+
+
+def _gripper_not_fully_open(gripper) -> bool:
+    try:
+        amounts = [float(v) for v in gripper.get_open_amount()]
+    except Exception:
+        return False
+    return bool(amounts) and min(amounts) < 0.9
+
+
+def _finger_distance(fingers, obj) -> float:
+    best = float('inf')
+    for finger in fingers:
+        try:
+            best = min(best, float(finger.check_distance(obj)))
+        except Exception:
+            continue
+    return best
 
 
 def failure_layer_for_id(failure_id: str) -> FailureLayer:
@@ -44,6 +134,10 @@ class SegmentationFirstFailureChecker:
         self.gripper_threshold = gripper_threshold
         self.replan_on_new_visibility = replan_on_new_visibility
         self.discovery_ignore_objects = {'box_lid'}
+        # grasp.confirmation flag: 'gripper_state' reads the gripper's grasped-object
+        # state (a stand-in for perception, docs/ARCHITECTURE.md); 'segmentation' is
+        # the previous mask-proximity check.
+        self.grasp_confirmation = 'gripper_state'
 
     def capture_snapshot(self, event: str = '') -> SegmentationSnapshot:
         return self.adapter.capture_snapshot(event=event)
@@ -195,6 +289,20 @@ class SegmentationFirstFailureChecker:
         if action.action_name == 'pick':
             object_name = action.args[0]
             evidence = snapshot.object_evidence.get(object_name)
+            if self.grasp_confirmation == 'gripper_state':
+                held = held_objects_from_gripper(self.env)
+                if held is not None:
+                    if object_name in held:
+                        return self._maybe_new_visibility_failure(action, snapshot)
+                    return FailureEvent(
+                        failure_id=FailureCode.GRASP_FAILED,
+                        stage=FailureStage.AFTER_EXECUTION,
+                        source=FailureSource.EXECUTOR,
+                        action=str(action),
+                        evidence={'held_objects': sorted(held), 'grasp_confirmation': 'gripper_state'},
+                        failure_layer=FailureLayer.LAYER_2,
+                        message=f'{object_name} is not held by the gripper after pick execution',
+                    )
             if self._picked_object_confirmed(evidence):
                 return self._maybe_new_visibility_failure(action, snapshot)
             if evidence is None or not evidence.visible:

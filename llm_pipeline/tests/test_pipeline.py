@@ -1024,7 +1024,8 @@ def test_pipeline_allows_no_actions_when_goal_already_satisfied() -> None:
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=1),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='zero_shot', max_replans=1),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=failure_checker,
@@ -1051,7 +1052,8 @@ def test_pipeline_stops_when_no_actions_follows_goal_check_format_failure() -> N
     failure_checker = FakeFailureChecker(segmentation_adapter, snapshot)
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=3),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='zero_shot', max_replans=3),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=failure_checker,
@@ -1382,7 +1384,8 @@ def test_pipeline_reports_validation_failure_before_execution() -> None:
     snapshot = _snapshot()
     segmentation_adapter = FakeSegmentationAdapter(snapshot)
     pipeline = LLMOnlyReplanningPipeline(
-        config=LLMPipelineConfig(model_alias='mock-llm', icl_mode='zero_shot', max_replans=0),
+        config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,model_alias='mock-llm', icl_mode='zero_shot', max_replans=0),
         planner=planner,
         segmentation_adapter=segmentation_adapter,
         failure_checker=FakeFailureChecker(segmentation_adapter, snapshot),
@@ -1406,6 +1409,7 @@ def test_pipeline_plan_only_mode_skips_execution_and_failure_checks() -> None:
     executor = FakeExecutor()
     pipeline = LLMOnlyReplanningPipeline(
         config=LLMPipelineConfig(
+            flags=LEGACY_FLAGS,
             model_alias='mock-llm',
             icl_mode='zero_shot',
             max_replans=2,

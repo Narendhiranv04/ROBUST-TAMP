@@ -335,6 +335,7 @@ def run_trial(
         show_llm_output=bool(show_llm_output),
         enable_goal_check=bool(goal_check),
         flags=flags,
+        seed=seed,
     )
     pipeline = LLMOnlyReplanningPipeline(config=config)
 
@@ -367,26 +368,36 @@ def run_trial(
     trial_logger = TrialLogger(trial_log_path_for(json_output_path), trial_id=trial_id)
     if hasattr(pipeline, 'set_trial_logger'):
         pipeline.set_trial_logger(trial_logger)
-    trial_logger.emit(
-        'trial_start',
-        scene=variant_spec.task_family,
-        variant=variant_spec.variant_id,
-        condition=condition,
-        seed=seed,
-        flags=flags.to_dict(),
-        git_commit=git_commit_info(),
-        trial_index=int(trial_index),
-        goal=goal_text,
-        backend=os.environ.get('SIM_BACKEND', 'coppelia'),
-        remote_planner_url=remote_url or None,
-    )
     trial_started = time.monotonic()
+    trial_start_logged = False
     trial_end_logged = False
+
+    def _log_trial_start() -> None:
+        nonlocal trial_start_logged, trial_started
+        if trial_start_logged:
+            return
+        trial_start_logged = True
+        trial_logger.emit(
+            'trial_start',
+            scene=variant_spec.task_family,
+            variant=variant_spec.variant_id,
+            condition=condition,
+            seed=seed,
+            flags=flags.to_dict(),
+            git_commit=git_commit_info(),
+            trial_index=int(trial_index),
+            goal=goal_text,
+            backend=os.environ.get('SIM_BACKEND', 'coppelia'),
+            remote_planner_url=remote_url or None,
+            randomization=getattr(pipeline, 'randomization_record', None),
+        )
+        trial_started = time.monotonic()
 
     def _log_trial_end(success, validation, planner_calls, planner_time_s, termination_reason) -> None:
         nonlocal trial_end_logged
         if trial_end_logged:
             return
+        _log_trial_start()
         trial_end_logged = True
         validation = validation or {}
         trial_logger.emit(
@@ -411,6 +422,7 @@ def run_trial(
             print(f"[TrialRunner] Pipeline initialization failed. Planner debug: {debug_info}")
             _log_trial_end(None, None, 0, 0.0, TerminationReason.INFRASTRUCTURE)
             raise RuntimeError('pipeline_initialize_failed')
+        _log_trial_start()
 
         effective_model_type = model_type or ('vlm' if vision else 'llm')
         text_only = not bool(vision)

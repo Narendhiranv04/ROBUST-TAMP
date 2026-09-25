@@ -504,12 +504,13 @@ To keep compute manageable, not every family runs in every condition:
 - **Cardinality (family C):** for C1, plot success, first-proposal urgency accuracy, corrective sub-plan length, and planner latency against n; for C2, plot robot idle time saved and total trial time against w (and the number of independent actions actually executed).
 - Phase 7 diagnostics tables and chart.
 
-### 8.3 External baselines
-VLM-TAMP, OWL-TAMP and EPoG-TAMP are compared against the full system (sources: `https://github.com/Narendhiranv04/GRAB-TAMP`, branch `baseline_executions`, cloned read-only into `external/GRAB-TAMP`; see `docs/ARCHITECTURE.md`, "External baselines").
-- Run each baseline on all final variants, with the same scenes, trial count and seeds as our conditions.
-- Use the same planner model as our full system wherever the method allows it.
-- Convert each baseline's outputs to our JSONL trial-log schema (`llm_pipeline/trial_log.py`) so the same metrics (Phase 1, step 5) and diagnostics (Phase 7) apply.
-- Document every deviation from the original method in `docs/BASELINES.md`.
+### 8.3 External baselines (re-implementations)
+VLM-TAMP, OWL-TAMP and EPoG-TAMP are compared against the full system as **re-implementations**, not ports of their original stacks:
+- Re-implement each method's planning and replanning logic as a planner module inside our pipeline (VLM-TAMP and OWL-TAMP from their papers, using the GRAB-TAMP code in `external/GRAB-TAMP` only as a reference; EPoG-TAMP from its paper, since no implementation is available).
+- They use our robot, executor, scenes, observation and trial-log schema (`llm_pipeline/trial_log.py`), so the same metrics (Phase 1, step 5) and diagnostics (Phase 7) apply.
+- Run each on all final variants with the same scenes, trial count and seeds as our conditions, and the same planner model as our full system wherever the method allows.
+- Label them "re-implementations" in every table and document every difference from the original method in `docs/BASELINES.md`.
+- Not started; implement after Phases 1-7 are confirmed.
 
 ### 8.4 Output
 `results/final/` with all tables, charts, and `SUMMARY.md` (tables plus a short list of notable findings, no interpretation beyond the numbers).

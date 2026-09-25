@@ -4873,11 +4873,18 @@ class GrillPrimitiveTransferExecutor(GrillPrimitiveExecutorBase):
                     support_tol=float(os.environ.get("GRILL_TABLE_SUPPORT_TOL", "0.010")),
                 )
         elif self.target_region in {"grill-top", "plate-top", "plate_boundary"}:
+            # The object is released ~2 mm above its support. On the small plate a
+            # long free drop lets round meat (drumsticks) roll off the edge before it
+            # is frozen and attached to the plate, so plate-top uses a short drop.
+            if self.target_region == "plate-top":
+                drop_steps = int(os.environ.get("GRILL_PLATE_TOP_DROP_STEPS", "6"))
+            else:
+                drop_steps = int(os.environ.get("GRILL_OBJECT_POST_RETREAT_DROP_STEPS", "30"))
             settle_placed_object(
                 self.env,
                 self.pr,
                 self.target_obj,
-                drop_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_DROP_STEPS", "30")),
+                drop_steps=drop_steps,
                 settle_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_SETTLE_STEPS", "14")),
             )
             _attach_to_plate_after_place(self.env, self.pr, self.target_obj, self.target_region)

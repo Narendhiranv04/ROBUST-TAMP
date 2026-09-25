@@ -33,6 +33,11 @@ FLAG_SPECS: Tuple[FlagSpec, ...] = (
     FlagSpec('parallel.enabled', 'parallel_enabled', ('true', 'false'), 'false', ('false',), 6),
     FlagSpec('termination.mode', 'termination_mode', ('evaluator', 'agent'), 'agent', ('evaluator', 'agent'), 1),
     FlagSpec('prompt.version', 'prompt_version', ('legacy', 'v2'), 'v2', ('legacy', 'v2'), 1),
+    FlagSpec(
+        'grasp.confirmation', 'grasp_confirmation', ('gripper_state', 'segmentation'), 'gripper_state',
+        ('gripper_state', 'segmentation'), 1,
+    ),
+    FlagSpec('scene.randomization', 'scene_randomization', ('pose_jitter', 'off'), 'pose_jitter', ('pose_jitter', 'off'), 1),
 )
 FLAG_SPECS_BY_NAME: Dict[str, FlagSpec] = {spec.name: spec for spec in FLAG_SPECS}
 
@@ -46,6 +51,8 @@ class PipelineFlags:
     parallel_enabled: str = 'false'
     termination_mode: str = 'agent'
     prompt_version: str = 'v2'
+    grasp_confirmation: str = 'gripper_state'
+    scene_randomization: str = 'pose_jitter'
 
     def __post_init__(self) -> None:
         for spec in FLAG_SPECS:

@@ -209,6 +209,24 @@ class RemoteTextLLMPlanner:
             failure_event = self._decode_failure_event(data.get('failure_event'))
             actions = []
 
+            if prompt_version == 'v2' and raw_output.strip():
+                # v2: the client's parse of the raw output is authoritative (only the text
+                # after FINAL ACTIONS: is parsed); the server's own parse is ignored.
+                try:
+                    actions = self.parser.parse(raw_output, held_object=held_object)
+                    failure_event = None
+                    parse_ok = True
+                except StrictParseError as exc:
+                    actions, failure_event, parse_ok = [], self._plan_check_failure(exc, raw_output), False
+                return PlanResult(
+                    success=parse_ok,
+                    actions=actions,
+                    raw_output=raw_output,
+                    inference_time=float(data.get('inference_time', time.time() - started_at)),
+                    error_message=None if parse_ok else failure_event.message,
+                    failure_event=failure_event,
+                )
+
             action_lines = [self._action_line(item) for item in data.get('actions', [])]
             if action_lines:
                 try:

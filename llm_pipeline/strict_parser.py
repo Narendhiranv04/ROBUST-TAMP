@@ -30,6 +30,15 @@ class StrictParseError(ValueError):
         return f'Line {self.line_number}: {self.message}'
 
 
+def split_reasoning(text: Optional[str]) -> tuple:
+    """Split planner output into (reasoning, answer) at the last FINAL ACTIONS: line."""
+    text = text or ''
+    markers = list(FINAL_ACTIONS_MARKER.finditer(text))
+    if not markers:
+        return text.strip(), ''
+    return text[:markers[-1].start()].strip(), text[markers[-1].end():].strip()
+
+
 class StrictActionParser:
     """Parses exact executable lines without repairing or grounding output."""
 
@@ -45,6 +54,9 @@ class StrictActionParser:
         # Objects the robot has observed so far (plan.md Phase 1, step 5b). When
         # set, actions on any other object are rejected as unobserved_object.
         self.observed_objects: Optional[set] = None
+        # prompt.version=v2: only the text after the last FINAL ACTIONS: line is parsed;
+        # everything before it is reasoning (logged, never parsed).
+        self.require_final_marker = False
 
     def set_observed_objects(self, observed_objects: Optional[Iterable[str]]) -> None:
         self.observed_objects = None if observed_objects is None else set(observed_objects)
@@ -76,6 +88,12 @@ class StrictActionParser:
         final_markers = list(FINAL_ACTIONS_MARKER.finditer(text))
         if final_markers:
             text = text[final_markers[-1].end():]
+        elif self.require_final_marker:
+            raise StrictParseError(
+                'Planner output has no FINAL ACTIONS: line',
+                failure_id=FailureCode.PLANNER_OUTPUT_NOT_PARSEABLE,
+                fact='The output has no line containing only FINAL ACTIONS:.',
+            )
 
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
