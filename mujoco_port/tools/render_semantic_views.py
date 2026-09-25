@@ -6,6 +6,8 @@
 Writes, for the variant's initial state (MuJoCo backend):
 - isometric.png: isometric view from behind the robot;
 - cameras_rgb.png: the 5 camera images (left, right, overhead, wrist, front);
+- semantic_<camera>.png / semantic_<camera>_legend.png: each camera's semantic map alone,
+  and with a legend for what appears in it;
 - cameras_semantic.png: per camera, the objects the segmentation sees (flat colour,
   from the pipeline's masks) and the pipeline's region boxes (outlines), on a
   faded camera image, with one legend (object -> resolved region);
@@ -230,7 +232,8 @@ def main():
             label_chip(draw, top, planner_region_name(region), region_colors[region], tag, tile.size)
             shown_regions.append(region)
         sem_tiles.append((name, tile))
-        save_single(out / f'semantic_{name}.png', name, tile, [o for o in object_colors if pixels[name].get(o)],
+        tile.save(out / f'semantic_{name}.png')  # the map alone, no legend
+        save_single(out / f'semantic_{name}_legend.png', name, tile, [o for o in object_colors if pixels[name].get(o)],
                     shown_regions)
 
     def sheet(tiles, title, legend):
