@@ -166,6 +166,32 @@ def main():
             region_boxes[normalize_region_name(region)] = (np.array(box[0]), np.array(box[1]))
     region_colors = {name: REGION_PALETTE[i % len(REGION_PALETTE)] for i, name in enumerate(region_boxes)}
 
+    def save_single(path, camera, tile, objects, shown_regions):
+        """One camera's semantic map with a legend strip for what appears in it."""
+        body, head = _font(15), _font(16, bold=True)
+        pad, row = 14, 24
+        strip = 44 + row * max(len(objects), len(shown_regions), 1)
+        page = Image.new('RGB', (tile.width + 2 * pad, tile.height + 2 * pad + 34 + strip), BACKGROUND)
+        draw = ImageDraw.Draw(page)
+        draw.text((pad, pad), f'{args.variant}  ·  {camera} camera', fill=INK, font=_font(19, bold=True))
+        page.paste(tile, (pad, pad + 34))
+        y0 = pad + 34 + tile.height + 14
+        draw.text((pad, y0), 'Objects (resolved region)', fill=INK, font=head)
+        draw.text((pad + tile.width // 2, y0), 'Regions', fill=INK, font=head)
+        for i, obj in enumerate(objects):
+            y = y0 + 30 + i * row
+            draw.rounded_rectangle([pad, y + 2, pad + 16, y + 18], radius=3, fill=object_colors[obj], outline=(60, 60, 60))
+            region = regions.get(obj)
+            draw.text((pad + 26, y), f'{obj}  —  {planner_region_name(region) if region else "lid"}', fill=INK, font=body)
+        if not objects:
+            draw.text((pad, y0 + 30), 'no task objects visible', fill=MUTED, font=body)
+        for i, region in enumerate(shown_regions):
+            y = y0 + 30 + i * row
+            x = pad + tile.width // 2
+            draw.line([(x, y + 10), (x + 16, y + 10)], fill=region_colors[region], width=4)
+            draw.text((x + 26, y), planner_region_name(region), fill=INK, font=body)
+        page.save(path)
+
     sensors = camera_sensors(env)
     tag = _font(14, bold=True)
     rgb_tiles, sem_tiles, pixels = [], [], {}
@@ -190,6 +216,7 @@ def main():
             pixels[name][obj] = pixels[name].get(obj, 0) + int(hit.sum())
         tile = Image.fromarray(canvas)
         draw = ImageDraw.Draw(tile)
+        shown_regions = []
         for region, (lo, hi) in region_boxes.items():
             corners = np.array([[lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]], [hi[0], hi[1], hi[2]], [lo[0], hi[1], hi[2]]])
             uv, in_front = project(cam, corners)
@@ -201,7 +228,10 @@ def main():
             draw.line(points + [points[0]], fill=region_colors[region], width=2, joint='curve')
             top = min(points, key=lambda p: p[1])
             label_chip(draw, top, planner_region_name(region), region_colors[region], tag, tile.size)
+            shown_regions.append(region)
         sem_tiles.append((name, tile))
+        save_single(out / f'semantic_{name}.png', name, tile, [o for o in object_colors if pixels[name].get(o)],
+                    shown_regions)
 
     def sheet(tiles, title, legend):
         w, h = tiles[0][1].size
