@@ -71,6 +71,8 @@ def _trial_command(
 
 def _run_and_load(command: List[str], output_path: Path) -> Dict:
     result = subprocess.run(command, cwd=str(ROOT_DIR), text=True)
+    if result.returncode == 2:
+        raise RuntimeError(f"Trial refused (dirty tree or planner settings; see stderr): {' '.join(command)}")
     if result.returncode != 0:
         raise RuntimeError(f"Trial command failed: {' '.join(command)}")
     return json.loads(output_path.read_text())

@@ -48,6 +48,12 @@ def model_revision(model) -> str:
     return str(getattr(config, "_commit_hash", "") or "") if config is not None else ""
 
 
+
+class PlannerRuntimeError(RuntimeError):
+    """The planner could not produce an output (model not loaded, out of memory, CUDA error).
+    Never a model failure: the planner server turns it into a job error, which the client
+    reports as ``planner_call_failed`` (infrastructure)."""
+
 class TextLLMPlanner:
     """Text-only planner that emits directly executable action lines."""
 
@@ -296,13 +302,9 @@ class TextLLMPlanner:
         held_object: Optional[str] = None,
     ) -> PlanResult:
         if not self.loaded:
-            return PlanResult(
-                success=False,
-                actions=[],
-                raw_output="",
-                inference_time=0.0,
-                error_message="Model not loaded.",
-            )
+            # Not a model output: raised so the planner server reports the job as an error
+            # and the trial ends as infrastructure (Phase 7c, audit B-1).
+            raise PlannerRuntimeError('Model not loaded.')
 
         started_at = time.time()
         self._record_request(system_prompt, user_prompt, icl_mode, held_object)
@@ -327,13 +329,9 @@ class TextLLMPlanner:
                 failure_event=self._build_parse_failure(exc, raw_output),
             )
         except Exception as exc:  # pragma: no cover - model/runtime dependent
-            return PlanResult(
-                success=False,
-                actions=[],
-                raw_output="",
-                inference_time=time.time() - started_at,
-                error_message=str(exc),
-            )
+            # Out of memory, CUDA errors and other runtime failures are not model outputs:
+            # re-raised so they become infrastructure, never a scored planner failure.
+            raise PlannerRuntimeError(f'{type(exc).__name__}: {exc}') from exc
 
     def check_goal_completion(
         self,

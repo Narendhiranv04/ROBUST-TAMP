@@ -107,7 +107,7 @@ def _patch_runner(monkeypatch):
     # A clean working tree and a planner with thinking on and format repair off (B5/B6).
     monkeypatch.setattr(trial_runner, 'git_commit_info', lambda: {'commit': 'abc123', 'dirty': False})
     monkeypatch.setattr(trial_runner, '_pre_run_planner_settings',
-                        lambda remote, remote_url: dict(GOOD_SETTINGS))
+                        lambda remote, remote_url, remote_api='openai', model='': dict(GOOD_SETTINGS))
 
 
 GOOD_SETTINGS = {'planner': 'remote', 'model_name': 'fake', 'model_revision': 'r1', 'thinking_mode': 'on',
@@ -234,9 +234,10 @@ def test_real_model_trial_refuses_thinking_off_format_repair_or_unknown_settings
 
     _patch_runner(monkeypatch)
     for settings, message in (({**GOOD_SETTINGS, 'thinking_mode': 'off'}, 'thinking mode'),
-                              ({**GOOD_SETTINGS, 'format_repair': True}, 'format repair is on'),
+                              ({**GOOD_SETTINGS, 'format_repair': True}, 'format repair is True'),
                               ({}, 'does not report its settings')):
-        monkeypatch.setattr(trial_runner, '_pre_run_planner_settings', lambda remote, remote_url, s=settings: dict(s))
+        monkeypatch.setattr(trial_runner, '_pre_run_planner_settings',
+                            lambda remote, remote_url, remote_api='openai', model='', s=settings: dict(s))
         with pytest.raises(trial_runner.RefusedRun, match=message):
             trial_runner.run_trial(variant_id='K1', model_alias='fake', icl_mode='zero_shot', output_dir=tmp_path)
     with pytest.raises(trial_runner.RefusedRun, match='simulated planner delay'):

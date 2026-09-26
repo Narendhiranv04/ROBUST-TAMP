@@ -30,6 +30,22 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from . import simConst as C
+
+
+def trial_rng(tag: str, index: int) -> np.random.Generator:
+    """Random generator for the motion planner (IK sampling, RRT-Connect).
+
+    With ``TAMP_TRIAL_SEED`` set (the trial runner sets it to the trial seed), the generator is
+    derived from (seed, purpose, call index), so the sequence of IK / RRT seeds is the same in
+    every run of a trial whatever else consumed random numbers. What still varies between runs
+    is wall-clock bound: IK and RRT stop at a time budget, so a slower or busier machine may try
+    fewer seeds before giving up (documented in mujoco_port/README.md). Without the variable the
+    generator is unseeded (previous behaviour)."""
+    seed = os.environ.get('TAMP_TRIAL_SEED', '').strip()
+    if not seed:
+        return np.random.default_rng()
+    import zlib
+    return np.random.default_rng([int(seed) % (2 ** 32), zlib.crc32(tag.encode('utf-8')), int(index)])
 from ._kin import ArmChain, limit_margin, linear_ik_path, mat_to_quat_xyzw, quat_wxyz_to_mat, quat_xyzw_to_mat, rrt_connect
 from ._render import SensorRenderer, configure_gl_backend
 
@@ -235,6 +251,7 @@ class World:
         self.string_params = {}
         self.drawings = 0
         self._ik_fail_memo = {}
+        self._rng_calls = {}
         self._rml = {}
         self._build_tables()
         self._init_state()
@@ -406,6 +423,7 @@ class World:
         self._fresh()
         self.sim_time = 0.0
         self._ik_fail_memo = {}
+        self._rng_calls = {}
 
     def _launch_viewer(self):
         try:
@@ -1316,7 +1334,8 @@ class World:
         memo = self._ik_fail_memo.setdefault(key, {'tried': 0, 'found': 0})
         if memo['tried'] >= 384 and memo['found'] == 0:
             return []
-        rng = np.random.default_rng()
+        self._rng_calls['ik'] = self._rng_calls.get('ik', 0) + 1
+        rng = trial_rng('ik', self._rng_calls['ik'])
         q_cur = self.arm_q()
         budget = time.monotonic() + max(0.005, min(float(max_time_ms), 250.0) / 1000.0)
         coll = self._collision_fn(collision_pairs)
@@ -1383,8 +1402,10 @@ class World:
         pairs = [] if ignore_collisions else [collection, C.sim_handle_all]
         coll = self._collision_fn(pairs)
         try:
+            self._rng_calls['rrt'] = self._rng_calls.get('rrt', 0) + 1
             path = rrt_connect(self.arm_q(), list(goals), self.chain.lows, self.chain.highs, coll,
-                               max_time_s=float(os.environ.get('MUJOCO_SHIM_RRT_TIME', '2.0')))
+                               max_time_s=float(os.environ.get('MUJOCO_SHIM_RRT_TIME', '2.0')),
+                               rng=trial_rng('rrt', self._rng_calls['rrt']))
         finally:
             if coll is not None:
                 coll.restore()

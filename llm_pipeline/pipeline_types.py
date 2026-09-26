@@ -54,8 +54,12 @@ class PlanResult:
     inference_time: float
     error_message: Optional[str] = None
     failure_event: Optional['FailureEvent'] = None
-    # Planner-server timing: queue_wait_s (waiting for the model) and generation_time_s.
+    # Planner-server timing: queue_wait_s (waiting for the model) and generation_time_s; the
+    # vLLM client adds finish_reason, token counts, the sampling preset and the settings fingerprint.
     timing: Optional[Dict[str, Any]] = None
+    # Thinking returned separately by the server (vLLM reasoning parser); None when the
+    # reasoning is part of raw_output (text before FINAL ACTIONS:).
+    reasoning: Optional[str] = None
 
 
 @dataclass

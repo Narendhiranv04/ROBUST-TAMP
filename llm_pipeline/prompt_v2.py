@@ -102,6 +102,9 @@ class ReplanContext:
 
     completed: List[IdentifiedAction] = field(default_factory=list)
     remaining: List[IdentifiedAction] = field(default_factory=list)
+    # Phase 6/7c: bundles the robot runs while the planner works (parallel planning). They are
+    # neither completed nor part of the remaining plan the corrective blocks are inserted into.
+    scheduled: List[IdentifiedAction] = field(default_factory=list)
 
 
 def system_prompt(actions: Sequence[str]) -> str:
@@ -195,7 +198,10 @@ def trigger_facts(failure_event: FailureEvent, object_region_map: Dict[str, str]
     return [f'- {action} failed (failure code {code}).' + (f' {fact}' if fact else '')]
 
 
-REPLAN_SECTIONS = ('goal', 'state', 'completed_actions', 'remaining_plan', 'trigger')
+REPLAN_SECTIONS = ('goal', 'state', 'completed_actions', 'scheduled_actions', 'remaining_plan', 'trigger')
+SCHEDULED_HEADING = '## Scheduled to run before your corrective block is applied (not executed yet)'
+SCHEDULED_NOTE = ('- These actions run while you plan. Do not repeat them, and do not use their ids as an insertion '
+                  'point; the Current state does not include their effects yet.')
 
 
 class PromptV2Builder(BaseContextBuilder):
@@ -279,6 +285,9 @@ class PromptV2Builder(BaseContextBuilder):
         sections['completed_actions'] = ['## Completed actions'] + (
             [f'- {item.render()}' for item in context.completed] or ['- (none)']
         )
+        if context.scheduled:
+            sections['scheduled_actions'] = [SCHEDULED_HEADING] + [
+                f'- {item.render()}' for item in context.scheduled] + [SCHEDULED_NOTE]
         sections['remaining_plan'] = ['## Remaining plan (not executed yet)'] + (
             [f'- {item.render()}' for item in context.remaining] or ['- (none)']
         )

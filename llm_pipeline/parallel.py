@@ -15,11 +15,25 @@ Affected set of a replan:
   container (closing it would change the trigger object's state, e.g. overcook a cooked
   meat left in the grill).
 
-A bundle is dependent when it uses an affected object, or places into an affected region,
-or picks from an affected region that is not a parking region (taking an object out of a
-parking area cannot conflict with parking something there). A dependent bundle blocks the
-later bundles that share an object or its destination region (dependencies keep their
-order); a shared pick source does not create a dependency.
+Bundles: a ``pick(o)`` immediately followed by ``place(o, r)`` is one bundle; every other
+action (a lid action, a lone pick or place) is a bundle of its own. A bundle's pick source is
+the region the object is in **when the bundle runs**, projected along the remaining plan
+(e.g. the second pick of a meat that an earlier bundle put into the grill has source
+``inside_grill``); its destinations are the place region, or for a lid action the regions the
+lid closes off.
+
+A bundle is dependent when it uses an affected object, places into an affected region, or
+picks from an affected region that is not a parking region (taking an object out of a
+parking area cannot conflict with parking something there). A dependent bundle blocks later
+bundles (Phase 7c):
+* through its objects: a later bundle using one of them is dependent;
+* through its destinations: a later bundle placing into, or picking from, one of them is
+  dependent;
+* through its pick sources: a later bundle **placing into** one of them is dependent (the
+  region is not freed until the dependent bundle runs, e.g. groceries must not fill the
+  cupboard before mug3 is taken out of it). Picking from a shared source stays independent.
+Independent bundles run in their plan order; they may run before an earlier dependent bundle
+they share nothing with.
 """
 
 from __future__ import annotations
@@ -58,10 +72,12 @@ class PlanBundle:
 
 
 def split_bundles(remaining: Sequence[Tuple[str, str]], object_regions: Mapping[str, Optional[str]]) -> List[PlanBundle]:
-    """Group the remaining plan into bundles: pick+place pairs and single lid actions."""
+    """Group the remaining plan into bundles (pick+place pairs, other actions alone), with each
+    pick's source region projected along the plan from the regions at the trigger."""
     bundles: List[PlanBundle] = []
     index = 0
     items = list(remaining)
+    projected = {obj: region for obj, region in object_regions.items() if region}
     while index < len(items):
         action_id, action = items[index]
         parsed = parse_action_string(action) or {}
@@ -78,14 +94,15 @@ def split_bundles(remaining: Sequence[Tuple[str, str]], object_regions: Mapping[
             kind = member_parsed.get('action')
             if kind == 'pick' and member_args:
                 bundle.objects.add(member_args[0])
-                if object_regions.get(member_args[0]):
-                    source = normalize_region_name(object_regions[member_args[0]])
+                if projected.get(member_args[0]):
+                    source = normalize_region_name(projected[member_args[0]])
                     bundle.regions.add(source)
                     bundle.sources.add(source)
             elif kind == 'place' and len(member_args) >= 2:
                 bundle.objects.add(member_args[0])
                 bundle.regions.add(normalize_region_name(member_args[1]))
                 bundle.destinations.add(normalize_region_name(member_args[1]))
+                projected[member_args[0]] = member_args[1]
             elif kind in ('open_lid', 'close_lid', 'open_grill', 'close_grill', 'open', 'close') and member_args:
                 bundle.objects.add(member_args[0])
                 bundle.regions.update(LID_REGIONS.get(member_args[0], ()))
@@ -131,9 +148,10 @@ def independent_bundles(bundles: Sequence[PlanBundle], affected: Mapping[str, Se
     for bundle in bundles:
         if (bundle.objects & blocked_objects or bundle.destinations & blocked_destinations
                 or bundle.sources & blocked_sources):
-            # Later bundles depend on this one through its objects and where it puts them.
+            # Later bundles depend on this one through its objects, where it puts them, and the
+            # region it takes its object out of (nothing may be placed there before it runs).
             blocked_objects |= bundle.objects
-            blocked_destinations |= bundle.destinations
+            blocked_destinations |= bundle.destinations | bundle.sources
             blocked_sources |= bundle.destinations
             continue
         independent.append(bundle)

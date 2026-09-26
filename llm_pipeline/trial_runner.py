@@ -195,12 +195,18 @@ def git_untracked_count(root: Path = ROOT_DIR) -> Optional[int]:
         return None
 
 
-def real_model_refusals(git_info: Dict[str, Any], planner_settings: Dict[str, Any]) -> list:
-    """Reasons a real-model trial must not run (B5/B6): empty when it may run.
+def real_model_refusals(git_info: Dict[str, Any], planner_settings: Dict[str, Any],
+                        requested_model: Optional[str] = None, expected_revision: Optional[str] = None) -> list:
+    """Reasons a real-model trial must not run (B5/B6, Phase 7c): empty when it may run.
 
     * the working tree has uncommitted changes to tracked files (untracked files are only counted);
-    * the planner does not report its settings (a server that predates GET /settings);
-    * thinking mode is not on, or the format-repair call is on.
+    * the planner does not report its settings;
+    * thinking mode is not on; format repair is not reported as exactly ``False``;
+    * the served model is not the requested one; the model revision is empty or differs from
+      the pinned one;
+    * the server's identity is unknown: a vLLM server must report its version; the legacy
+      planner server must report a clean git commit;
+    * the legacy server reports its model as not loaded.
     """
     problems = []
     if git_info.get('commit') is None:
@@ -208,19 +214,43 @@ def real_model_refusals(git_info: Dict[str, Any], planner_settings: Dict[str, An
     elif git_info.get('dirty'):
         problems.append('the working tree has uncommitted changes to tracked files; commit them first')
     if not planner_settings or planner_settings.get('thinking_mode') is None:
-        problems.append('the planner does not report its settings (update the planner server: GET /settings)')
+        problems.append('the planner does not report its settings (vLLM: GET /v1/models and /version; '
+                        'legacy server: GET /settings)')
+        return problems
+    if planner_settings.get('thinking_mode') != 'on':
+        problems.append(f"thinking mode is {planner_settings.get('thinking_mode')!r}; it must be 'on'")
+    if planner_settings.get('format_repair') is not False:
+        problems.append(f"format repair is {planner_settings.get('format_repair')!r}; it must be reported as off (False)")
+    served = {planner_settings.get('model_name'), planner_settings.get('model_alias')} - {None, ''}
+    if requested_model and requested_model not in served:
+        problems.append(f'the server serves {sorted(served) or "no model"}, not the requested {requested_model!r}')
+    revision = planner_settings.get('model_revision')
+    if not revision:
+        problems.append('the server does not report the model revision')
+    elif expected_revision and revision != expected_revision:
+        problems.append(f'model revision {revision} differs from the pinned {expected_revision}')
+    if planner_settings.get('planner') == 'vllm':
+        if not planner_settings.get('vllm_version'):
+            problems.append('the vLLM server does not report its version')
     else:
-        if planner_settings.get('thinking_mode') != 'on':
-            problems.append(f"thinking mode is {planner_settings.get('thinking_mode')!r}; it must be 'on' "
-                            f"(unset QWEN_THINKING_MODE on the planner server)")
-        if planner_settings.get('format_repair'):
-            problems.append('format repair is on; restart the planner server without --format-repair')
+        commit = planner_settings.get('server_git_commit') or {}
+        if not commit.get('commit'):
+            problems.append('the planner server does not report its git commit')
+        elif commit.get('dirty') is not False:
+            problems.append('the planner server runs from a dirty (or unknown) working tree')
+        if planner_settings.get('model_loaded') is False:
+            problems.append('the planner server reports its model as not loaded')
     return problems
 
 
-def _pre_run_planner_settings(remote: bool, remote_url: str) -> Dict[str, Any]:
+def _pre_run_planner_settings(remote: bool, remote_url: str, remote_api: str = 'openai',
+                              model: str = '') -> Dict[str, Any]:
     """Planner settings before any simulator work: the server's for a remote planner, the
     local environment's for a local one (the model revision is added after loading)."""
+    if remote and remote_api == 'openai':
+        from llm_pipeline.vllm_client import VLLMChatPlanner
+
+        return VLLMChatPlanner(server_url=remote_url or None, model=model).fetch_settings()
     if remote:
         from llm_pipeline.client import RemoteTextLLMPlanner
 
@@ -230,9 +260,18 @@ def _pre_run_planner_settings(remote: bool, remote_url: str) -> Dict[str, Any]:
     return {'planner': 'local', 'thinking_mode': thinking_mode_setting(), 'format_repair': False}
 
 
+def expected_model_revision(model: str) -> Optional[str]:
+    from llm_pipeline.vllm_client import PINNED_MODELS
+
+    return (PINNED_MODELS.get(model) or {}).get('revision')
+
+
 def seed_everything(seed: int) -> None:
     import random
 
+    # The motion planner (MuJoCo shim IK and RRT-Connect) and the kitchen placement samplers
+    # derive their random numbers from the trial seed and a per-purpose call index (Phase 7c).
+    os.environ['TAMP_TRIAL_SEED'] = str(int(seed))
     random.seed(seed)
     try:
         import numpy as np
@@ -349,6 +388,7 @@ def run_trial(
     headless: bool = False,
     remote: bool = False,
     remote_url: str = '',
+    remote_api: str = 'openai',
     replan_mode: str = 'on',
     preflight_only: bool = False,
     output_path: Optional[Path] = None,
@@ -381,8 +421,10 @@ def run_trial(
     if real_model:
         if simulated_planner_delay_s:
             raise RefusedRun('a simulated planner delay is only allowed for the oracle planner')
-        pre_run_settings = _pre_run_planner_settings(remote, remote_url)
-        problems = real_model_refusals(git_info, pre_run_settings)
+        pre_run_settings = _pre_run_planner_settings(remote, remote_url, remote_api, model_alias)
+        requested = model_alias if (remote and remote_api == 'openai') else None
+        problems = real_model_refusals(git_info, pre_run_settings, requested_model=requested,
+                                       expected_revision=expected_model_revision(model_alias) if requested else None)
         if problems:
             raise RefusedRun('refusing to run a real-model trial: ' + '; '.join(problems))
     seed = int(trial_index if seed is None else seed)
@@ -407,6 +449,7 @@ def run_trial(
         headless=headless,
         use_remote_planner=remote,
         remote_planner_url=remote_url,
+        remote_planner_api=remote_api,
         text_only=not vision,
         enable_vision=bool(vision),
         model_type=model_type or ('vlm' if vision else 'llm'),
@@ -727,8 +770,11 @@ def main() -> None:
     goal_check_group = parser.add_mutually_exclusive_group()
     goal_check_group.add_argument('--goal-check', action='store_true', help='Enable LLM goal-completion verification during execution')
     goal_check_group.add_argument('--no-goal-check', action='store_true', help='Keep LLM goal-completion verification disabled during execution')
-    parser.add_argument('--remote', action='store_true', help='Use the maintained remote planner server')
-    parser.add_argument('--remote-url', default=os.environ.get('LLM_SERVER_URL', os.environ.get('VLM_SERVER_URL', 'http://localhost:8000')), help='Remote planner server URL')
+    parser.add_argument('--remote', action='store_true', help='Use a remote planner server (default API: vLLM, OpenAI-compatible)')
+    parser.add_argument('--remote-api', choices=['openai', 'legacy'], default='openai',
+                        help='openai: a vLLM server (server/SERVER.md; --model is the served model name, e.g. '
+                             'qwen3-vl-8b-thinking); legacy: llm_pipeline/server.py')
+    parser.add_argument('--remote-url', default=os.environ.get('VLLM_SERVER_URL', os.environ.get('LLM_SERVER_URL', 'http://127.0.0.1:8000')), help='Remote planner server URL')
     parser.add_argument('--replan-mode', choices=['on', 'off'], default='on', help='Use full execution+replanning (on) or first-plan-only mode with no failure checks (off)')
     parser.add_argument('--preflight-only', action='store_true', help='Only run load/prompt validation')
     parser.add_argument('--output', default='', help='Optional JSON output path. Also writes a sibling .txt summary.')
@@ -756,6 +802,7 @@ def _run_from_args(args) -> Dict[str, Any]:
         headless=args.headless,
         remote=args.remote,
         remote_url=args.remote_url,
+        remote_api=args.remote_api,
         replan_mode=args.replan_mode,
         preflight_only=args.preflight_only,
         output_path=Path(args.output) if args.output else None,

@@ -95,6 +95,9 @@ class LLMPipelineConfig:
     live_view_update_stride: int = 5
     use_remote_planner: bool = False
     remote_planner_url: str = ''
+    # Remote planner protocol: 'openai' (a vLLM server's OpenAI-compatible API, the real-model
+    # planner; llm_pipeline/vllm_client.py) or 'legacy' (llm_pipeline/server.py job protocol).
+    remote_planner_api: str = 'openai'
     task_family: str = 'kitchen'
     scene_path: str = ''
     variant_id: str = ''
@@ -300,7 +303,12 @@ class LLMOnlyReplanningPipeline:
 
         if self.planner is None:
             model_alias, model_name = self.config.resolve_model_name()
-            if self.config.use_remote_planner:
+            if self.config.use_remote_planner and self.config.remote_planner_api == 'openai':
+                from llm_pipeline.vllm_client import VLLMChatPlanner
+
+                self.planner = VLLMChatPlanner(server_url=self.config.remote_planner_url or None,
+                                               model=self.config.model_alias)
+            elif self.config.use_remote_planner:
                 expected_model = (
                     resolve_vlm_model(self.config.model_path or self.config.model_alias)
                     if self.config.effective_model_type == 'vlm'
@@ -397,7 +405,7 @@ class LLMOnlyReplanningPipeline:
         self._next_plan_ids: Optional[List[str]] = None
         # Repeated-output detection (DIAGNOSTICS area 8): (abstract state, output) hashes.
         self._tried_outputs: set = set()
-        self._repeat_count = 0
+        self._repeat_counts: Dict[str, int] = {}   # per (abstract state, output, failure signature)
 
     def _log_event(self, event: str, **fields) -> None:
         try:
@@ -753,12 +761,14 @@ class LLMOnlyReplanningPipeline:
             self._trigger_seen.update(self._observation_seen)
         if hasattr(self.context_builder, 'set_replan_context'):
             completed, remaining = list(self._completed_with_ids), list(self._remaining_with_ids)
-            # Phase 6: independent actions executed while the planner works are shown as completed.
-            during_wait = getattr(self, '_prompt_executed_ids', None) or set()
-            if during_wait:
-                completed += [item for item in remaining if item.action_id in during_wait]
-                remaining = [item for item in remaining if item.action_id not in during_wait]
-            self.context_builder.set_replan_context(ReplanContext(completed=completed, remaining=remaining))
+            # Phase 6/7c: the independent bundles the robot runs while the planner works are listed
+            # as scheduled (never as completed: the Current state is the observation now, before
+            # they run), and they are not part of the remaining plan the blocks are inserted into.
+            during_wait = getattr(self, '_prompt_scheduled_ids', None) or set()
+            scheduled = [item for item in remaining if item.action_id in during_wait]
+            remaining = [item for item in remaining if item.action_id not in during_wait]
+            self.context_builder.set_replan_context(ReplanContext(completed=completed, remaining=remaining,
+                                                                  scheduled=scheduled))
         # Objects never observed must not reach the planner (plan.md Phase 1, step 5b).
         planner_parser = getattr(self.planner, 'parser', None)
         if planner_parser is not None and hasattr(planner_parser, 'set_observed_objects'):
@@ -807,7 +817,11 @@ class LLMOnlyReplanningPipeline:
                 'output_format': 'corrective_blocks',
                 'trigger_objects': list((corrective[0].evidence or {}).get('trigger_objects') or []),
                 'trigger_mode': (corrective[0].evidence or {}).get('trigger_mode'),
-                'remaining_plan': [(item.action_id, item.action) for item in self._remaining_with_ids],
+                # Exactly the remaining plan shown in the prompt (scheduled actions excluded).
+                'remaining_plan': [(item.action_id, item.action) for item in self._remaining_with_ids
+                                   if item.action_id not in (getattr(self, '_prompt_scheduled_ids', None) or set())],
+                'scheduled_actions': [(item.action_id, item.action) for item in self._remaining_with_ids
+                                      if item.action_id in (getattr(self, '_prompt_scheduled_ids', None) or set())],
             })
         bundle = replace(bundle, metadata=bundle_metadata)
         abstract_state = self._abstract_state(state, corrective, failure_event)
@@ -912,12 +926,13 @@ class LLMOnlyReplanningPipeline:
                                 overlapping={obj: self._overlapping_regions(obj, [object_regions.get(obj)])
                                              for obj in trigger_objects if object_regions.get(obj)})
         independent = independent_bundles(split_bundles(remaining, object_regions), affected)
-        # The prompt lists the independent actions as already executed.
-        self._prompt_executed_ids = {action_id for bundle in independent for action_id in bundle.ids}
+        # The prompt lists the independent actions as scheduled to run while the planner works.
+        scheduled_ids = {action_id for bundle in independent for action_id in bundle.ids}
+        self._prompt_scheduled_ids = scheduled_ids
         try:
             request = self._prepare_planning(goal_text, trigger)
         finally:
-            self._prompt_executed_ids = set()
+            self._prompt_scheduled_ids = set()
         box: Dict[str, Any] = {}
 
         def _worker():
@@ -961,6 +976,7 @@ class LLMOnlyReplanningPipeline:
         self._completed_with_ids.extend(item for item in self._remaining_with_ids if item.action_id in executed)
         self._remaining_with_ids = [item for item in self._remaining_with_ids if item.action_id not in executed]
         self._wait_executed_ids = list(executed_ids)
+        self._anchor_excluded_ids = set(scheduled_ids)   # anchors may refer only to remaining actions
 
         result = box.get('result')
         if result is None:
@@ -975,6 +991,7 @@ class LLMOnlyReplanningPipeline:
             plan_result, trace = self._finish_planning(request, result, wall_latency_s=latency_s)
         finally:
             self._wait_executed_ids = []
+            self._anchor_excluded_ids = set()
 
         merge_result = 'accepted' if plan_result.success else 'rejected'
         if not plan_result.success and plan_result.failure_event is not None and executed and \
@@ -1049,8 +1066,11 @@ class LLMOnlyReplanningPipeline:
             return parser.parse('FINAL ACTIONS:\n' + '\n'.join(lines), held_object=held)
 
         try:
-            # Anchors may name actions executed during the wait (Phase 6): they go to the front.
-            known_ids = [action_id for action_id, _ in remaining] + list(getattr(self, '_wait_executed_ids', []) or [])
+            # Anchors may refer only to actions of the remaining plan shown in the prompt: not to
+            # actions scheduled (or run) during a parallel replan (Phase 7c). An anchor that ran in
+            # between is still moved to the front (anchor_already_executed).
+            excluded = set(getattr(self, '_anchor_excluded_ids', set()) or ())
+            known_ids = [action_id for action_id, _ in remaining if action_id not in excluded]
             blocks = parse_blocks(result.raw_output, triggers, known_ids)
             for block in blocks:
                 if block.no_action:
@@ -1143,33 +1163,58 @@ class LLMOnlyReplanningPipeline:
                 break
         return '\n'.join(line.strip().lower() for line in text.splitlines() if line.strip())
 
-    def _repeated_output(self, request, result) -> Optional[PlanResult]:
-        """DIAGNOSTICS area 8: the same output for the same abstract state.
+    @staticmethod
+    def _failure_signature(failure_event) -> str:
+        """What the planner call answers: the failure code and the failed action (a re-query
+        after a repeated output answers the same failure as the call it repeats)."""
+        if failure_event is None:
+            return 'initial'
+        evidence = failure_event.evidence or {}
+        if failure_event.failure_id == FailureCode.REPEATED_PLANNER_OUTPUT and evidence.get('failure_signature'):
+            return str(evidence['failure_signature'])
+        return f'{failure_event.failure_id}|{failure_event.action or ""}'
 
-        The first repeat is rejected and re-queried once with a note; a second repeat in the
-        trial stops it with termination reason ``replan_loop``."""
+    def _repeated_output(self, request, result) -> Optional[PlanResult]:
+        """DIAGNOSTICS area 8: the same output for the same abstract state and the same failure.
+
+        Repeats are counted per (abstract state, output, failure signature), not per trial
+        (Phase 7c): the first repeat is rejected and re-queried once with a note (which keeps
+        the reason the previous output failed); a second repeat of the same key stops the trial
+        with termination reason ``replan_loop``."""
         output = self._normalized_output(result.raw_output)
         if not output:
             return None
-        key = hashlib.sha256((request.get('abstract_state', '') + '\x00' + output).encode('utf-8')).hexdigest()
+        failure_event = request.get('failure_event')
+        signature = self._failure_signature(failure_event)
+        key = hashlib.sha256((request.get('abstract_state', '') + '\x00' + output + '\x00' + signature)
+                             .encode('utf-8')).hexdigest()
         if key not in self._tried_outputs:
             self._tried_outputs.add(key)
             return None
-        self._repeat_count += 1
-        stop = self._repeat_count >= 2
+        count = self._repeat_counts.get(key, 0) + 1
+        self._repeat_counts[key] = count
+        stop = count >= 2
         fact = 'This output was already tried in the same state and it did not work.'
+        previous = None
+        if failure_event is not None and failure_event.failure_id != FailureCode.REPEATED_PLANNER_OUTPUT:
+            previous = (failure_event.evidence or {}).get('fact') or failure_event.message
+        elif failure_event is not None:
+            previous = (failure_event.evidence or {}).get('previous_fact')
+        if previous:
+            fact = f'{fact} Earlier it failed with: {previous}'
         event = FailureEvent(
             failure_id=FailureCode.REPEATED_PLANNER_OUTPUT, stage=FailureStage.BEFORE_EXECUTION,
             source=FailureSource.VALIDATION, action=None,
-            evidence={'fact': fact, 'raw_output': result.raw_output, 'repeat': self._repeat_count, 'output_hash': key,
+            evidence={'fact': fact, 'raw_output': result.raw_output, 'repeat': count, 'output_hash': key,
+                      'failure_signature': signature, 'previous_fact': previous,
                       'corrective_rejection': request.get('corrective') is not None},
             failure_layer=FailureLayer.LAYER_1, should_replan=not stop,
-            message=f'Repeated planner output ({self._repeat_count}): {fact}',
+            message=f'Repeated planner output ({count}): {fact}',
         )
         if stop:
             self._set_termination(TerminationReason.REPLAN_LOOP)
         return PlanResult(False, [], result.raw_output, result.inference_time, event.message, event,
-                          timing=getattr(result, 'timing', None))
+                          timing=getattr(result, 'timing', None), reasoning=getattr(result, 'reasoning', None))
 
     def _replan_reason(self, failure_event, corrective: bool) -> str:
         """Why this planner call happens (logged on every planning_event)."""
@@ -1223,12 +1268,18 @@ class LLMOnlyReplanningPipeline:
             prompt_path=prompt_path,
             image_present=bool(bundle.images),
             raw_output=result.raw_output,
-            reasoning=split_reasoning(result.raw_output)[0],
+            reasoning=(result.reasoning if getattr(result, 'reasoning', None) is not None
+                       else split_reasoning(result.raw_output)[0]),
             parsed_output=parsed,
             planner_call_latency_s=float(result.inference_time or 0.0),
             wall_latency_s=round(float(wall_latency_s), 4),
             queue_wait_s=timing.get('queue_wait_s'),
             generation_time_s=timing.get('generation_time_s'),
+            finish_reason=timing.get('finish_reason'),
+            prompt_tokens=timing.get('prompt_tokens'),
+            completion_tokens=timing.get('completion_tokens'),
+            sampling_preset=timing.get('sampling_preset'),
+            settings_fingerprint=timing.get('settings_fingerprint'),
             error_message=result.error_message,
         )
         if result.failure_event is not None:
@@ -1766,6 +1817,10 @@ class LLMOnlyReplanningPipeline:
 
                 pending_failure = execution.last_failure_event
                 failure_reason = execution.error_message or (pending_failure.message if pending_failure else 'execution_failed')
+                if pending_failure is not None and pending_failure.failure_id in INFRASTRUCTURE_FAILURE_CODES:
+                    # A simulator error during an action (Phase 7c): excluded from scoring and rerun.
+                    self._set_termination(TerminationReason.INFRASTRUCTURE)
+                    break
                 if pending_failure is None or not pending_failure.should_replan:
                     self._set_termination(TerminationReason.NON_REPLANNABLE_FAILURE)
                     break
@@ -1941,8 +1996,9 @@ if __name__ == '__main__':
     display_group = parser.add_mutually_exclusive_group()
     display_group.add_argument("--gui", action="store_true", help="Run with simulator GUI (default)")
     display_group.add_argument("--headless", action="store_true", help="Run without simulator GUI")
-    parser.add_argument("--remote", action="store_true", help="Use the maintained remote LLM planner server")
-    parser.add_argument("--remote-url", default=os.environ.get("LLM_SERVER_URL", os.environ.get("VLM_SERVER_URL", "http://localhost:8000")), help="Remote planner server URL")
+    parser.add_argument("--remote", action="store_true", help="Use a remote planner server (default API: vLLM, OpenAI-compatible)")
+    parser.add_argument("--remote-api", choices=["openai", "legacy"], default="openai", help="openai: vLLM server; legacy: llm_pipeline/server.py")
+    parser.add_argument("--remote-url", default=os.environ.get("VLLM_SERVER_URL", os.environ.get("LLM_SERVER_URL", "http://127.0.0.1:8000")), help="Remote planner server URL")
     parser.add_argument("--replan-mode", choices=["on", "off"], default="on", help="Use full execution+replanning or first-plan-only mode")
     parser.add_argument("--task-family", choices=["kitchen", "grill"], default="", help="Task family override when --variant is not set")
     parser.add_argument("--scene-path", default="", help="Scene path override")
@@ -1951,6 +2007,21 @@ if __name__ == '__main__':
     parser.add_argument("--no-goal-check", action="store_true", help="Disable LLM goal-completion verification after each completed plan")
     parser.add_argument("--output", default="", help="Optional JSON output path")
     args = parser.parse_args()
+
+    # The same refusals as llm_pipeline.trial_runner (Phase 7c): a clean tree and a planner
+    # whose settings are reported and match the pinned model. This CLI writes no trial log;
+    # use llm_pipeline.trial_runner for trials.
+    import sys as _sys
+    from llm_pipeline.trial_runner import (
+        _pre_run_planner_settings, expected_model_revision, git_commit_info, real_model_refusals,
+    )
+    _requested = args.model if (args.remote and args.remote_api == "openai") else None
+    _problems = real_model_refusals(
+        git_commit_info(), _pre_run_planner_settings(args.remote, args.remote_url, args.remote_api, args.model),
+        requested_model=_requested, expected_revision=expected_model_revision(args.model) if _requested else None)
+    if _problems:
+        print("[ENTRY] refusing to run: " + "; ".join(_problems), file=_sys.stderr)
+        _sys.exit(2)
 
     variant_spec = None
     if args.variant:
@@ -2001,6 +2072,7 @@ if __name__ == '__main__':
         prompt_mode=PROMPT_MODE_VLM_MULTIMODAL if args.vision else PROMPT_MODE_SEGMENTATION_TEXT,
         use_remote_planner=args.remote,
         remote_planner_url=args.remote_url,
+        remote_planner_api=args.remote_api,
         task_family=task_family,
         scene_path=scene_path,
         variant_id=variant_spec.variant_id if variant_spec is not None else "",

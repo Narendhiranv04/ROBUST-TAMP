@@ -70,6 +70,27 @@ def _ensure_kitchen_gt_imports() -> None:
     run_open_box = _gt.run_open_box
 
 
+# Exceptions inside an action primitive that mean the simulator (or our code) broke, not that
+# the motion could not be planned: the trial ends as infrastructure (Phase 7c). Motion-planning
+# failures arrive as RuntimeError / IK configuration errors and keep their own codes.
+SIMULATOR_EXCEPTION_TYPES = (MemoryError, OSError, SystemError, AttributeError, TypeError, KeyError,
+                             IndexError, NameError, ImportError, ZeroDivisionError)
+
+
+def is_simulator_exception(exc: BaseException) -> bool:
+    return isinstance(exc, SIMULATOR_EXCEPTION_TYPES) or type(exc).__name__ == 'FatalError'  # mujoco.FatalError
+
+
+def simulator_error_event(action, exc: BaseException, evidence: dict) -> FailureEvent:
+    return FailureEvent(
+        failure_id=FailureCode.SIMULATOR_ERROR, stage=FailureStage.AFTER_EXECUTION,
+        source=FailureSource.EXECUTOR, action=str(action),
+        evidence={**dict(evidence), 'exception_type': type(exc).__name__, 'exception': str(exc)[:500]},
+        failure_layer=FailureLayer.LAYER_1, should_replan=False,
+        message=f'Simulator error during {action}: {type(exc).__name__}: {exc}',
+    )
+
+
 # Post-place failures that mean the object is not where the place was meant to put it.
 PLACE_FAILURE_CODES = frozenset({
     FailureCode.PLACEMENT_FAILED, FailureCode.GEOMETRIC_PLACEMENT_FAILED, FailureCode.OBJECT_DROPPED,
@@ -508,19 +529,23 @@ class UnifiedActionBundler:
                         ok, msg = gt_executor.execute_next(requested_action=sub_stage)
                     except Exception as exc:
                         msg = f'Bundle execution failed during {stage_action.action_name}/{sub_stage}: {exc}'
-                        failure = self._runtime_failure(
-                            stage_action,
-                            msg,
-                            legacy_id=legacy_id,
-                            evidence={
-                                'object': obj_name,
-                                'target': target_region,
-                                'stage_index': stage_index + 1,
-                                'sub_stage': sub_stage,
-                                'exception_type': type(exc).__name__,
-                            },
-                            failure_checker=failure_checker,
-                        )
+                        evidence = {
+                            'object': obj_name,
+                            'target': target_region,
+                            'stage_index': stage_index + 1,
+                            'sub_stage': sub_stage,
+                            'exception_type': type(exc).__name__,
+                        }
+                        if is_simulator_exception(exc):
+                            failure = simulator_error_event(stage_action, exc, evidence)
+                        else:
+                            failure = self._runtime_failure(
+                                stage_action,
+                                msg,
+                                legacy_id=legacy_id,
+                                evidence=evidence,
+                                failure_checker=failure_checker,
+                            )
                         self.executor._trace_bundle_state(
                             failure_checker,
                             event=f'failure-bundle-{stage_index + 1}',

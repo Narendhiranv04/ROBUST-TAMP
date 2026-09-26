@@ -22,7 +22,12 @@ def fn_sample_stable_pose(o, r):
 
     # Yield multiple samples to help the planner find a reachable one
     for _ in range(50):
-        pose = ENV.sample_stable_pose(obj, r)
+        try:
+            pose = ENV.sample_stable_pose(obj, r)
+        except RuntimeError as exc:
+            if type(exc).__name__ == 'NoFreePlacement':   # region full: no more samples (-> no plan)
+                return
+            raise
         yield (tuple(pose),)   # outputs: (?p)
 
 def fn_sample_pick_kin(o, p):

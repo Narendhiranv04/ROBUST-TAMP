@@ -23,6 +23,10 @@ DEFAULT_SCENE_FILE = os.path.join(os.path.dirname(__file__), "task1_variation1.t
 SCENE_FILE = os.environ.get("KITCHEN_SCENE_FILE", DEFAULT_SCENE_FILE)
 MUG_PLACEMENT_MIN_SAMPLE_Z = float(os.environ.get("MUG_PLACEMENT_MIN_SAMPLE_Z", "0.8"))
 
+class NoFreePlacement(RuntimeError):
+    """A region has no spot where the object's footprint is clear of the other objects."""
+
+
 class RLBenchKitchenEnv:
     def __init__(self, headless=True):
         self.pr = PyRep()
@@ -358,8 +362,92 @@ class RLBenchKitchenEnv:
         w_max = np.max(world_corners, axis=0)
         return w_min[0], w_max[0], w_min[1], w_max[1], w_min[2], w_max[2]
 
+    def _placement_rng(self, obj, region_name):
+        """Random generator for one placement sample (Phase 7c).
+
+        With ``TAMP_TRIAL_SEED`` set (the trial runner sets it to the trial seed), the k-th sample
+        for an (object, region) pair is drawn from a generator derived from (seed, object, region,
+        k): the samples do not depend on how many random numbers other code (pddlstream's
+        time-bounded sampling, the motion planner) consumed before. Without the variable the
+        generator is unseeded."""
+        import zlib
+        try:
+            name = str(obj.get_name())
+        except Exception:
+            name = str(obj)
+        calls = self.__dict__.setdefault('_placement_calls', {})
+        key = (name, str(region_name))
+        calls[key] = calls.get(key, 0) + 1
+        self._last_placement_call = calls[key]      # 1-based index of this sample for (object, region)
+        seed = os.environ.get('TAMP_TRIAL_SEED', '').strip()
+        if not seed:
+            return np.random.default_rng()
+        return np.random.default_rng([int(seed) % (2 ** 32), zlib.crc32(name.encode()), zlib.crc32(key[1].encode()),
+                                      calls[key]])
+
+    def _cupboard_free_candidates(self, obj, min_x, max_x, min_y, max_y, w_min_z, w_max_z):
+        """Shelf positions where the object's footprint does not overlap any other object's
+        footprint (plus a margin), ordered by how tightly they pack against an object or a wall.
+
+        The shelf is shallow (about 9 cm), so objects on it form a row along y; a spot is free
+        when the object's y-interval (half-extent + margin) is clear of every other object's.
+        Packing against a neighbour or a wall leaves the free width in one piece, so a later
+        grocery still fits (Phase 7c: the old sampler picked among the 8 best spots of a coarse
+        5x5 grid by centre distance and could target a spot overlapping a can)."""
+        margin = float(os.environ.get('CUPBOARD_FREE_MARGIN', '0.01'))
+        try:
+            ox0, ox1, oy0, oy1, _, _ = self._get_world_bounding_box(obj)
+            half_x, half_y = 0.5 * (ox1 - ox0), 0.5 * (oy1 - oy0)
+        except Exception:
+            half_x, half_y = 0.03, 0.03
+        occupied = []
+        seen = set()
+        for name, other in getattr(self, 'name_to_obj', {}).items():
+            if other is None or other == obj:
+                continue
+            if any(tag in str(name).lower() for tag in ('boundary', 'table', 'cupboard', 'box_base')):
+                continue
+            try:
+                handle = int(other.get_handle())
+            except Exception:
+                handle = id(other)
+            if handle in seen:
+                continue
+            seen.add(handle)
+            try:
+                bx0, bx1, by0, by1, bz0, bz1 = self._get_world_bounding_box(other)
+            except Exception:
+                continue
+            if bz1 < w_min_z - 0.05 or bz0 > w_max_z + 0.20:
+                continue                           # not on this shelf
+            if bx1 < min_x - 0.10 or bx0 > max_x + 0.10 or by1 < min_y - 0.10 or by0 > max_y + 0.10:
+                continue
+            occupied.append((by0, by1))
+        grid_x = max(1, int(os.environ.get('CUPBOARD_SAMPLE_GRID_X', '3')))
+        grid_y = max(2, int(os.environ.get('CUPBOARD_SAMPLE_GRID_Y', '25')))
+        lo_y, hi_y = min_y + half_y + margin, max_y - half_y - margin
+        if lo_y > hi_y:
+            lo_y = hi_y = 0.5 * (min_y + max_y)
+        xs = np.linspace(min_x, max_x, grid_x + 2)[1:-1] if grid_x > 1 else [0.5 * (min_x + max_x)]
+        ys = np.linspace(lo_y, hi_y, grid_y)
+        free = []
+        for y in ys:
+            y0, y1 = y - half_y - margin, y + half_y + margin
+            if any(y0 < b1 and b0 < y1 for b0, b1 in occupied):
+                continue
+            # Packing score: gap to the nearest neighbour or wall on either side (smaller = tighter).
+            edges_below = [b1 for b0, b1 in occupied if b1 <= y0] + [min_y]
+            edges_above = [b0 for b0, b1 in occupied if b0 >= y1] + [max_y]
+            gap = min(y0 - max(edges_below), min(edges_above) - y1)
+            for x in xs:
+                free.append((round(max(0.0, gap), 4), float(y), float(x)))
+        # Tightest first; ties from the low-y wall, then the front of the shelf.
+        free.sort()
+        return [(gap, x, y) for gap, y, x in free]
+
     def sample_stable_pose(self, obj, region_name):
         """Return a stable 7D pose (x,y,z,qx,qy,qz,qw) for obj in region."""
+        rng = self._placement_rng(obj, region_name)
         region_name = normalize_region_name(region_name)
         region = self.regions.get(region_name)
         if not region:
@@ -456,7 +544,7 @@ class RLBenchKitchenEnv:
                     return min(float(np.linalg.norm(p - q)) for q in occupied_xy)
 
                 # Shuffle to avoid deterministic tie bias in symmetric scenes.
-                np.random.shuffle(candidates)
+                rng.shuffle(candidates)
                 if mode == "clear_random":
                     # Any candidate with enough clearance, uniformly: the planner's repeated
                     # samples then cover the whole free area instead of the same few
@@ -464,17 +552,17 @@ class RLBenchKitchenEnv:
                     min_clear = float(os.environ.get("CLEAR_XY_MIN_CLEARANCE", "0.07"))
                     clear = [c for c in candidates if _clearance_score(c) >= min_clear]
                     if clear:
-                        return clear[int(np.random.randint(0, len(clear)))]
+                        return clear[int(rng.integers(0, len(clear)))]
                     mode = "top_random"
                 if mode == "top_random":
                     scored = sorted(candidates, key=_clearance_score, reverse=True)
                     top_n = max(1, min(len(scored), int(os.environ.get("CLEAR_XY_TOP_RANDOM", "8"))))
-                    return scored[int(np.random.randint(0, top_n))]
+                    return scored[int(rng.integers(0, top_n))]
                 return max(candidates, key=_clearance_score)
 
             return (
-                float(np.random.uniform(min_x, max_x)),
-                float(np.random.uniform(min_y, max_y)),
+                float(rng.uniform(min_x, max_x)),
+                float(rng.uniform(min_y, max_y)),
             )
 
         is_box_region = region_name in { BOX_STORAGE_REGION}
@@ -570,16 +658,15 @@ class RLBenchKitchenEnv:
             max_x = w_max_x - cupboard_padding
             min_y = w_min_y + cupboard_padding
             max_y = w_max_y - cupboard_padding
-            sample_x, sample_y = sample_clear_xy(
-                min_x,
-                max_x,
-                min_y,
-                max_y,
-                max(3, int(os.environ.get("CUPBOARD_LOWER_SAMPLE_GRID", "5"))),
-                float(os.environ.get("CUPBOARD_LOWER_OCCUPANCY_PAD_XY", "0.04")),
-                float(os.environ.get("CUPBOARD_LOWER_OCCUPANCY_PAD_Z", "0.20")),
-                mode="top_random",
-            )
+            # Only spots where the object's footprint is clear of every other object (Phase 7c).
+            free = self._cupboard_free_candidates(obj, min_x, max_x, min_y, max_y, w_min_z, w_max_z)
+            if not free:
+                raise NoFreePlacement(f'no free spot for {obj.get_name()} on the cupboard shelf')
+            # The k-th sample for this object takes the k-th tightest free spot: the first reachable
+            # one packs against a neighbour or a wall; the planner's retries (unreachable spots)
+            # walk on through the free width.
+            k = int(getattr(self, '_last_placement_call', 1)) - 1
+            _, sample_x, sample_y = free[k % len(free)]
 
             # Keep the previous lower-cupboard Z behavior; only choose clearer XY.
             sample_z = w_max_z + 0.005
@@ -637,8 +724,8 @@ class RLBenchKitchenEnv:
             )
             sample_z = w_max_z + 0.005
         else:
-            sample_x = np.random.uniform(w_min_x + padding, w_max_x - padding)
-            sample_y = np.random.uniform(w_min_y + padding, w_max_y - padding)
+            sample_x = rng.uniform(w_min_x + padding, w_max_x - padding)
+            sample_y = rng.uniform(w_min_y + padding, w_max_y - padding)
 
             # Default (Table)
             sample_z = w_max_z + 0.005
@@ -1813,6 +1900,7 @@ class RLBenchKitchenEnv:
 
     def find_best_placement(self, obj, region_name, count=50):
         """Find a collision-free placement in region. Returns the first valid one found."""
+        rng = self._placement_rng(obj, region_name)
         region_name = normalize_region_name(region_name)
         region = self.regions.get(region_name)
         if not region:
@@ -1970,8 +2058,8 @@ class RLBenchKitchenEnv:
         else:
             # Try random positions
             for _ in range(count):
-                sample_x = np.random.uniform(search_min_x, search_max_x)
-                sample_y = np.random.uniform(search_min_y, search_max_y)
+                sample_x = rng.uniform(search_min_x, search_max_x)
+                sample_y = rng.uniform(search_min_y, search_max_y)
                 if _violates_obstacle_keepout(sample_x, sample_y):
                     continue
                 

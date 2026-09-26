@@ -95,13 +95,18 @@ def test_independent_actions_run_during_the_replan_and_affected_ones_do_not(tmp_
     assert summary['success'] is True
 
 
-def test_anchor_executed_during_the_wait_moves_the_block_to_the_front(tmp_path) -> None:
-    # a7 = place(sugar, cupboard_shelf), executed while the planner works.
-    pipeline, planner, summary, events = _parallel_run(tmp_path, [INITIAL, _blocks('deferred', 'after a7')])
-    insertion = [e for e in events if e['event'] == 'insertion'][0]
-    assert insertion['anchors_already_executed'] == ['a7']
-    assert insertion['failure_codes'] == [FailureCode.ANCHOR_ALREADY_EXECUTED]
-    assert insertion['merged_plan'][0].endswith('pick(phone)')
+def test_an_anchor_on_a_scheduled_action_is_rejected_and_requeried(tmp_path) -> None:
+    # a7 = place(sugar, cupboard_shelf) is scheduled to run while the planner works (Phase 7c):
+    # it is not in the remaining plan the blocks are inserted into, so it cannot be an anchor.
+    pipeline, planner, summary, events = _parallel_run(
+        tmp_path, [INITIAL, _blocks('deferred', 'after a7'), _blocks('urgent', 'front')])
+    insertion = [e for e in events if e['event'] == 'insertion']
+    assert insertion[0]['accepted'] is False and 'a7' in insertion[0]['rejection']
+    assert insertion[1]['accepted'] is True and insertion[1]['merged_plan'][0].endswith('pick(phone)')
+    prompt = planner.bundles[1].user_prompt
+    scheduled = prompt.split('## Scheduled to run before your corrective block is applied')[1].split('## Remaining plan')[0]
+    assert 'a7: place(sugar, cupboard_shelf)' in scheduled
+    assert 'a7:' not in prompt.split('## Completed actions')[1].split('## Scheduled')[0]
     assert summary['success'] is True
 
 

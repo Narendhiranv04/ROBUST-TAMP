@@ -183,14 +183,18 @@ ORPHAN = 'FINAL ACTIONS:\nplace(mug2, inside_box)'
 
 
 def test_a_repeated_output_is_requeried_once_then_the_trial_stops(tmp_path) -> None:
-    pipeline, planner, summary, events = _run(tmp_path, [ORPHAN, ORPHAN, ORPHAN])
+    # Phase 7c: repeats count per (state, output, failure answered); the initial call and the
+    # plan-check re-query answer different failures, so the first repeat is the third call.
+    pipeline, planner, summary, events = _run(tmp_path, [ORPHAN, ORPHAN, ORPHAN, ORPHAN])
     checks = [c['failure_codes'] for c in _events(events, 'plan_check')]
-    assert checks == [['orphan_place'], ['repeated_planner_output'], ['repeated_planner_output']]
-    assert 'repeated_planner_output' in planner.bundles[2].user_prompt
-    assert 'This output was already tried in the same state and it did not work.' in planner.bundles[2].user_prompt
+    assert checks == [['orphan_place'], ['orphan_place'], ['repeated_planner_output'], ['repeated_planner_output']]
+    assert 'repeated_planner_output' in planner.bundles[3].user_prompt
+    note = planner.bundles[3].user_prompt
+    assert 'This output was already tried in the same state and it did not work.' in note
+    assert 'Earlier it failed with:' in note and 'gripper is empty' in note     # the original reason is kept
     assert pipeline.termination_reason == 'replan_loop'
     assert [e['replan_reason'] for e in _events(events, 'planning_event')] == [
-        'initial', 'plan_check_requery', 'repeated_output_requery']
+        'initial', 'plan_check_requery', 'plan_check_requery', 'repeated_output_requery']
 
 
 def test_a_different_output_after_a_repeat_note_recovers(tmp_path) -> None:
@@ -271,7 +275,8 @@ def test_the_timeout_covers_generation_only_and_timing_is_logged() -> None:
     queued = {'job_id': 'job1', 'status': 'queued', 'queue_wait_s': 500.0, 'running_for_s': 0.0}
     fake = _FakeRequests({}, PLAN_OK, job_states=[queued, queued])
     _, result = _remote(fake, request_timeout_s=10.0)
-    assert result.success is True and result.timing == {'queue_wait_s': 1.5, 'generation_time_s': 2.5}
+    assert result.success is True
+    assert {k: result.timing[k] for k in ('queue_wait_s', 'generation_time_s')} == {'queue_wait_s': 1.5, 'generation_time_s': 2.5}
     running = {'job_id': 'job1', 'status': 'running', 'queue_wait_s': 0.5, 'running_for_s': 11.0}
     fake = _FakeRequests({}, PLAN_OK, job_states=[running])
     _, result = _remote(fake, request_timeout_s=10.0)

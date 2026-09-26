@@ -90,6 +90,7 @@ class RemoteTextLLMPlanner:
         self.poll_interval_s = float(os.environ.get('LLM_POLL_INTERVAL_S', '0.5'))
         self.http_timeout_s = float(os.environ.get('LLM_HTTP_TIMEOUT_S', '30'))
         self.server_settings: Dict[str, Any] = {}
+        self.start_fingerprint: Optional[str] = None   # settings fingerprint at trial start
 
         self.expected_model = expected_model
         self.loaded = False
@@ -124,6 +125,7 @@ class RemoteTextLLMPlanner:
                     self.model_name = data.get('model_name', self.model_name)
                     if self.loaded:
                         self.server_settings = self.fetch_settings()
+                        self.start_fingerprint = self.server_settings.get('settings_fingerprint')
                         return True
                     last_error = f"model_not_loaded health={data}"
             except Exception as exc:
@@ -190,17 +192,36 @@ class RemoteTextLLMPlanner:
                 raise PlannerServerError('http_status', f'{response.status_code} - {response.text[:300]}')
             state = response.json()
             status = state.get('status')
-            timing = {'queue_wait_s': state.get('queue_wait_s'), 'generation_time_s': state.get('generation_time_s')}
+            timing = {'queue_wait_s': state.get('queue_wait_s'), 'generation_time_s': state.get('generation_time_s'),
+                      'settings_fingerprint': state.get('settings_fingerprint')}
+            # Every response carries the server's settings fingerprint; a change since the
+            # start of the trial (restart, other model or settings) is infrastructure.
+            if self.start_fingerprint is not None and state.get('settings_fingerprint') != self.start_fingerprint:
+                self._cancel(job_id)
+                raise PlannerServerError('settings_changed',
+                                         f'server settings fingerprint {state.get("settings_fingerprint")!r} differs '
+                                         f'from {self.start_fingerprint!r} at trial start', timing)
             if status == 'done':
                 return dict(state.get('result') or {}), timing
             if status == 'error':
                 raise PlannerServerError('server_error', str(state.get('error')), timing)
+            if status == 'cancelled':
+                raise PlannerServerError('cancelled', f'job {job_id} was cancelled on the server', timing)
             if status == 'running' and float(state.get('running_for_s') or 0.0) > self.request_timeout_s:
+                self._cancel(job_id)
                 raise PlannerServerError('generation_timeout',
                                          f'generation ran longer than {self.request_timeout_s:.0f} s', timing)
             if status == 'queued' and time.monotonic() - started > self.queue_timeout_s:
+                self._cancel(job_id)
                 raise PlannerServerError('queue_timeout', f'queued longer than {self.queue_timeout_s:.0f} s', timing)
             time.sleep(self.poll_interval_s)
+
+    def _cancel(self, job_id: str) -> None:
+        """Tell the server to drop a job the client gave up on (best effort)."""
+        try:
+            requests.post(f'{self.server_url}/plan/jobs/{job_id}/cancel', timeout=self.http_timeout_s)
+        except Exception:
+            pass
 
     @staticmethod
     def _infrastructure_result(error: 'PlannerServerError', started_at: float) -> PlanResult:
@@ -305,6 +326,12 @@ class RemoteTextLLMPlanner:
             failure_event = self._decode_failure_event(data.get('failure_event'))
             actions = []
 
+            if not data.get('success', False) and not raw_output.strip() and failure_event is None:
+                # No model output at all and no plan-check failure: the planner failed on the
+                # server (e.g. an older server that returns runtime errors as success=false).
+                return self._infrastructure_result(
+                    PlannerServerError('server_error', str(data.get('error_message') or 'unsuccessful, empty planner output'),
+                                       timing), started_at)
             if prompt_version == 'v2' and (getattr(bundle, 'metadata', {}) or {}).get('output_format') == 'corrective_blocks':
                 # Corrective blocks (Phase 5) are parsed and merged by the pipeline.
                 return PlanResult(success=bool(raw_output.strip()), actions=[], raw_output=raw_output,

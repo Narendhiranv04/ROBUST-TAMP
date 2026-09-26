@@ -716,13 +716,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
         Generate an action plan from visual context and prompts.
         """
         if not self.loaded:
-            return PlanResult(
-                success=False,
-                skeleton=[],
-                raw_output="",
-                inference_time=0,
-                error_message="Model not loaded. Call load_model() first."
-            )
+            # Not a model output: raised so it becomes infrastructure (Phase 7c, audit B-1).
+            raise RuntimeError("Model not loaded. Call load_model() first.")
 
         start_time = time.time()
         self._record_request(system_prompt, user_prompt, use_vision=True, image=image)
@@ -763,15 +758,10 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                 inference_time=inference_time,
                 error_message=error_message,
             )
-        except Exception as e:
-            inference_time = time.time() - start_time
-            return PlanResult(
-                success=False,
-                skeleton=[],
-                raw_output="",
-                inference_time=inference_time,
-                error_message=str(e),
-            )
+        except Exception:
+            # Runtime failures (out of memory, CUDA errors) are not model outputs: re-raised so
+            # the planner server reports a job error -> infrastructure (Phase 7c, audit B-1).
+            raise
 
     def generate_plan_text_only(self,
                                 system_prompt: str,
@@ -784,13 +774,8 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
         Falls back to text-only generation on the loaded model.
         """
         if not self.loaded:
-            return PlanResult(
-                success=False,
-                skeleton=[],
-                raw_output="",
-                inference_time=0,
-                error_message="Model not loaded."
-            )
+            # Not a model output: raised so it becomes infrastructure (Phase 7c, audit B-1).
+            raise RuntimeError("Model not loaded.")
 
         start_time = time.time()
         self._record_request(system_prompt, user_prompt, use_vision=False)
@@ -829,14 +814,9 @@ Use only the needed actions. Do not include any text after the FINAL ACTIONS blo
                 inference_time=inference_time,
                 error_message=error_message,
             )
-        except Exception as e:
-            return PlanResult(
-                success=False,
-                skeleton=[],
-                raw_output="",
-                inference_time=time.time() - start_time,
-                error_message=str(e)
-            )
+        except Exception:
+            # Runtime failures are not model outputs: re-raised -> infrastructure (Phase 7c, B-1).
+            raise
 
     def get_debug_info(self) -> Dict[str, Any]:
         return {

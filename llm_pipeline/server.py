@@ -142,6 +142,20 @@ def server_git_commit(root: str = ROOT_DIR) -> Dict[str, Any]:
         return {'commit': None, 'dirty': None}
 
 
+SETTINGS_FINGERPRINT_KEYS = ('model_name', 'model_alias', 'model_revision', 'quantization', 'thinking_mode',
+                             'format_repair', 'server_git_commit')
+
+
+def settings_fingerprint(settings: Dict[str, Any]) -> str:
+    """Hash of the settings that change what the model generates; returned with every job
+    so the client can detect a server that changed (restart, other model) mid-trial."""
+    import hashlib
+    import json as _json
+
+    payload = _json.dumps({key: settings.get(key) for key in SETTINGS_FINGERPRINT_KEYS}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]
+
+
 class PlanJobQueue:
     """Serial job queue: one worker thread runs one job at a time, in submission order.
 
@@ -184,7 +198,7 @@ class PlanJobQueue:
             job_id = self._queue.get()
             with self._lock:
                 job = self._jobs.get(job_id)
-                if job is None:
+                if job is None or job['status'] == 'cancelled':
                     continue
                 job['status'], job['started_at'] = 'running', time.monotonic()
             try:
@@ -194,8 +208,22 @@ class PlanJobQueue:
             with self._lock:
                 job['finished_at'] = time.monotonic()
                 job['result'], job['error'] = result, error
-                job['status'] = 'error' if error is not None else 'done'
+                if job['status'] != 'cancelled':   # a cancelled running job is discarded when it ends
+                    job['status'] = 'error' if error is not None else 'done'
                 job['payload'] = None
+
+    def cancel(self, job_id: str) -> Optional[str]:
+        """Cancel a job the client gave up on (timeout). A queued job never runs; a running
+        generation cannot be interrupted, so its result is discarded when it ends."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            if job['status'] in ('queued', 'running'):
+                job['status'] = 'cancelled'
+                if job['finished_at'] is None and job['started_at'] is None:
+                    job['finished_at'] = time.monotonic()
+            return job['status']
 
     def status(self, job_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -212,7 +240,7 @@ class PlanJobQueue:
                 'queue_wait_s': round((started if started is not None else now) - job['submitted_at'], 4),
                 'running_for_s': round(((finished if finished is not None else now) - started), 4)
                 if started is not None else 0.0,
-                'generation_time_s': round(finished - started, 4) if finished is not None else None,
+                'generation_time_s': round(finished - started, 4) if (finished is not None and started is not None) else None,
                 'result': job['result'],
                 'error': job['error'],
             }
@@ -220,7 +248,7 @@ class PlanJobQueue:
     def wait(self, job_id: str, poll_s: float = 0.05) -> Dict[str, Any]:
         while True:
             state = self.status(job_id)
-            if state is None or state['status'] in ('done', 'error'):
+            if state is None or state['status'] in ('done', 'error', 'cancelled'):
                 return state
             time.sleep(poll_s)
 
@@ -271,7 +299,12 @@ class LLMServer:
         return self.loaded
 
     def settings(self) -> Dict[str, Any]:
-        """Everything that changes what the model generates (GET /settings)."""
+        """Everything that changes what the model generates (GET /settings), plus its fingerprint."""
+        settings = self._settings()
+        settings['settings_fingerprint'] = settings_fingerprint(settings)
+        return settings
+
+    def _settings(self) -> Dict[str, Any]:
         from llm_pipeline.planner import model_revision, thinking_mode_setting
 
         model = getattr(self.planner, 'model', None)
@@ -474,9 +507,18 @@ def create_app(
             'last_request': server.last_request_summary,
         }
 
+    fingerprint = {'value': None}
+
+    def _fingerprint():
+        # The git state is read once; model settings do not change while the process runs.
+        if fingerprint['value'] is None:
+            fingerprint['value'] = server.settings()['settings_fingerprint']
+        return fingerprint['value']
+
     def _job_payload(state):
         payload = {key: state[key] for key in ('job_id', 'status', 'queue_position', 'queue_wait_s',
                                                'running_for_s', 'generation_time_s', 'error')}
+        payload['settings_fingerprint'] = _fingerprint()
         result = state.get('result')
         dump = getattr(result, 'model_dump', None) or getattr(result, 'dict', None)
         payload['result'] = dump() if callable(dump) else result
@@ -497,6 +539,13 @@ def create_app(
         if state is None:
             raise HTTPException(status_code=404, detail=f'unknown job {job_id}')
         return _job_payload(state)
+
+    @app.post('/plan/jobs/{job_id}/cancel')
+    def cancel_plan_job(job_id: str):
+        status = jobs.cancel(job_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail=f'unknown job {job_id}')
+        return {'job_id': job_id, 'status': status}
 
     @app.post('/plan', response_model=PlanResponse)
     def generate_plan(request: PlanRequest):
@@ -528,7 +577,8 @@ def create_app(
                 '/health': 'GET - Check server health',
                 '/settings': 'GET - Model, revision, thinking mode, format repair, server commit',
                 '/plan/submit': 'POST - Queue a planner call; returns a job id',
-                '/plan/jobs/{id}': 'GET - Job status, queue wait, generation time, result',
+                '/plan/jobs/{id}': 'GET - Job status, queue wait, generation time, result, settings fingerprint',
+                '/plan/jobs/{id}/cancel': 'POST - Cancel a job the client gave up on',
                 '/plan': 'POST - Generate direct LLM action plan (blocking)',
                 '/check-goal': 'POST - Verify whether the goal is complete',
                 '/debug/last-request': 'GET - Inspect last request',
