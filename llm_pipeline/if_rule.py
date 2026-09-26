@@ -1,7 +1,7 @@
 """IF: the replan trigger rule (plan.md Phase 4, ``replan.trigger_mode = if_rule``).
 
-After every observation the system evaluates every observed object (visible or
-remembered) that the remaining plan does not account for:
+After every observation the system evaluates every observed object (visible, plus
+remembered when memory is on) that the remaining plan does not account for:
 
 | Relevant? | Goal-attained? | Overlapping? | Decision                              |
 |-----------|----------------|--------------|---------------------------------------|
@@ -161,7 +161,8 @@ def describe_trigger(assessment: ObjectAssessment, region_name: Callable[[str], 
     overlap = (f'lies where the remaining plan places objects into {areas}' if areas
                else 'does not lie where the remaining plan places objects')
     if assessment.relevant:
-        return f'{assessment.object_id} (in {where}): relevant to the goal, not in its goal state; {overlap}'
+        state = 'in its goal state' if assessment.goal_attained else 'not in its goal state'
+        return f'{assessment.object_id} (in {where}): relevant to the goal, {state}; {overlap}'
     return f'{assessment.object_id} (in {where}): not relevant to the goal; {overlap}'
 
 

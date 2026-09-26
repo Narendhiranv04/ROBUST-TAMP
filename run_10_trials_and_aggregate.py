@@ -34,8 +34,6 @@ def _trial_command(args: argparse.Namespace, trial_index: int, trial_dir: Path) 
         args.model,
         "--icl-mode",
         args.icl_mode,
-        "--max-replans",
-        str(args.max_replans),
         "--planner-max-new-tokens",
         str(args.planner_max_new_tokens),
         "--goal-check-max-new-tokens",
@@ -262,7 +260,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=10)
     parser.add_argument("--icl-mode", choices=["zero_shot", "few_shot_shared_1"], default="zero_shot")
     parser.add_argument("--remote-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--max-replans", type=int, default=10)
     parser.add_argument("--planner-max-new-tokens", type=int, default=4096)
     parser.add_argument("--goal-check-max-new-tokens", type=int, default=128)
     parser.add_argument("--output-root", default="eval_results_10_trials")

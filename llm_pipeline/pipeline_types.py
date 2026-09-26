@@ -54,6 +54,8 @@ class PlanResult:
     inference_time: float
     error_message: Optional[str] = None
     failure_event: Optional['FailureEvent'] = None
+    # Planner-server timing: queue_wait_s (waiting for the model) and generation_time_s.
+    timing: Optional[Dict[str, Any]] = None
 
 
 @dataclass

@@ -91,7 +91,9 @@ class VLMPlanner(BasePlanner):
         max_new_tokens = int(metadata.get("max_new_tokens", 4096) or 4096)
         temperature = float(metadata.get("temperature", 0.0) or 0.0)
         use_vision = composite is not None
-        allow_format_repair = metadata.get("prompt_version") != "v2"
+        # The format-repair regeneration is a second, hidden model call: off unless the
+        # planner server was started with --format-repair, and never for prompt.version=v2.
+        allow_format_repair = bool(metadata.get("allow_format_repair", False)) and metadata.get("prompt_version") != "v2"
         self.last_request_summary = {
             "model_type": "vlm",
             "text_only": not use_vision,
@@ -255,6 +257,21 @@ class VLMPlanner(BasePlanner):
                 inference_time=time.time() - start_time,
                 error_message=str(exc),
             )
+
+    def planner_settings(self) -> Dict[str, Any]:
+        """Settings that change what the model generates (logged in trial_start)."""
+        from llm_pipeline.planner import model_revision, thinking_mode_setting
+
+        return {
+            "planner": "local",
+            "model_name": self.model_name,
+            "model_alias": self.model_alias,
+            "model_type": "vlm",
+            "model_revision": model_revision(getattr(self.legacy_planner, "model", None)),
+            "quantization": getattr(self.legacy_planner, "quantization", "none"),
+            "thinking_mode": thinking_mode_setting(),
+            "format_repair": False,       # local runs never request the format-repair call
+        }
 
     def get_debug_info(self) -> Dict[str, Any]:
         return {

@@ -1,6 +1,6 @@
 """WHERE: corrective sub-plans, urgency, insertion and merge (plan.md Phase 5).
 
-With ``replan.output_mode = corrective``, a replan after an IF-rule trigger does not
+With ``replan.output_mode = corrective``, a replan after a trigger (IF rule or discovery) does not
 regenerate the remaining plan. The planner model returns one or more **blocks**:
 
     FINAL BLOCKS:
@@ -12,6 +12,10 @@ regenerate the remaining plan. The planner model returns one or more **blocks**:
     actions:
     <one action per line>
     END BLOCK
+
+A block whose actions are the single line ``NO_ACTIONS`` (or ``NO_ACTIONS`` as the
+only line after the marker) states that its objects need no action; it is valid in
+both trigger modes and logged as such. A block must end with the gripper empty.
 
 The system parses and checks the blocks, inserts them into the remaining plan
 (``urgent`` at the front in the order returned; ``deferred`` after their anchor or at
@@ -50,8 +54,13 @@ BLOCK_OUTPUT_FORMAT_TEXT = (
     '<one action per line, in execution order>\n'
     'END BLOCK\n'
     'Every listed object must be handled by at least one block. An urgent block must use insert: front. '
+    'The actions of a block must end with the gripper empty. '
+    'If a listed object needs no action, handle it with a block whose actions section is the single line '
+    'NO_ACTIONS; such a block needs no urgency or insert line. If no listed object needs any action, write '
+    'NO_ACTIONS as the only line after FINAL BLOCKS:. '
     'Write nothing after the last END BLOCK.'
 )
+NO_ACTIONS = 'NO_ACTIONS'
 
 _WHAT_TO_PLAN = [
     '## What to plan',
@@ -86,6 +95,7 @@ class CorrectiveBlock:
     reason: str = ''
     proposed_urgency: str = ''       # the planner model's choice (before an insertion-mode override)
     proposed_insert: str = ''
+    no_action: bool = False          # NO_ACTIONS: the planner states these objects need no action
 
     @property
     def anchor(self) -> Optional[str]:
@@ -125,6 +135,9 @@ def parse_blocks(
         raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'the output has no {FINAL_BLOCKS_MARKER} line')
     lines = [line.strip() for line in text[marker + len(FINAL_BLOCKS_MARKER):].splitlines()]
     lines = [line for line in lines if line and not line.startswith('```')]
+    if [line.upper() for line in lines] == [NO_ACTIONS]:
+        # No listed object needs any action.
+        return [CorrectiveBlock(list(trigger_objects), [], '', '', '', '', '', no_action=True)]
     blocks, current, in_actions = [], None, False
     for line in lines:
         upper = line.upper()
@@ -148,6 +161,9 @@ def parse_blocks(
         if in_actions and '(' in line:
             current['actions'].append(line)
             continue
+        if in_actions and upper == NO_ACTIONS and not current['actions']:
+            current['no_action'] = True
+            continue
         if key in ('objects', 'urgency', 'insert', 'reason') and not in_actions:
             current[key] = value
             continue
@@ -163,7 +179,10 @@ def parse_blocks(
     parsed_blocks = []
     for number, data in enumerate(blocks, start=1):
         where = f'block {number}'
-        for key in ('objects', 'urgency', 'insert'):
+        if data.get('no_action') and data['actions']:
+            raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'{where} has actions and NO_ACTIONS')
+        required = ('objects',) if data.get('no_action') else ('objects', 'urgency', 'insert')
+        for key in required:
             if not data.get(key):
                 raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'{where} has no {key}')
         objects = [name.strip() for name in data['objects'].split(',') if name.strip()]
@@ -171,6 +190,10 @@ def parse_blocks(
         if unknown:
             raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK,
                                       f'{where} handles {", ".join(unknown)}, which is not a listed object')
+        if data.get('no_action'):
+            handled.extend(objects)
+            parsed_blocks.append(CorrectiveBlock(objects, [], '', '', data.get('reason', ''), '', '', no_action=True))
+            continue
         urgency = data['urgency'].lower()
         if urgency not in (URGENT, DEFERRED):
             raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'{where} has urgency {urgency!r}')
@@ -190,6 +213,7 @@ def parse_blocks(
             raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'{where} is urgent but not inserted at the front')
         if not data['actions']:
             raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'{where} has no actions')
+        holding = None
         for action in data['actions']:
             validate_action(action)
             parsed = parse_action_string(action)
@@ -199,6 +223,14 @@ def parse_blocks(
             if parsed['action'] in ('pick', 'place') and target not in objects:
                 raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK,
                                           f'{where}: {action} acts on {target}, which this block does not handle')
+            if parsed['action'] == 'pick':
+                holding = target
+            elif parsed['action'] == 'place':
+                holding = None
+        if holding is not None:
+            raise CorrectivePlanError(FailureCode.BLOCK_ENDS_HOLDING,
+                                      f'{where} ends with the gripper holding {holding}; '
+                                      f'a block must end with the gripper empty')
         handled.extend(objects)
         parsed_blocks.append(CorrectiveBlock(objects, list(data['actions']), urgency, insert, data.get('reason', ''),
                                              urgency, insert))
@@ -214,7 +246,8 @@ def apply_insertion_mode(blocks: Sequence[CorrectiveBlock], mode: str) -> List[C
     if mode == 'planner':
         return list(blocks)
     urgency, insert = (URGENT, FRONT) if mode == 'always_front' else (DEFERRED, END)
-    return [CorrectiveBlock(b.objects, b.actions, urgency, insert, b.reason, b.proposed_urgency, b.proposed_insert)
+    return [b if b.no_action else
+            CorrectiveBlock(b.objects, b.actions, urgency, insert, b.reason, b.proposed_urgency, b.proposed_insert)
             for b in blocks]
 
 
@@ -240,6 +273,10 @@ def merge_blocks(
     result = MergeResult(merged=[])
     front: List[Tuple[str, str]] = []
     for block in blocks:
+        if block.no_action:
+            result.insertions.append({'objects': list(block.objects), 'urgency': None, 'insert': None,
+                                      'action_ids': [], 'no_action': True})
+            continue
         entries = [(new_id(), action) for action in block.actions]
         position = block.insert
         if block.anchor is not None and block.anchor not in remaining_ids:
@@ -284,6 +321,6 @@ def placement_conflict(
 
 __all__ = [
     'BLOCK_OUTPUT_FORMAT_TEXT', 'CORRECTIVE_INSTRUCTIONS', 'corrective_instructions', 'CorrectiveBlock', 'CorrectivePlanError', 'DEFERRED', 'END',
-    'FINAL_BLOCKS_MARKER', 'FRONT', 'MergeResult', 'URGENT', 'apply_insertion_mode', 'merge_blocks', 'parse_blocks',
+    'FINAL_BLOCKS_MARKER', 'FRONT', 'MergeResult', 'NO_ACTIONS', 'URGENT', 'apply_insertion_mode', 'merge_blocks', 'parse_blocks',
     'placement_conflict',
 ]

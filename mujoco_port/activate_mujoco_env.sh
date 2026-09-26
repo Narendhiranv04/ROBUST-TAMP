@@ -20,7 +20,8 @@ PDDLSTREAM_DIR="${PDDLSTREAM_DIR:-$ROOT_DIR/pddlstream}"
 if [ ! -f "$PDDLSTREAM_DIR/pddlstream/__init__.py" ] && [ ! -f "$PDDLSTREAM_DIR/pddlstream/language/generator.py" ]; then
     echo "Warning: pddlstream sources not found at $PDDLSTREAM_DIR"
     echo "  Run 'git submodule update --init pddlstream' (and build FastDownward),"
-    echo "  or export PDDLSTREAM_DIR=/path/to/pddlstream before sourcing this file."
+    echo "  or export PDDLSTREAM_DIR=/path/to/pddlstream before sourcing this file"
+    echo "  (see mujoco_port/README.md: the submodule directory can exist but be empty)."
 fi
 
 export SIM_BACKEND=mujoco

@@ -161,11 +161,17 @@ def state_section(
     return lines
 
 
-def trigger_facts(failure_event: FailureEvent, object_region_map: Dict[str, str]) -> List[str]:
-    """Render the replan trigger as plain facts (no advice)."""
+def trigger_facts(failure_event: FailureEvent, object_region_map: Dict[str, str], corrective: bool = False) -> List[str]:
+    """Render the replan trigger as plain facts (no advice).
+
+    A corrective replan lists its trigger objects with their labels in the same form for
+    both trigger rules (IF and discovery), so the two modes differ only in which objects
+    are listed."""
     code = planner_facing_code(failure_event.failure_id)
     evidence = dict(failure_event.evidence or {})
     action = planner_action_text(failure_event.action) if failure_event.action else failure_event.action
+    if code == FailureCode.NEW_OBJECT_DISCOVERED and corrective and evidence.get('trigger_facts'):
+        code = FailureCode.IF_RULE_TRIGGER
     if code == FailureCode.NEW_OBJECT_DISCOVERED:
         objects = list(evidence.get('newly_visible_objects') or [])
         rendered = ', '.join(
@@ -281,7 +287,8 @@ class PromptV2Builder(BaseContextBuilder):
             from llm_pipeline.corrective import corrective_instructions
 
             trigger_event, rejection = self.corrective
-            sections['trigger'] = ['## Why a new plan is requested'] + trigger_facts(trigger_event, object_region_map)
+            sections['trigger'] = ['## Why a new plan is requested'] + trigger_facts(trigger_event, object_region_map,
+                                                                                    corrective=True)
             if rejection is not None:
                 fact = (rejection.evidence or {}).get('fact') or rejection.message
                 sections['trigger'].append(

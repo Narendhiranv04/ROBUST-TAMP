@@ -51,7 +51,7 @@ def main():
         default="Move all mugs inside the box and all groceries into the cupboard",
         help="Natural language goal for the planner",
     )
-    parser.add_argument("--max-replans", type=int, default=3, help="Maximum replan attempts")
+    parser.add_argument("--max-replans", type=int, default=10, help="Maximum replan attempts")
     parser.add_argument("--mock", action="store_true", help="Use mock planner")
     parser.add_argument("--remote", action="store_true", help="Use remote planner server")
     parser.add_argument("--remote-url", type=str, default="", help="Remote planner server URL")

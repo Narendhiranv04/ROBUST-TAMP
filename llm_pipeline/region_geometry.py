@@ -25,8 +25,11 @@ PRIMARY_REGION_PRIORITY = (
     "plate_top",
     "serving_area",
     "dish_rack",
-    "pantry_area",
+    # The staging area lies partly inside the pantry area's box (scene geometry): the smaller,
+    # more specific region is resolved first and without padding, so an object placed in the
+    # staging area is observed there and a pantry object next to it stays in the pantry.
     "table_staging_area",
+    "pantry_area",
     "table",
 )
 FALLBACK_REGION_PRIORITY = tuple(PLANNER_HIDDEN_REGIONS)
@@ -59,7 +62,7 @@ REGION_PADDING = {
     # fall beside the box on the table look like they are still inside it.
     "inside_box": 0.04,
     "pantry_area": 0.05,
-    "table_staging_area": 0.05,
+    "table_staging_area": 0.0,
     "table": 0.04,
     "inside_grill": 0.08,
     "prep_area": 0.06,

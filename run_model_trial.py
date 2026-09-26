@@ -116,7 +116,7 @@ def run_trial(variant_id: str,
               trial_index: int = 1,
               remote: bool = False,
               remote_url: str = '',
-              max_replans: int = 3,
+              max_replans: int = 10,
               headless: bool = False,
               preflight_only: bool = False,
               allow_unsupported_model: bool = False,
@@ -271,7 +271,7 @@ def main() -> None:
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
     parser.add_argument('--remote', action='store_true', help='Use the remote planner server')
     parser.add_argument('--remote-url', default=os.environ.get('VLM_SERVER_URL', 'http://localhost:8080'), help='Remote planner server URL')
-    parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
+    parser.add_argument('--max-replans', type=int, default=10, help='Maximum replans during execution')
     parser.add_argument('--goal', default='', help='Optional goal override. Default uses the canonical variant goal.')
     display_group = parser.add_mutually_exclusive_group()
     display_group.add_argument('--gui', action='store_true', help='Run with simulator GUI (default)')

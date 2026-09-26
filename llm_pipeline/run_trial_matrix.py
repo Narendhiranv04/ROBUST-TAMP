@@ -10,7 +10,12 @@ Each trial is a separate process (``oracle_trial_runner`` or ``trial_runner``)
 in its own working directory (pddlstream writes ``./temp``), at low priority
 with one BLAS thread. Trial ``i`` of a variant uses seed ``i`` and writes
 ``<out>/<variant>/seed_<NN>/{record.json, trial_log.jsonl, prompts/}``. Finished
-trials are skipped, so an interrupted matrix can be resumed. ``summary.json``
+trials are skipped, so an interrupted matrix can be resumed. A trial that ends as
+``infrastructure`` (planner server error or timeout, simulator crash, no ``trial_end``)
+is rerun up to ``MAX_INFRASTRUCTURE_RERUNS`` times: the failed attempt is moved to
+``seed_<NN>.infra_attempt<k>/`` (never scored) and logged in
+``infrastructure_reruns.jsonl``; the new attempt logs ``attempt`` in ``trial_start``.
+A refused real-model run (exit code 2: dirty tree or planner settings) is not rerun. ``summary.json``
 and ``summary.md`` report per-variant task success rate and partial goal
 completion (evaluation/metric_definitions.py) from the ``trial_end`` events.
 """
@@ -36,6 +41,8 @@ from evaluation.metric_definitions import summarize  # noqa: E402
 from llm_pipeline.trial_log import read_trial_log, validate_trial_log  # noqa: E402
 
 DEFAULT_VARIANTS = ['K1', 'K2', 'K3', 'G1', 'G2', 'G3']
+MAX_INFRASTRUCTURE_RERUNS = 2
+REFUSED_EXIT_CODE = 2
 
 
 def parse_seeds(text: str) -> List[int]:
@@ -62,18 +69,52 @@ def _trial_end(directory: Path) -> Dict:
     return dict(events[-1]) if events and events[-1].get('event') == 'trial_end' else {}
 
 
+def _is_infrastructure(end: Dict) -> bool:
+    return not end or end.get('termination_reason') == 'infrastructure'
+
+
+def _previous_attempts(directory: Path) -> List[Path]:
+    return sorted(directory.parent.glob(f'{directory.name}.infra_attempt*'))
+
+
 def run_one(planner: str, variant: str, seed: int, out: Path, extra: List[str], timeout_s: int) -> Dict:
     directory = trial_dir(out, variant, seed)
-    if _trial_end(directory):
+    end = _trial_end(directory)
+    if end and not _is_infrastructure(end):
         return {'variant': variant, 'seed': seed, 'skipped': True}
+    attempt = len(_previous_attempts(directory)) + 1
+    result: Dict = {}
+    while True:
+        if directory.exists() and any(directory.iterdir()):
+            # A finished infrastructure attempt (from this run or a resumed one): move it aside.
+            aside = directory.parent / f'{directory.name}.infra_attempt{attempt}'
+            directory.rename(aside)
+            attempt += 1
+        if attempt > MAX_INFRASTRUCTURE_RERUNS + 1:
+            result['infrastructure_reruns_exhausted'] = True
+            return result
+        result = _run_attempt(planner, variant, seed, directory, extra, timeout_s, attempt)
+        if result.get('exit_code') == REFUSED_EXIT_CODE or not result.get('infrastructure'):
+            return result
+        with open(out / 'infrastructure_reruns.jsonl', 'a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'variant': variant, 'seed': seed, 'attempt': attempt,
+                                     'exit_code': result.get('exit_code'),
+                                     'termination_reason': result.get('termination_reason'),
+                                     'rerun': attempt <= MAX_INFRASTRUCTURE_RERUNS}) + '\n')
+        if attempt > MAX_INFRASTRUCTURE_RERUNS:
+            return result
+
+
+def _run_attempt(planner: str, variant: str, seed: int, directory: Path, extra: List[str], timeout_s: int,
+                 attempt: int) -> Dict:
     directory.mkdir(parents=True, exist_ok=True)
     if planner == 'oracle':
         command = [sys.executable, '-m', 'llm_pipeline.oracle_trial_runner', '--variant', variant,
-                   '--seed', str(seed), '--output-dir', str(directory), *extra]
+                   '--seed', str(seed), '--output-dir', str(directory), '--attempt', str(attempt), *extra]
     else:
         command = [sys.executable, '-m', 'llm_pipeline.trial_runner', '--variant', variant, '--seed', str(seed),
                    '--trial-index', str(seed + 1), '--output-dir', str(directory), '--headless',
-                   '--no-live-masks', '--no-goal-check', *extra]
+                   '--no-live-masks', '--no-goal-check', '--attempt', str(attempt), *extra]
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join(filter(None, [env.get('PYTHONPATH', ''), str(ROOT_DIR)]))
     for var in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
@@ -86,8 +127,10 @@ def run_one(planner: str, variant: str, seed: int, out: Path, extra: List[str], 
         except subprocess.TimeoutExpired:
             code = 'timeout'
     end = _trial_end(directory)
-    return {'variant': variant, 'seed': seed, 'exit_code': code, 'seconds': round(time.time() - started, 1),
-            'success': end.get('success'), 'termination_reason': end.get('termination_reason')}
+    return {'variant': variant, 'seed': seed, 'attempt': attempt, 'exit_code': code,
+            'seconds': round(time.time() - started, 1), 'success': end.get('success'),
+            'termination_reason': end.get('termination_reason'),
+            'infrastructure': code != REFUSED_EXIT_CODE and _is_infrastructure(end)}
 
 
 def summarize_matrix(out: Path, variants: List[str], seeds: List[int]) -> Dict:
@@ -111,6 +154,8 @@ def summarize_matrix(out: Path, variants: List[str], seeds: List[int]) -> Dict:
         summary = summarize(ends)
         summary['missing_seeds'] = missing
         summary['log_problems'] = problems
+        summary['infrastructure_reruns'] = sum(
+            len(_previous_attempts(trial_dir(out, variant, seed))) for seed in seeds)
         summary['mean_planner_calls'] = (
             sum(int(e.get('planner_calls') or 0) for e in ends) / len(ends) if ends else None
         )

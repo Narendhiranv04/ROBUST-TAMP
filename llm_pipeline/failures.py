@@ -103,11 +103,13 @@ class FailureCode(_StrEnum):
     SIMULATOR_ERROR = 'simulator_error'
     # replan (Phase 7 failure area 8)
     REPLAN_BUDGET_EXHAUSTED = 'replan_budget_exhausted'
+    # The same output for the same abstract state (plan check; re-queried once, then replan_loop).
     REPEATED_PLANNER_OUTPUT = 'repeated_planner_output'
-    # later phases (reserved; not emitted yet)
+    # later phases
     MEMORY_MISMATCH = 'memory_mismatch'
     INSERTION_TOO_LATE = 'insertion_too_late'
     INVALID_CORRECTIVE_BLOCK = 'invalid_corrective_block'   # Phase 5: block list rejected by the plan check
+    BLOCK_ENDS_HOLDING = 'block_ends_holding'               # a corrective block must end with the gripper empty
     ANCHOR_ALREADY_EXECUTED = 'anchor_already_executed'
     MERGE_CONFLICT = 'merge_conflict'
 
@@ -160,6 +162,7 @@ class TerminationReason(_StrEnum):
     EXECUTION_SKIPPED = 'execution_skipped'
     PREFLIGHT_ONLY = 'preflight_only'
     INFRASTRUCTURE = 'infrastructure'
+    REPLAN_LOOP = 'replan_loop'          # the same output for the same state after a repeat note
 
 
 @dataclass(frozen=True)
@@ -225,10 +228,11 @@ FAILURE_CODE_INFO: Dict[FailureCode, FailureCodeInfo] = {
     FailureCode.PLANNER_CALL_FAILED: FailureCodeInfo(FailureCheck.INFRASTRUCTURE, _L1),
     FailureCode.SIMULATOR_ERROR: FailureCodeInfo(FailureCheck.INFRASTRUCTURE, _L1),
     FailureCode.REPLAN_BUDGET_EXHAUSTED: FailureCodeInfo(FailureCheck.REPLAN, _L1),
-    FailureCode.REPEATED_PLANNER_OUTPUT: FailureCodeInfo(FailureCheck.REPLAN, _L1, emitted=False, phase=7),
+    FailureCode.REPEATED_PLANNER_OUTPUT: FailureCodeInfo(_PLAN, _L1, phase=7),
     FailureCode.MEMORY_MISMATCH: FailureCodeInfo(FailureCheck.MEMORY, _L2, phase=2),
     FailureCode.INSERTION_TOO_LATE: FailureCodeInfo(FailureCheck.INSERTION, _L1, phase=5),
     FailureCode.INVALID_CORRECTIVE_BLOCK: FailureCodeInfo(FailureCheck.PLAN_CHECK, _L1, phase=5),
+    FailureCode.BLOCK_ENDS_HOLDING: FailureCodeInfo(FailureCheck.PLAN_CHECK, _L1, phase=5),
     FailureCode.ANCHOR_ALREADY_EXECUTED: FailureCodeInfo(FailureCheck.PARALLEL, _L1, phase=6),
     FailureCode.MERGE_CONFLICT: FailureCodeInfo(FailureCheck.PARALLEL, _L1, phase=6),
 }
@@ -240,6 +244,11 @@ LAYER_1_FAILURE_CODES: FrozenSet[FailureCode] = frozenset(
 )
 LAYER_2_FAILURE_CODES: FrozenSet[FailureCode] = frozenset(
     code for code, info in FAILURE_CODE_INFO.items() if info.legacy_layer == _L2
+)
+# Planner-server and simulator problems: the trial ends as `infrastructure`, is excluded
+# from scoring and is rerun (llm_pipeline/run_trial_matrix.py).
+INFRASTRUCTURE_FAILURE_CODES: FrozenSet[FailureCode] = frozenset(
+    code for code, info in FAILURE_CODE_INFO.items() if info.check == FailureCheck.INFRASTRUCTURE
 )
 
 
@@ -279,6 +288,7 @@ __all__ = [
     'FailureCheck',
     'FailureCode',
     'FailureCodeInfo',
+    'INFRASTRUCTURE_FAILURE_CODES',
     'LAYER_1_FAILURE_CODES',
     'LAYER_2_FAILURE_CODES',
     'LegacyFailureId',

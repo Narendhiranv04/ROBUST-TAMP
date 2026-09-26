@@ -105,9 +105,22 @@ def test_if_rule_triggers_once_on_the_overlapping_phone_and_full_replan_still_wo
     assert summary['completed_actions'][-2:] == ['pick(mug2)', 'place(mug2, inside_box)']
 
 
-def test_discovery_mode_is_unchanged(tmp_path) -> None:
-    pipeline, planner, summary, events = _run(tmp_path, [INITIAL])
-    assert not [e for e in events if e['event'] == 'if_check']
+def test_discovery_mode_triggers_through_the_same_hook_as_the_if_rule(tmp_path) -> None:
+    # B2: discovery triggers come from the same post-bundle check as the IF rule; only the
+    # choice of trigger objects differs (every newly visible object).
+    replan = 'FINAL ACTIONS:\npick(phone)\nplace(phone, table)\npick(mug2)\nplace(mug2, inside_box)'
+    pipeline, planner, summary, events = _run(tmp_path, [INITIAL, replan])
+    checks = [e for e in events if e['event'] == 'if_check']
+    assert checks and all(e['trigger_mode'] == 'discovery' for e in checks)
+    assert sum(bool(e['trigger_objects']) for e in checks) == 1
+    planning = [e for e in events if e['event'] == 'planning_event']
+    assert [e['trigger_code'] for e in planning] == [None, 'new_object_discovered']
+    assert planning[1]['trigger_objects'] == ['phone'] and planning[1]['output_format'] == 'full'
+    assert planning[1]['replan_reason'] == 'trigger:discovery'
+    # The full-replan prompt keeps the discovery wording.
+    assert 'these objects became visible and had not been seen earlier in this trial: phone' in \
+        planner.bundles[1].user_prompt
+    assert summary['completed_actions'][-2:] == ['pick(mug2)', 'place(mug2, inside_box)']
 
 
 def test_corrective_block_is_merged_into_the_remaining_plan_with_its_ids(tmp_path) -> None:

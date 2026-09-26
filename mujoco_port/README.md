@@ -36,7 +36,32 @@ python -m llm_pipeline.trial_runner --variant G2 ... --headless    # model trial
 ```
 
 `pddlstream` must be available (git submodule with FastDownward built, or
-`PDDLSTREAM_DIR=/path/to/pddlstream`). `--gui` opens a MuJoCo passive viewer
+`PDDLSTREAM_DIR=/path/to/pddlstream`).
+
+**The `pddlstream` submodule can be empty.** In a checkout where `git submodule update`
+was never run, `pddlstream/` exists but is empty, and every import of
+`llm_pipeline.executor` fails with `No module named 'pddlstream.algorithms'` (six test
+modules then fail to collect). Either initialize the submodule
+(`git submodule update --init pddlstream`, then build FastDownward) or point
+`PDDLSTREAM_DIR` at a complete copy before sourcing the env script, e.g.
+
+```sh
+export PDDLSTREAM_DIR=$HOME/.cache/tamp_pddl/TAMP-PDDL/pddlstream
+. mujoco_port/activate_mujoco_env.sh
+```
+
+## Tests
+
+```sh
+export PDDLSTREAM_DIR=...            # see above
+python -m pytest llm_pipeline/tests diagnostics/tests mujoco_port/tests
+```
+
+The root `conftest.py` puts the MuJoCo `pyrep` shim first on `sys.path` before any test is
+collected (unless `SIM_BACKEND=coppelia`), so the simulator tests (`mujoco_port/tests`)
+pass in the full suite with or without the env script. Without it, a pipeline test could
+import the CoppeliaSim `pyrep` from site-packages first and the simulator tests skipped
+themselves. `--gui` opens a MuJoCo passive viewer
 (`MUJOCO_SHIM_VIEWER=0` disables it). Offscreen rendering uses `MUJOCO_GL`
 (`egl` headless, `glfw` with a display, `osmesa` fallback).
 

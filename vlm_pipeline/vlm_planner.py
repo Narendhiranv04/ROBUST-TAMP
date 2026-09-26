@@ -82,13 +82,22 @@ except ImportError:
 
 
 def _qwen_thinking_mode() -> str:
+    """Thinking is on (the model's default) unless QWEN_THINKING_MODE explicitly turns it off.
+
+    ``/no_think`` is never added by default; only ``QWEN_THINKING_MODE=off`` (or the old
+    ``QWEN_NO_THINK_PROMPT=1``) adds it. The planner server reports the effective mode
+    (``/settings``) and the trial runner refuses real-model trials with thinking off.
+    """
     legacy_no_think = os.environ.get("QWEN_NO_THINK_PROMPT", "").strip().lower() in {"1", "true", "yes", "on"}
     mode = os.environ.get("QWEN_THINKING_MODE", "").strip().lower()
     if mode in {"off", "no_think", "nothink", "false", "0"} or legacy_no_think:
         return "off"
-    if mode in {"default", "on", "think", "thinking", "true", "1"}:
-        return "default"
-    return "off"
+    return "default"
+
+
+def thinking_mode_setting() -> str:
+    """``on`` or ``off``, as reported in the planner settings."""
+    return "off" if _qwen_thinking_mode() == "off" else "on"
 
 
 @dataclass

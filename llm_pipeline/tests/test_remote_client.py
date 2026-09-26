@@ -17,10 +17,23 @@ class _FakeResponse:
 
 
 class _FakeRequests:
-    def __init__(self, health_payload, plan_payload, goal_check_payload=None):
+    """Stands in for ``requests`` against a planner server with the job API (/plan/submit, /plan/jobs)."""
+
+    class ConnectionError(Exception):
+        pass
+
+    class Timeout(Exception):
+        pass
+
+    def __init__(self, health_payload, plan_payload, goal_check_payload=None, settings_payload=None,
+                 job_states=None, submit_failures=0):
         self.health_payload = health_payload
         self.plan_payload = plan_payload
         self.goal_check_payload = goal_check_payload or {}
+        self.settings_payload = settings_payload
+        # Job states returned by successive polls before 'done' (e.g. queued, running).
+        self.job_states = list(job_states or [])
+        self.submit_failures = int(submit_failures)
         self.get_calls = []
         self.post_calls = []
 
@@ -28,14 +41,27 @@ class _FakeRequests:
         self.get_calls.append((url, timeout))
         if url.endswith('/health'):
             return _FakeResponse(payload=self.health_payload)
+        if url.endswith('/settings'):
+            if self.settings_payload is None:
+                return _FakeResponse(status_code=404, text='not found')
+            return _FakeResponse(payload=self.settings_payload)
+        if '/plan/jobs/' in url:
+            if self.job_states:
+                return _FakeResponse(payload=self.job_states.pop(0))
+            return _FakeResponse(payload={'job_id': 'job1', 'status': 'done', 'queue_wait_s': 1.5,
+                                          'generation_time_s': 2.5, 'running_for_s': 2.5,
+                                          'result': self.plan_payload, 'error': None})
         if url.endswith('/debug/last-request'):
             return _FakeResponse(payload={'last_request': {'url': url}})
         return _FakeResponse(status_code=404, text='not found')
 
     def post(self, url, json=None, timeout=300):
         self.post_calls.append((url, json, timeout))
-        if url.endswith('/plan'):
-            return _FakeResponse(payload=self.plan_payload)
+        if url.endswith('/plan/submit'):
+            if self.submit_failures > 0:
+                self.submit_failures -= 1
+                raise self.ConnectionError('connection refused')
+            return _FakeResponse(payload={'job_id': 'job1', 'status': 'queued'})
         if url.endswith('/check-goal'):
             return _FakeResponse(payload=self.goal_check_payload)
         return _FakeResponse(status_code=404, text='not found')
@@ -101,7 +127,7 @@ def test_remote_planner_returns_server_actions() -> None:
             'pick(mug2)',
             'place(mug2, table_staging_area)',
         ]
-        assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/plan'
+        assert fake_requests.post_calls[0][0] == 'http://planner-box:8000/plan/submit'
         assert fake_requests.post_calls[0][1]['icl_mode'] == 'zero_shot'
         assert fake_requests.post_calls[0][1]['use_vision'] is False
         assert 'image_base64' not in fake_requests.post_calls[0][1]

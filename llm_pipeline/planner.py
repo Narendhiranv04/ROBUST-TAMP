@@ -24,13 +24,28 @@ from llm_pipeline.quantization import make_bnb_quantization_config, normalize_qu
 
 
 def _qwen_thinking_mode() -> str:
+    """Thinking is on (the model's default) unless QWEN_THINKING_MODE explicitly turns it off.
+
+    ``/no_think`` is never added by default; only ``QWEN_THINKING_MODE=off`` (or the old
+    ``QWEN_NO_THINK_PROMPT=1``) adds it. The planner server reports the effective mode
+    (``/settings``) and the trial runner refuses real-model trials with thinking off.
+    """
     legacy_no_think = os.environ.get("QWEN_NO_THINK_PROMPT", "").strip().lower() in {"1", "true", "yes", "on"}
     mode = os.environ.get("QWEN_THINKING_MODE", "").strip().lower()
     if mode in {"off", "no_think", "nothink", "false", "0"} or legacy_no_think:
         return "off"
-    if mode in {"default", "on", "think", "thinking", "true", "1"}:
-        return "default"
-    return "off"
+    return "default"
+
+
+def thinking_mode_setting() -> str:
+    """``on`` or ``off``, as reported in the planner settings."""
+    return "off" if _qwen_thinking_mode() == "off" else "on"
+
+
+def model_revision(model) -> str:
+    """The Hugging Face revision (commit hash) of a loaded model, or '' when unknown."""
+    config = getattr(model, "config", None)
+    return str(getattr(config, "_commit_hash", "") or "") if config is not None else ""
 
 
 class TextLLMPlanner:
@@ -363,6 +378,19 @@ class TextLLMPlanner:
             "quantization": self.quantization,
             "loaded": self.loaded,
             "last_request": self.last_request_summary,
+        }
+
+    def planner_settings(self) -> Dict[str, Any]:
+        """Settings that change what the model generates (logged in trial_start)."""
+        return {
+            "planner": "local",
+            "model_name": self.model_name,
+            "model_alias": self.model_alias,
+            "model_type": "llm",
+            "model_revision": model_revision(self.model),
+            "quantization": self.quantization,
+            "thinking_mode": thinking_mode_setting(),
+            "format_repair": False,       # the text planner has no format-repair call
         }
 
 

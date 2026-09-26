@@ -385,15 +385,17 @@ class RLBenchKitchenEnv:
             is_mug = False
 
         def sample_clear_xy(min_x, max_x, min_y, max_y, grid_n, occ_pad_xy, occ_pad_z, mode="best", exclude=(),
-                            keep=None):
+                            keep=None, strict_exclude=False):
             xs = np.linspace(min_x, max_x, grid_n).tolist()
             ys = np.linspace(min_y, max_y, grid_n).tolist()
             candidates = [(float(x), float(y)) for x in xs for y in ys]
             if exclude or keep:
-                kept = [c for c in candidates
-                        if not any(r[0] <= c[0] <= r[2] and r[1] <= c[1] <= r[3] for r in exclude)
-                        and (keep is None or keep(c))]
-                candidates = kept or candidates
+                outside = [c for c in candidates
+                           if not any(r[0] <= c[0] <= r[2] and r[1] <= c[1] <= r[3] for r in exclude)]
+                kept = [c for c in outside if keep is None or keep(c)]
+                # strict_exclude: relax the reach preference before ever sampling inside an
+                # excluded region (a table placement must not land in another region).
+                candidates = kept or (outside if strict_exclude and outside else candidates)
 
             occupied_xy = []
             seen_handles = set()
@@ -584,11 +586,17 @@ class RLBenchKitchenEnv:
                 w_min_y, w_max_y = max(w_min_y, t_y + t_min_y), min(w_max_y, t_y + t_max_y)
             except Exception:
                 pass
-            margin = 0.06
+            # Margins match the region resolver (llm_pipeline/region_geometry.py REGION_PADDING)
+            # plus 1 cm, so a table placement is never observed in another region: regions at
+            # table height (the box interior, the pantry and staging areas) get their padding;
+            # physical fixtures (box walls, the lid, the cupboard) get 2 cm of clearance.
             exclude = []
-            for other in (getattr(self, 'box_boundary', None), getattr(self, 'box', None),
-                          getattr(self, 'box_lid', None), getattr(self, 'cupboard_boundary', None),
-                          getattr(self, 'cupboard', None)):
+            for other, margin in ((getattr(self, 'box_boundary', None), 0.05), (getattr(self, 'box', None), 0.02),
+                                  (getattr(self, 'box_lid', None), 0.02),
+                                  (getattr(self, 'cupboard_boundary', None), 0.02),
+                                  (getattr(self, 'cupboard', None), 0.02),
+                                  (getattr(self, 'groceries_boundary', None), 0.06),
+                                  (getattr(self, 'placement_boundary', None), 0.01)):
                 if other is None:
                     continue
                 try:
@@ -597,7 +605,7 @@ class RLBenchKitchenEnv:
                     continue
                 exclude.append((bx0 - margin, by0 - margin, bx1 + margin, by1 + margin))
             for area in (getattr(self, 'placement_areas', None) or {}).values():
-                exclude.append((area[0] - margin, area[1] - margin, area[2] + margin, area[3] + margin))
+                exclude.append((area[0] - 0.05, area[1] - 0.05, area[2] + 0.05, area[3] + 0.05))
             # Within the arm's comfortable reach: a ring around the robot base.
             try:
                 rx, ry, _ = self.robot.get_position()
@@ -609,10 +617,10 @@ class RLBenchKitchenEnv:
                 reach = lambda c: reach_min <= float(np.hypot(c[0] - rx, c[1] - ry)) <= reach_max  # noqa: E731
             sample_x, sample_y = sample_clear_xy(
                 w_min_x + padding, w_max_x - padding, w_min_y + padding, w_max_y - padding,
-                max(3, int(os.environ.get("TABLE_SAMPLE_GRID", "16"))),
+                max(3, int(os.environ.get("TABLE_SAMPLE_GRID", "48"))),
                 float(os.environ.get("TABLE_OCCUPANCY_PAD_XY", "0.04")),
                 float(os.environ.get("TABLE_OCCUPANCY_PAD_Z", "0.12")),
-                mode="top_random", exclude=exclude, keep=reach,
+                mode="top_random", exclude=exclude, keep=reach, strict_exclude=True,
             )
             sample_z = w_max_z + 0.005
         else:

@@ -104,6 +104,14 @@ def _patch_runner(monkeypatch):
     monkeypatch.setattr(trial_runner, '_repo_setup', lambda headless, variant_spec: None)
     monkeypatch.setattr(trial_runner, '_load_variant_env', lambda variant_spec, goal_text, headless: object())
     monkeypatch.setattr(trial_runner, 'LLMOnlyReplanningPipeline', FakePipeline)
+    # A clean working tree and a planner with thinking on and format repair off (B5/B6).
+    monkeypatch.setattr(trial_runner, 'git_commit_info', lambda: {'commit': 'abc123', 'dirty': False})
+    monkeypatch.setattr(trial_runner, '_pre_run_planner_settings',
+                        lambda remote, remote_url: dict(GOOD_SETTINGS))
+
+
+GOOD_SETTINGS = {'planner': 'remote', 'model_name': 'fake', 'model_revision': 'r1', 'thinking_mode': 'on',
+                 'format_repair': False, 'server_git_commit': {'commit': 'abc123', 'dirty': False}}
 
 
 def test_trial_runner_uses_deterministic_success_and_disables_goal_check_by_default(monkeypatch, tmp_path):
@@ -182,3 +190,65 @@ def test_preflight_only_runs_preflight_without_execution(monkeypatch, tmp_path: 
     assert FakePipeline.run_calls == 0
     assert record['preflight_only'] is True
     assert record['preflight_success'] is True
+
+
+def _trial_start(tmp_path: Path) -> dict:
+    import json
+
+    for line in (tmp_path / 'trial_log.jsonl').read_text().splitlines():
+        event = json.loads(line)
+        if event['event'] == 'trial_start':
+            return event
+    raise AssertionError('no trial_start')
+
+
+def test_trial_start_logs_every_setting_and_the_config_replan_budget(monkeypatch, tmp_path: Path) -> None:
+    _patch_runner(monkeypatch)
+    trial_runner.run_trial(variant_id='K1', model_alias='fake', icl_mode='zero_shot', output_dir=tmp_path)
+    start = _trial_start(tmp_path)
+    # B3: one replan budget for every run type, from the pipeline config (not a CLI default).
+    assert FakePipeline.instances[0].config.max_replans == trial_runner.DEFAULT_MAX_REPLANS == 10
+    assert start['max_replans'] == 10 and start['condition']['max_replans'] == 10
+    # B5/B6: planner settings, the (absent) simulated delay, the attempt and the clean commit.
+    assert start['planner_settings']['thinking_mode'] == 'on'
+    assert start['planner_settings']['format_repair'] is False
+    assert start['simulated_planner_delay_s'] == 0.0 and start['condition']['simulated_planner_delay'] == 'off'
+    assert start['real_model'] is True and start['attempt'] == 1
+    assert start['git_commit']['commit'] == 'abc123' and start['git_commit']['dirty'] is False
+    for key in ('flags', 'goal_check', 'termination_mode', 'icl_mode', 'planner_max_new_tokens'):
+        assert key in start
+
+
+def test_real_model_trial_refuses_a_dirty_tree(monkeypatch, tmp_path: Path) -> None:
+    import pytest
+
+    _patch_runner(monkeypatch)
+    monkeypatch.setattr(trial_runner, 'git_commit_info', lambda: {'commit': 'abc123', 'dirty': True})
+    with pytest.raises(trial_runner.RefusedRun, match='uncommitted changes'):
+        trial_runner.run_trial(variant_id='K1', model_alias='fake', icl_mode='zero_shot', output_dir=tmp_path)
+    assert not FakePipeline.instances and not (tmp_path / 'trial_log.jsonl').exists()
+
+
+def test_real_model_trial_refuses_thinking_off_format_repair_or_unknown_settings(monkeypatch, tmp_path: Path) -> None:
+    import pytest
+
+    _patch_runner(monkeypatch)
+    for settings, message in (({**GOOD_SETTINGS, 'thinking_mode': 'off'}, 'thinking mode'),
+                              ({**GOOD_SETTINGS, 'format_repair': True}, 'format repair is on'),
+                              ({}, 'does not report its settings')):
+        monkeypatch.setattr(trial_runner, '_pre_run_planner_settings', lambda remote, remote_url, s=settings: dict(s))
+        with pytest.raises(trial_runner.RefusedRun, match=message):
+            trial_runner.run_trial(variant_id='K1', model_alias='fake', icl_mode='zero_shot', output_dir=tmp_path)
+    with pytest.raises(trial_runner.RefusedRun, match='simulated planner delay'):
+        trial_runner.run_trial(variant_id='K1', model_alias='fake', icl_mode='zero_shot', output_dir=tmp_path,
+                               simulated_planner_delay_s=20.0)
+
+
+def test_oracle_runs_are_not_gated_and_log_their_simulated_delay(monkeypatch, tmp_path: Path) -> None:
+    _patch_runner(monkeypatch)
+    monkeypatch.setattr(trial_runner, 'git_commit_info', lambda: {'commit': 'abc123', 'dirty': True})
+    trial_runner.run_trial(variant_id='K1', model_alias='gt_oracle', icl_mode='zero_shot', output_dir=tmp_path,
+                           real_model=False, simulated_planner_delay_s=20.0, attempt=2)
+    start = _trial_start(tmp_path)
+    assert start['real_model'] is False and start['attempt'] == 2
+    assert start['simulated_planner_delay_s'] == 20.0 and start['condition']['simulated_planner_delay'] == 'on'

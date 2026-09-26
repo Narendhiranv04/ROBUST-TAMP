@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import time
@@ -10,7 +11,9 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from llm_pipeline.catalog import resolve_llm_model, resolve_planner_model, resolve_vlm_model
-from llm_pipeline.failures import CycleError, FailureCheck, FailureCode, TerminationReason, failure_check_for
+from llm_pipeline.failures import (
+    INFRASTRUCTURE_FAILURE_CODES, CycleError, FailureCheck, FailureCode, TerminationReason, failure_check_for,
+)
 from llm_pipeline.flags import PipelineFlags
 from llm_pipeline.memory import ObservationMemory
 from llm_pipeline.prompt_v2 import LID_REGIONS, IdentifiedAction, PromptV2Builder, ReplanContext
@@ -60,12 +63,17 @@ VLM_CAMERA_ALIASES = {
 }
 
 
+# Replan budget for every run type (model, oracle, matrix, benchmark). It is set here only;
+# the runners take no command-line default for it and log it in trial_start.
+DEFAULT_MAX_REPLANS = 10
+
+
 @dataclass
 class LLMPipelineConfig:
     model_alias: str = 'qwen'
     model_path: str = ''
     icl_mode: str = ICLMode.ZERO_SHOT.value
-    max_replans: int = 10
+    max_replans: int = DEFAULT_MAX_REPLANS
     enable_replanning: bool = True
     use_4bit: bool = False
     quantization: str = ''
@@ -272,11 +280,12 @@ class LLMOnlyReplanningPipeline:
             self.executor.set_event_sink(self._log_executor_event)
         if hasattr(self.executor, 'set_bundle_end_callback'):
             self.executor.set_bundle_end_callback(self._on_bundle_end)
-        if_rule = self.config.flags.replan_trigger_mode == 'if_rule'
+        # Both trigger rules (discovery and IF) run at the same point: after every bundle that
+        # leaves the gripper empty. The failure checker's own discovery trigger is off, so the
+        # two modes differ only in which observed objects trigger (plan.md 8.1, Ablation: IF).
         if hasattr(self.executor, 'set_trigger_check'):
-            self.executor.set_trigger_check(self._if_rule_check if if_rule else None)
-        if if_rule and hasattr(self.failure_checker, 'replan_on_new_visibility'):
-            # The IF rule replaces discovery-triggered replanning.
+            self.executor.set_trigger_check(self._trigger_check)
+        if hasattr(self.failure_checker, 'replan_on_new_visibility'):
             self.failure_checker.replan_on_new_visibility = False
         if hasattr(self.failure_checker, 'grasp_confirmation'):
             self.failure_checker.grasp_confirmation = self.config.flags.grasp_confirmation
@@ -375,10 +384,20 @@ class LLMOnlyReplanningPipeline:
         # IF rule (Phase 4): the agent's own view of object regions.
         self._first_seen_regions: Dict[str, Optional[str]] = {}
         self._last_object_regions: Dict[str, Optional[str]] = {}
-        # WHERE (Phase 5): the IF trigger a corrective replan answers, and its proposal count.
+        self._current_visible: set = set()
+        # Placement areas each object's footprint intersected when it was last visible.
+        self._overlap_at_last_sight: Dict[str, List[str]] = {}
+        # Discovery trigger: objects already seen at a planning event or a trigger check.
+        self._trigger_seen: set = set()
+        # Objects a corrective replan declared as needing no action, with their region then.
+        self._no_action_objects: Dict[str, Optional[str]] = {}
+        # WHERE (Phase 5): the trigger a corrective replan answers, and its proposal count.
         self._active_trigger: Optional[FailureEvent] = None
         self._corrective_attempts = 0
         self._next_plan_ids: Optional[List[str]] = None
+        # Repeated-output detection (DIAGNOSTICS area 8): (abstract state, output) hashes.
+        self._tried_outputs: set = set()
+        self._repeat_count = 0
 
     def _log_event(self, event: str, **fields) -> None:
         try:
@@ -448,10 +467,12 @@ class LLMOnlyReplanningPipeline:
         newly_visible = [name for name in visible if name not in self._observation_seen]
         self._observation_seen.update(visible)
         self._last_articulation = dict(articulation_states or {})
+        self._current_visible = set(visible)
         for name in visible:
             region = (object_region_map or {}).get(name)
             self._first_seen_regions.setdefault(name, region)
             self._last_object_regions[name] = region
+            self._overlap_at_last_sight[name] = self._placement_area_overlaps(name)
         if self.memory_enabled:
             self._update_memory(visible, dict(object_region_map or {}), articulation_states, visible_regions)
         self._log_event(
@@ -489,63 +510,108 @@ class LLMOnlyReplanningPipeline:
             list(getattr(snapshot, 'visible_regions', []) or []),
         )
 
-    # -- IF rule (plan.md Phase 4) ---------------------------------------------
+    # -- triggers: IF rule (plan.md Phase 4) and discovery -------------------------
+    TRIGGER_CODES = (FailureCode.IF_RULE_TRIGGER, FailureCode.NEW_OBJECT_DISCOVERED)
+
+    @classmethod
+    def _is_trigger(cls, failure_event) -> bool:
+        return failure_event is not None and failure_event.failure_id in cls.TRIGGER_CODES
+
     def _if_rule_object_regions(self) -> Dict[str, Optional[str]]:
-        """Observed objects and the region the agent last saw each one in (never hidden state)."""
-        regions = dict(self._last_object_regions)
+        """Objects the IF rule evaluates: the visible ones, plus the remembered ones when memory
+        is on (plan.md 4.1), each with the region the agent last saw it in (never hidden state)."""
+        regions = {name: self._last_object_regions.get(name) for name in self._current_visible}
         if self.memory_enabled:
             for entry in self.memory.remembered():
                 regions.setdefault(entry.object_id, entry.last_region)
         return regions
 
-    def _overlapping_regions(self, object_id: str, regions) -> List[str]:
-        """System geometry: regions whose placement area the object's footprint intersects."""
+    def _known_object_regions(self) -> Dict[str, Optional[str]]:
+        """The region every observed object was last seen in (the scheduler's view, Phase 6)."""
+        return dict(self._last_object_regions)
+
+    def _placement_area_overlaps(self, object_id: str) -> List[str]:
+        """System geometry at observation time: placement areas the visible object's footprint intersects."""
         areas = getattr(self.env, 'placement_areas', None) or {}
-        if not areas:
+        if not areas or self.env is None:
             return []
         from llm_pipeline.final_variant_setup import footprint_overlaps
 
-        obj = self.env.get_object(scene_object_for_object(object_id, self.env))
+        try:
+            obj = self.env.get_object(scene_object_for_object(object_id, self.env))
+        except Exception:
+            obj = None
         if obj is None:
             return []
-        return [region for region in regions if region in areas and footprint_overlaps(obj, areas[region])]
+        return [region for region, area in areas.items() if footprint_overlaps(obj, area)]
 
-    def _if_rule_check(self, remaining_plan) -> Optional[FailureEvent]:
+    def _overlapping_regions(self, object_id: str, regions) -> List[str]:
+        """Regions among ``regions`` whose placement area the object's footprint intersected when
+        it was last visible (a remembered object is never looked up in the simulator)."""
+        seen = set(self._overlap_at_last_sight.get(object_id) or ())
+        return [region for region in regions if region in seen]
+
+    def _trigger_check(self, remaining_plan) -> Optional[FailureEvent]:
+        """Called after every bundle that leaves the gripper empty, in both trigger modes.
+
+        The object classifier (relevant / goal-attained / overlapping / accounted-for) is the
+        same in both modes; only the choice of trigger objects differs: ``if_rule`` applies
+        plan.md 4.1, ``discovery`` takes every object seen for the first time."""
         from llm_pipeline.if_rule import assess_objects, describe_trigger, trigger_objects
 
+        mode = self.config.flags.replan_trigger_mode
         completed = list(getattr(self.executor, 'completed_primitive_actions', []) or [])
+        object_regions = self._if_rule_object_regions()
+        acknowledged = {obj for obj, region in self._no_action_objects.items() if object_regions.get(obj) == region}
         assessments = assess_objects(
             scene=(self.config.task_family or 'kitchen').strip().lower(),
-            object_regions=self._if_rule_object_regions(),
+            object_regions=object_regions,
             remaining_plan=list(remaining_plan or []),
             completed_actions=completed,
             initial_regions=self._first_seen_regions,
             overlapping=self._overlapping_regions,
+            pending_objects=acknowledged,
             held_object=getattr(self.executor, 'held_object', None),
         )
-        triggers = trigger_objects(assessments)
-        self._log_event('if_check', step=self.step, objects=[a.to_dict() for a in assessments],
-                        trigger_objects=[a.object_id for a in triggers],
-                        remaining_plan=list(remaining_plan or []))
+        newly_visible: List[str] = []
+        if mode == 'discovery':
+            by_id = {a.object_id: a for a in assessments}
+            newly_visible = sorted(obj for obj in self._observation_seen - self._trigger_seen
+                                   if obj not in LID_REGIONS)
+            self._trigger_seen.update(self._observation_seen)
+            triggers = [by_id[obj] for obj in newly_visible if obj in by_id]
+        else:
+            triggers = trigger_objects(assessments)
+        self._log_event('if_check', step=self.step, trigger_mode=mode, objects=[a.to_dict() for a in assessments],
+                        trigger_objects=[a.object_id for a in triggers], newly_visible_objects=newly_visible,
+                        no_action_objects=sorted(acknowledged), remaining_plan=list(remaining_plan or []))
         if not triggers:
             return None
         last_action = completed[-1] if completed else None
         facts = [describe_trigger(a, planner_region_name) for a in triggers]
+        names = [a.object_id for a in triggers]
+        discovery = mode == 'discovery'
         return FailureEvent(
-            failure_id=FailureCode.IF_RULE_TRIGGER,
+            failure_id=FailureCode.NEW_OBJECT_DISCOVERED if discovery else FailureCode.IF_RULE_TRIGGER,
             stage=FailureStage.AFTER_EXECUTION,
             source=FailureSource.SEGMENTATION,
             action=last_action,
             evidence={
-                'trigger_objects': [a.object_id for a in triggers],
+                'trigger_mode': mode,
+                'trigger_objects': names,
+                'newly_visible_objects': names if discovery else [],
                 'trigger_kinds': {a.object_id: a.trigger_kind for a in triggers},
                 'assessments': [a.to_dict() for a in triggers],
                 'trigger_facts': facts,
             },
             failure_layer=FailureLayer.LAYER_2,
             should_replan=True,
-            message='Objects the remaining plan does not handle: ' + '; '.join(facts),
+            message=(('Newly visible objects: ' if discovery else 'Objects the remaining plan does not handle: ')
+                     + '; '.join(facts)),
         )
+
+    # Kept for callers of the Phase 4 name.
+    _if_rule_check = _trigger_check
 
     def _assign_plan_ids(self, actions) -> List[IdentifiedAction]:
         # A merged plan (Phase 5) keeps the ids of its remaining-plan actions.
@@ -683,6 +749,8 @@ class LLMOnlyReplanningPipeline:
             snapshot = getattr(state, '_original_snapshot', None)
             self._emit_observation(state.visible_objects, dict(state.object_region_map or {}), dict(state.lid_states or {}),
                                    list(getattr(snapshot, 'visible_regions', []) or []))
+            # Objects in a planning prompt are not "newly visible" for the discovery trigger.
+            self._trigger_seen.update(self._observation_seen)
         if hasattr(self.context_builder, 'set_replan_context'):
             completed, remaining = list(self._completed_with_ids), list(self._remaining_with_ids)
             # Phase 6: independent actions executed while the planner works are shown as completed.
@@ -738,9 +806,11 @@ class LLMOnlyReplanningPipeline:
             bundle_metadata.update({
                 'output_format': 'corrective_blocks',
                 'trigger_objects': list((corrective[0].evidence or {}).get('trigger_objects') or []),
+                'trigger_mode': (corrective[0].evidence or {}).get('trigger_mode'),
                 'remaining_plan': [(item.action_id, item.action) for item in self._remaining_with_ids],
             })
         bundle = replace(bundle, metadata=bundle_metadata)
+        abstract_state = self._abstract_state(state, corrective, failure_event)
 
         is_replan = failure_event is not None
         cycle_num = len(self.cycles) + 1
@@ -752,7 +822,7 @@ class LLMOnlyReplanningPipeline:
             print(f'{"=" * 60}')
         return {'state': state, 'bundle': bundle, 'failure_event': failure_event, 'corrective': corrective,
                 'is_replan': is_replan, 'is_plan_check_requery': is_plan_check_requery, 'silent': silent,
-                'step': self.step}
+                'step': self.step, 'abstract_state': abstract_state}
 
     def _call_planner(self, request: Dict[str, Any]) -> PlanResult:
         """The planner call only (safe to run off the main thread: no simulator access)."""
@@ -774,8 +844,12 @@ class LLMOnlyReplanningPipeline:
         """Corrective merge, printing, planning-event log and prompt trace (main thread)."""
         bundle, state, corrective = request['bundle'], request['state'], request['corrective']
         failure_event, is_replan, silent = request['failure_event'], request['is_replan'], request['silent']
-        # Corrective blocks are parsed here; a planner's own FINAL ACTIONS parse of them is irrelevant.
-        if corrective is not None and (result.raw_output or '').strip():
+        repeated = None if self._is_infrastructure(result) or silent else self._repeated_output(request, result)
+        if repeated is not None:
+            result = repeated
+        elif corrective is not None and not self._is_infrastructure(result):
+            # Corrective blocks are parsed here (an empty output is an invalid block list, not a
+            # reason to fall back to a full replan); a planner's own FINAL ACTIONS parse is irrelevant.
             result = self._merge_corrective(result, corrective[0], held_object=getattr(self.executor, 'held_object', None))
 
         if not silent:
@@ -795,7 +869,8 @@ class LLMOnlyReplanningPipeline:
 
         if not silent:
             self._log_planning_event(bundle, result, failure_event, is_replan, request['is_plan_check_requery'],
-                                     wall_latency_s=wall_latency_s, step=request.get('step'))
+                                     wall_latency_s=wall_latency_s, prompt_step=request.get('step'),
+                                     corrective=corrective is not None)
 
         bundle_trace = self._prompt_bundle_trace(bundle)
         self.last_prompt_trace = {
@@ -814,7 +889,7 @@ class LLMOnlyReplanningPipeline:
     def _parallel_applicable(self, failure_event) -> bool:
         flags = self.config.flags
         return (flags.parallel_enabled == 'true' and flags.replan_output_mode == 'corrective'
-                and failure_event is not None and failure_event.failure_id == FailureCode.IF_RULE_TRIGGER)
+                and self._is_trigger(failure_event))
 
     @staticmethod
     def _direct_action(text: str) -> DirectAction:
@@ -829,7 +904,7 @@ class LLMOnlyReplanningPipeline:
         from llm_pipeline.parallel import affected_set, independent_bundles, split_bundles
 
         scene = (self.config.task_family or 'kitchen').strip().lower()
-        object_regions = self._if_rule_object_regions()
+        object_regions = self._known_object_regions()
         remaining = [(item.action_id, item.action) for item in self._remaining_with_ids]
         affected = affected_set(scene, (trigger.evidence or {}).get('trigger_objects') or [], object_regions)
         independent = independent_bundles(split_bundles(remaining, object_regions), affected)
@@ -909,6 +984,7 @@ class LLMOnlyReplanningPipeline:
             plan_result = PlanResult(False, [], plan_result.raw_output, plan_result.inference_time,
                                      wait_failure.message, wait_failure)
             self._active_trigger = None
+            self._next_plan_ids = None
         self._log_event(
             'parallel', step=self.step, affected_set=affected,
             independent_actions_available=[action for bundle in independent for _, action in bundle.actions],
@@ -920,26 +996,29 @@ class LLMOnlyReplanningPipeline:
         return plan_result, trace
 
     # -- WHERE (plan.md Phase 5) -------------------------------------------------
-    CORRECTIVE_REQUERY_CODES = (FailureCode.INVALID_CORRECTIVE_BLOCK, FailureCode.INSERTION_TOO_LATE,
-                                FailureCode.MERGE_CONFLICT)
-
     def _corrective_context(self, failure_event):
-        """(trigger, rejection) when this planner call must return corrective blocks, else None."""
+        """(trigger, rejection) when this planner call must return corrective blocks, else None.
+
+        A trigger (IF rule or discovery) asks for blocks. Any rejection of those blocks (a
+        block-format error, an unknown name, a block ending while holding, an invalid merged
+        plan, insertion_too_late, merge_conflict, a repeated output) re-queries for blocks
+        with the specific error; it never falls back to a full replan. Execution failures
+        keep the full replan."""
         if self.config.flags.replan_output_mode != 'corrective' or failure_event is None:
             return None
-        if failure_event.failure_id == FailureCode.IF_RULE_TRIGGER:
+        if self._is_trigger(failure_event):
             self._active_trigger, self._corrective_attempts = failure_event, 0
             return failure_event, None
-        if failure_event.failure_id in self.CORRECTIVE_REQUERY_CODES and self._active_trigger is not None:
+        if (failure_event.evidence or {}).get('corrective_rejection') and self._active_trigger is not None:
             return self._active_trigger, failure_event
-        # Execution failures and other triggers keep the previous full replan.
         self._active_trigger = None
         return None
 
     def _corrective_rejection(self, result, error) -> PlanResult:
         event = FailureEvent(
             failure_id=error.failure_id, stage=FailureStage.BEFORE_EXECUTION, source=FailureSource.VALIDATION,
-            action=None, evidence={'fact': error.fact, 'raw_output': result.raw_output}, failure_layer=FailureLayer.LAYER_1,
+            action=None, evidence={'fact': error.fact, 'raw_output': result.raw_output, 'corrective_rejection': True},
+            failure_layer=FailureLayer.LAYER_1,
             should_replan=True, message=f'Corrective blocks rejected ({error.failure_id}): {error.fact}',
         )
         proposal = getattr(self, '_last_proposal', None) or {}
@@ -970,15 +1049,18 @@ class LLMOnlyReplanningPipeline:
             known_ids = [action_id for action_id, _ in remaining] + list(getattr(self, '_wait_executed_ids', []) or [])
             blocks = parse_blocks(result.raw_output, triggers, known_ids)
             for block in blocks:
+                if block.no_action:
+                    continue
                 try:
                     block.actions = [str(action) for action in _parse(block.actions)]
                 except StrictParseError as exc:
+                    # Keeps the specific code (e.g. an unknown region); the re-query stays corrective.
                     raise CorrectivePlanError(exc.failure_id, f'{", ".join(block.objects)} block: {exc.fact or exc}')
             proposed = [dict(b.to_dict()) for b in blocks]
             self._last_proposal = {
                 'blocks': proposed,
-                'urgency': {obj: b.urgency for b in reversed(blocks) for obj in b.objects},
-                'insert': {obj: b.insert for b in reversed(blocks) for obj in b.objects},
+                'urgency': {obj: (b.urgency or 'no_action') for b in reversed(blocks) for obj in b.objects},
+                'insert': {obj: (b.insert or 'no_action') for b in reversed(blocks) for obj in b.objects},
             }
             blocks = apply_insertion_mode(blocks, self.config.flags.replan_insertion_mode)
 
@@ -1002,37 +1084,132 @@ class LLMOnlyReplanningPipeline:
 
         self._next_plan_ids = [action_id for action_id, _ in merge.merged]
         urgency, insertion_point = {}, {}
+        no_action = sorted({obj for block in blocks if block.no_action for obj in block.objects})
         for block in blocks:
+            if block.no_action:
+                continue
             for obj in block.objects:
                 urgency.setdefault(obj, block.proposed_urgency)
                 insertion_point.setdefault(obj, block.proposed_insert)
+        for obj in no_action:
+            urgency.setdefault(obj, 'no_action')
+            insertion_point.setdefault(obj, 'no_action')
+            self._no_action_objects[obj] = self._if_rule_object_regions().get(obj)
         self._log_event(
             'insertion', step=self.step, corrective_sub_plans=proposed, urgency=urgency, insertion_point=insertion_point,
             merged_plan=[f'{action_id}: {action}' for action_id, action in merge.merged],
             first_proposal=self._corrective_attempts == 1, accepted=True,
             insertion_mode=self.config.flags.replan_insertion_mode, applied=merge.insertions,
+            no_action_objects=no_action, all_no_action=all(block.no_action for block in blocks),
             anchors_already_executed=list(merge.anchors_already_executed),
             failure_codes=[str(FailureCode.ANCHOR_ALREADY_EXECUTED)] if merge.anchors_already_executed else [],
         )
         self._active_trigger = None
-        return PlanResult(True, list(parsed), result.raw_output, result.inference_time)
+        return PlanResult(True, list(parsed), result.raw_output, result.inference_time,
+                          timing=getattr(result, 'timing', None))
+
+    @staticmethod
+    def _is_infrastructure(result: PlanResult) -> bool:
+        event = getattr(result, 'failure_event', None)
+        return event is not None and event.failure_id in INFRASTRUCTURE_FAILURE_CODES
+
+    def _abstract_state(self, state, corrective, failure_event) -> str:
+        """What the planner is asked about, without rejection notes: visible objects and regions,
+        remembered objects, lids, gripper, remaining plan and trigger objects."""
+        regions = dict(getattr(state, 'object_region_map', {}) or {})
+        visible = sorted(name for name in (state.visible_objects or []) if name not in LID_REGIONS)
+        trigger = corrective[0] if corrective is not None else (failure_event if self._is_trigger(failure_event) else None)
+        parts = {
+            'visible': [(name, regions.get(name)) for name in visible],
+            'remembered': sorted((e.object_id, e.last_region) for e in self.memory.remembered()) if self.memory_enabled else [],
+            'lids': sorted((str(k), bool(v)) for k, v in (getattr(state, 'lid_states', {}) or {}).items()),
+            'holding': getattr(self.executor, 'held_object', None),
+            'remaining': [item.action for item in self._remaining_with_ids],
+            'triggers': sorted((trigger.evidence or {}).get('trigger_objects') or []) if trigger is not None else [],
+        }
+        return repr(parts)
+
+    @staticmethod
+    def _normalized_output(raw_output: str) -> str:
+        text = raw_output or ''
+        for marker in ('FINAL BLOCKS:', 'FINAL ACTIONS:'):
+            index = text.rfind(marker)
+            if index >= 0:
+                text = text[index:]
+                break
+        return '\n'.join(line.strip().lower() for line in text.splitlines() if line.strip())
+
+    def _repeated_output(self, request, result) -> Optional[PlanResult]:
+        """DIAGNOSTICS area 8: the same output for the same abstract state.
+
+        The first repeat is rejected and re-queried once with a note; a second repeat in the
+        trial stops it with termination reason ``replan_loop``."""
+        output = self._normalized_output(result.raw_output)
+        if not output:
+            return None
+        key = hashlib.sha256((request.get('abstract_state', '') + '\x00' + output).encode('utf-8')).hexdigest()
+        if key not in self._tried_outputs:
+            self._tried_outputs.add(key)
+            return None
+        self._repeat_count += 1
+        stop = self._repeat_count >= 2
+        fact = 'This output was already tried in the same state and it did not work.'
+        event = FailureEvent(
+            failure_id=FailureCode.REPEATED_PLANNER_OUTPUT, stage=FailureStage.BEFORE_EXECUTION,
+            source=FailureSource.VALIDATION, action=None,
+            evidence={'fact': fact, 'raw_output': result.raw_output, 'repeat': self._repeat_count, 'output_hash': key,
+                      'corrective_rejection': request.get('corrective') is not None},
+            failure_layer=FailureLayer.LAYER_1, should_replan=not stop,
+            message=f'Repeated planner output ({self._repeat_count}): {fact}',
+        )
+        if stop:
+            self._set_termination(TerminationReason.REPLAN_LOOP)
+        return PlanResult(False, [], result.raw_output, result.inference_time, event.message, event,
+                          timing=getattr(result, 'timing', None))
+
+    def _replan_reason(self, failure_event, corrective: bool) -> str:
+        """Why this planner call happens (logged on every planning_event)."""
+        if failure_event is None:
+            return 'initial'
+        if failure_event.failure_id == FailureCode.IF_RULE_TRIGGER:
+            return 'trigger:if_rule'
+        if failure_event.failure_id == FailureCode.NEW_OBJECT_DISCOVERED:
+            return 'trigger:discovery'
+        if failure_event.failure_id == FailureCode.REPEATED_PLANNER_OUTPUT:
+            return 'repeated_output_requery'
+        if corrective and (failure_event.evidence or {}).get('corrective_rejection'):
+            return 'corrective_requery'
+        check = failure_check_for(failure_event.failure_id)
+        if check in (FailureCheck.PLAN_CHECK, FailureCheck.INSERTION):
+            return 'plan_check_requery'
+        if check == FailureCheck.GOAL_CHECK:
+            return 'goal_check'
+        if check in (FailureCheck.EXECUTION_FAILURE, FailureCheck.PRE_ACTION_CHECK):
+            return 'execution_failure'
+        return str(check or 'other')
 
     def _log_planning_event(self, bundle, result, failure_event, is_replan, is_plan_check_requery, wall_latency_s,
-                            step: Optional[int] = None) -> None:
-        step = self.step if step is None else step
+                            prompt_step: Optional[int] = None, corrective: bool = False) -> None:
+        # Events are logged at the current step (observations may have advanced it while a
+        # parallel replan was running); the prompt was built at prompt_step.
+        step = self.step
+        prompt_step = step if prompt_step is None else prompt_step
         trigger_objects = []
-        if failure_event is not None and failure_event.failure_id == FailureCode.NEW_OBJECT_DISCOVERED:
-            trigger_objects = list((failure_event.evidence or {}).get('newly_visible_objects') or [])
-        elif failure_event is not None and failure_event.failure_id == FailureCode.IF_RULE_TRIGGER:
-            trigger_objects = list((failure_event.evidence or {}).get('trigger_objects') or [])
+        if self._is_trigger(failure_event):
+            trigger_objects = list((failure_event.evidence or {}).get('trigger_objects')
+                                   or (failure_event.evidence or {}).get('newly_visible_objects') or [])
         prompt_path = self.trial_logger.save_prompt(
-            step, bundle.system_prompt, bundle.user_prompt, kind='replan' if is_replan else 'initial',
+            prompt_step, bundle.system_prompt, bundle.user_prompt, kind='replan' if is_replan else 'initial',
         )
         parsed = [str(action) for action in (result.actions or [])]
+        timing = dict(getattr(result, 'timing', None) or {})
         self._log_event(
             'planning_event',
             step=step,
+            prompt_step=prompt_step,
             kind='replan' if is_replan else 'initial',
+            output_format='corrective' if corrective else 'full',
+            replan_reason=self._replan_reason(failure_event, corrective),
             plan_check_requery=bool(is_plan_check_requery),
             trigger_code=str(failure_event.failure_id) if failure_event is not None else None,
             trigger_objects=trigger_objects,
@@ -1046,6 +1223,8 @@ class LLMOnlyReplanningPipeline:
             parsed_output=parsed,
             planner_call_latency_s=float(result.inference_time or 0.0),
             wall_latency_s=round(float(wall_latency_s), 4),
+            queue_wait_s=timing.get('queue_wait_s'),
+            generation_time_s=timing.get('generation_time_s'),
             error_message=result.error_message,
         )
         if result.failure_event is not None:
@@ -1527,6 +1706,8 @@ class LLMOnlyReplanningPipeline:
                             self.executor.remaining_actions = []
                         pending_failure = plan_result.failure_event
                         continue
+                    if self._is_infrastructure(plan_result):
+                        self._set_termination(TerminationReason.INFRASTRUCTURE)
                     self._set_termination(
                         TerminationReason.PLANNING_FAILED if plan_result.failure_event is None
                         else TerminationReason.NON_REPLANNABLE_FAILURE
@@ -1758,7 +1939,6 @@ if __name__ == '__main__':
     display_group.add_argument("--headless", action="store_true", help="Run without simulator GUI")
     parser.add_argument("--remote", action="store_true", help="Use the maintained remote LLM planner server")
     parser.add_argument("--remote-url", default=os.environ.get("LLM_SERVER_URL", os.environ.get("VLM_SERVER_URL", "http://localhost:8000")), help="Remote planner server URL")
-    parser.add_argument("--max-replans", type=int, default=3, help="Maximum replans during execution")
     parser.add_argument("--replan-mode", choices=["on", "off"], default="on", help="Use full execution+replanning or first-plan-only mode")
     parser.add_argument("--task-family", choices=["kitchen", "grill"], default="", help="Task family override when --variant is not set")
     parser.add_argument("--scene-path", default="", help="Scene path override")
@@ -1808,7 +1988,6 @@ if __name__ == '__main__':
     config = LLMPipelineConfig(
         model_alias=args.model,
         icl_mode=args.icl_mode,
-        max_replans=args.max_replans,
         enable_replanning=args.replan_mode != "off",
         headless=headless,
         enable_vision=args.vision,

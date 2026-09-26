@@ -5,11 +5,15 @@
     # or from assumed numbers
     python -m evaluation.phase8_budget --planner-call-s 90 --calls-per-trial 3 --sim-s 90 --budget-hours 72
 
-Trial time = simulator time + planner calls x planner latency (the WHEN condition hides
-part of the replan latency behind execution; the estimate ignores that, so it is an
-upper bound). ``--parallel-sims`` trials run at once; the planner server is assumed to
-serve them without queueing only if ``--server-concurrency`` is at least that number,
-otherwise planner calls are serialized.
+Trial time = simulator time + planner calls x planner latency. ``--parallel-sims`` trials
+run at once; the planner server serves them without queueing only if
+``--server-concurrency`` is at least that number, otherwise planner calls are serialized.
+
+The result is a **lower bound** on wall time, not an upper bound. It assumes the mean
+planner calls per trial (no replan-budget tail), no infrastructure reruns, no model loading
+and, with a serialized server, no time lost to queueing beyond the planner's total busy
+time. (The WHEN condition hides part of the replan latency behind execution, which the
+estimate does not credit; that is small next to the omissions above.)
 """
 
 from __future__ import annotations
@@ -84,10 +88,11 @@ def wall_hours(cells, timing: Timing, parallel_sims: int, server_concurrency: in
     lanes = max(1, parallel_sims)
     if server_concurrency >= lanes:
         return trials * timing.trial_s / lanes / 3600.0
-    # Planner calls are serialized on the server; simulation overlaps across lanes.
+    # Planner calls are serialized on the server: the server's total busy time bounds the run
+    # from below, and so does each lane running its own trials back to back.
     planner_total = trials * timing.planner_call_s * timing.calls_per_trial
-    sim_total = trials * timing.sim_s / lanes
-    return max(planner_total, sim_total) / 3600.0
+    lane_total = trials * timing.trial_s / lanes
+    return max(planner_total, lane_total) / 3600.0
 
 
 PLANS = [

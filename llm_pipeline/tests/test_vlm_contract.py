@@ -91,7 +91,32 @@ def test_vlm_format_repair_prompt_mentions_verbose_outputs() -> None:
     assert "Return only the executable action block" in prompt
 
 
-def test_vlm_chat_template_disables_thinking_when_supported() -> None:
+def test_vlm_chat_template_keeps_thinking_on_by_default(monkeypatch) -> None:
+    # B5: /no_think and enable_thinking=False are never applied by default.
+    monkeypatch.delenv("QWEN_THINKING_MODE", raising=False)
+    monkeypatch.delenv("QWEN_NO_THINK_PROMPT", raising=False)
+
+    class Processor:
+        def __init__(self):
+            self.kwargs = None
+            self.messages = None
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False, enable_thinking=None):
+            self.messages = messages
+            self.kwargs = {"enable_thinking": enable_thinking}
+            return "templated"
+
+    planner = VLMPlanner()
+    planner.processor = Processor()
+
+    assert planner._apply_chat_template([{"role": "user", "content": "hi"}]) == "templated"
+    assert planner.processor.kwargs["enable_thinking"] is None
+    assert "/no_think" not in str(planner.processor.messages)
+
+
+def test_vlm_chat_template_disables_thinking_when_supported(monkeypatch) -> None:
+    monkeypatch.setenv("QWEN_THINKING_MODE", "off")
+
     class Processor:
         def __init__(self):
             self.kwargs = None

@@ -58,10 +58,12 @@ def load_gt_actions(variant_id: str) -> List[str]:
 class OraclePlanner:
     """Answers with the remaining ground-truth actions on observed objects."""
 
-    def __init__(self, gt_actions: List[str], executor_ref, urgency: Optional[dict] = None, delay_s: float = 0.0):
+    def __init__(self, gt_actions: List[str], executor_ref, urgency: Optional[dict] = None, delay_s: float = 0.0,
+                 expected_if: Optional[dict] = None):
         self.gt_actions = list(gt_actions)
         self._executor_ref = executor_ref
         self.urgency = dict(urgency or {})       # final variants: expected urgency per trigger object
+        self.expected_if = dict(expected_if or {})   # final variants: expected IF decision per hidden object
         self.delay_s = float(delay_s)            # simulated planner latency (Phase 6)
         self.model_alias = 'gt_oracle'
         self.model_name = 'gt_oracle'
@@ -72,6 +74,10 @@ class OraclePlanner:
 
     def load_model(self) -> bool:
         return True
+
+    def planner_settings(self) -> dict:
+        return {'planner': 'gt_oracle', 'model_name': 'gt_oracle', 'thinking_mode': None, 'format_repair': False,
+                'simulated_planner_delay_s': self.delay_s}
 
     def _remaining(self) -> List[str]:
         executor = self._executor_ref()
@@ -92,7 +98,16 @@ class OraclePlanner:
         plate_anchor = next((action_id for action_id, action in remaining
                              if action.replace(' ', '') == 'place(plate,serving_area)'), None)
         blocks = []
-        for obj in metadata.get('trigger_objects') or []:
+        triggers = list(metadata.get('trigger_objects') or [])
+        # An object the variant spec says to ignore (e.g. K2's phone, listed by the discovery
+        # trigger) needs no action.
+        ignored = [obj for obj in triggers if self.expected_if.get(obj) == 'ignore']
+        if triggers and len(ignored) == len(triggers):
+            return 'FINAL BLOCKS:\nNO_ACTIONS'
+        for obj in triggers:
+            if obj in ignored:
+                blocks.append(('no_action', None, obj, []))
+                continue
             pairs = []
             for index, action in enumerate(self.gt_actions[:-1]):
                 parsed = parse_action_string(action) or {}
@@ -111,6 +126,10 @@ class OraclePlanner:
                 blocks.append(('deferred', 'end', obj, pairs))
         lines = ['FINAL BLOCKS:']
         for urgency, insert, obj, actions in blocks:
+            if urgency == 'no_action':
+                lines += ['BLOCK', f'objects: {obj}', 'reason: ground-truth oracle', 'actions:', 'NO_ACTIONS',
+                          'END BLOCK']
+                continue
             lines += ['BLOCK', f'objects: {obj}', f'urgency: {urgency}', f'insert: {insert}',
                       'reason: ground-truth oracle', 'actions:', *actions, 'END BLOCK']
         return '\n'.join(lines)
@@ -166,16 +185,19 @@ class OraclePlanner:
 
 
 def run_oracle_trial(variant_id: str, output_dir: Path, headless: bool = True,
-                     flags: Optional[PipelineFlags] = None, max_replans: int = 10,
-                     seed: Optional[int] = None, delay_s: float = 0.0) -> dict:
+                     flags: Optional[PipelineFlags] = None, max_replans: Optional[int] = None,
+                     seed: Optional[int] = None, delay_s: float = 0.0, attempt: int = 1) -> dict:
     from evaluation.final_variants import get_final_variant, is_final_variant
 
     gt_actions = load_gt_actions(variant_id)
-    urgency = dict(get_final_variant(variant_id).expected_urgency) if is_final_variant(variant_id) else {}
+    spec = get_final_variant(variant_id) if is_final_variant(variant_id) else None
+    urgency = dict(spec.expected_urgency) if spec is not None else {}
+    expected_if = dict(spec.expected_if) if spec is not None else {}
 
     class OraclePipeline(LLMOnlyReplanningPipeline):
         def __init__(self, config):
-            super().__init__(config=config, planner=OraclePlanner(gt_actions, lambda: self.executor, urgency, delay_s))
+            super().__init__(config=config, planner=OraclePlanner(gt_actions, lambda: self.executor, urgency, delay_s,
+                                                                  expected_if))
 
     original = trial_runner.LLMOnlyReplanningPipeline
     trial_runner.LLMOnlyReplanningPipeline = OraclePipeline
@@ -191,6 +213,9 @@ def run_oracle_trial(variant_id: str, output_dir: Path, headless: bool = True,
             flags=flags,
             seed=seed,
             trial_index=(seed + 1 if seed is not None else 1),
+            real_model=False,
+            simulated_planner_delay_s=delay_s,
+            attempt=attempt,
         )
     finally:
         trial_runner.LLMOnlyReplanningPipeline = original
@@ -202,15 +227,15 @@ def main() -> None:
     parser.add_argument('--output-dir', required=True)
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--flag', action='append', default=[], metavar='NAME=VALUE')
-    parser.add_argument('--max-replans', type=int, default=10)
     parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--attempt', type=int, default=1, help='Attempt number (infrastructure reruns)')
     parser.add_argument('--headless', action='store_true', help='(default)')
     parser.add_argument('--planner-delay', type=float, default=0.0,
                         help='Simulated planner latency in seconds (Phase 6 tests)')
     args = parser.parse_args()
     record = run_oracle_trial(args.variant, Path(args.output_dir), headless=not args.gui,
-                              flags=PipelineFlags.from_assignments(args.flag), max_replans=args.max_replans,
-                              seed=args.seed, delay_s=args.planner_delay)
+                              flags=PipelineFlags.from_assignments(args.flag),
+                              seed=args.seed, delay_s=args.planner_delay, attempt=args.attempt)
     print(json.dumps({key: record.get(key) for key in (
         'variant_id', 'episode_success', 'partial_goal_completion', 'total_cycles', 'total_replans',
         'completed_actions', 'failure_reason')}, indent=2))

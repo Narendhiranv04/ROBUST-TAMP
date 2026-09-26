@@ -36,7 +36,6 @@ def _trial_command(
     icl_mode: str,
     output_path: Path,
     trial_index: int,
-    max_replans: int,
     headless: bool,
     remote: bool,
     remote_url: str,
@@ -53,7 +52,6 @@ def _trial_command(
         '--model', model_alias,
         '--icl-mode', icl_mode,
         '--trial-index', str(trial_index),
-        '--max-replans', str(max_replans),
         '--output', str(output_path),
     ]
     if quantization:
@@ -84,7 +82,6 @@ def main() -> None:
     parser.add_argument('--icl-modes', default=','.join(SHARED_ICL_MODES), help='Comma-separated prompt modes')
     parser.add_argument('--variants', default=','.join(DEFAULT_MODEL_VARIANTS), help='Comma-separated kitchen/grill variants')
     parser.add_argument('--trials', type=int, default=1, help='Trials per execution variant')
-    parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
     parser.add_argument('--goal', default='', help='Optional goal override for all runs')
     parser.add_argument('--headless', action='store_true', help='Run without simulator GUI')
     parser.add_argument('--remote', action='store_true', help='Use the maintained remote LLM planner server')
@@ -128,7 +125,6 @@ def main() -> None:
                     icl_mode=icl_mode,
                     output_path=output_path,
                     trial_index=0,
-                    max_replans=args.max_replans,
                     headless=args.headless,
                     remote=args.remote,
                     remote_url=args.remote_url,
@@ -157,8 +153,7 @@ def main() -> None:
                         icl_mode=icl_mode,
                         output_path=output_path,
                         trial_index=trial_index,
-                        max_replans=args.max_replans,
-                        headless=args.headless,
+                            headless=args.headless,
                         remote=args.remote,
                         remote_url=args.remote_url,
                         replan_mode=args.replan_mode,

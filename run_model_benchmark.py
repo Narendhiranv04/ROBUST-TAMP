@@ -36,7 +36,7 @@ def main() -> None:
     parser.add_argument('--trials', type=int, default=10, help='Trials per variant')
     parser.add_argument('--remote', action='store_true', help='Use the remote planner server')
     parser.add_argument('--remote-url', default=os.environ.get('VLM_SERVER_URL', 'http://localhost:8080'), help='Remote planner server URL')
-    parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
+    parser.add_argument('--max-replans', type=int, default=10, help='Maximum replans during execution')
     parser.add_argument('--goal', default='', help='Optional goal override for all trials in this benchmark batch')
     display_group = parser.add_mutually_exclusive_group()
     display_group.add_argument('--gui', action='store_true', help='Run with simulator GUI (default)')

@@ -1,14 +1,28 @@
 #!/usr/bin/env python3
-"""Remote inference server for the maintained text-only LLM planner."""
+"""Remote inference server for the maintained text-only LLM planner.
+
+Requests are served one at a time by a single worker thread (``PlanJobQueue``). A
+client submits a job (``POST /plan/submit``) and polls it (``GET /plan/jobs/<id>``);
+each job reports how long it waited in the queue and how long generation took, so
+the client's timeout covers generation only. ``GET /settings`` reports everything
+that changes what the model generates (model and revision, thinking mode, format
+repair, server git commit); the trial runner logs it and refuses real-model trials
+with thinking off or format repair on.
+"""
 
 from __future__ import annotations
 
 import argparse
 import base64
+import itertools
 import os
+import queue
+import subprocess
 import sys
+import threading
+import time
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -115,6 +129,102 @@ class HealthResponse(BaseModel):
     gpu_available: bool
 
 
+API_VERSION = 2
+
+
+def server_git_commit(root: str = ROOT_DIR) -> Dict[str, Any]:
+    def _git(*args: str) -> str:
+        return subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, timeout=10).stdout.strip()
+
+    try:
+        return {'commit': _git('rev-parse', 'HEAD') or None, 'dirty': bool(_git('status', '--porcelain', '-uno'))}
+    except Exception:
+        return {'commit': None, 'dirty': None}
+
+
+class PlanJobQueue:
+    """Serial job queue: one worker thread runs one job at a time, in submission order.
+
+    ``submit(handler, payload)`` returns a job id; ``status(job_id)`` reports ``queued``
+    (with the queue position), ``running`` (with ``running_for_s``), ``done`` (with the
+    result) or ``error``, plus ``queue_wait_s`` and ``generation_time_s``.
+    """
+
+    def __init__(self, keep_finished_s: float = 3600.0):
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._order: List[str] = []
+        self._lock = threading.Lock()
+        self._queue: 'queue.Queue[str]' = queue.Queue()
+        self._ids = itertools.count(1)
+        self._keep_finished_s = float(keep_finished_s)
+        self._worker = threading.Thread(target=self._run, name='plan-worker', daemon=True)
+        self._worker.start()
+
+    def submit(self, handler: Callable[[Any], Any], payload: Any) -> str:
+        job_id = f'job{next(self._ids)}'
+        with self._lock:
+            self._forget_old()
+            self._jobs[job_id] = {'status': 'queued', 'submitted_at': time.monotonic(), 'started_at': None,
+                                  'finished_at': None, 'handler': handler, 'payload': payload,
+                                  'result': None, 'error': None}
+            self._order.append(job_id)
+        self._queue.put(job_id)
+        return job_id
+
+    def _forget_old(self) -> None:
+        now = time.monotonic()
+        for job_id in [j for j, job in self._jobs.items()
+                       if job['finished_at'] is not None and now - job['finished_at'] > self._keep_finished_s]:
+            self._jobs.pop(job_id, None)
+            if job_id in self._order:
+                self._order.remove(job_id)
+
+    def _run(self) -> None:
+        while True:
+            job_id = self._queue.get()
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None:
+                    continue
+                job['status'], job['started_at'] = 'running', time.monotonic()
+            try:
+                result, error = job['handler'](job['payload']), None
+            except Exception as exc:  # the model call failed: reported as a server error
+                result, error = None, f'{type(exc).__name__}: {exc}'
+            with self._lock:
+                job['finished_at'] = time.monotonic()
+                job['result'], job['error'] = result, error
+                job['status'] = 'error' if error is not None else 'done'
+                job['payload'] = None
+
+    def status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            now = time.monotonic()
+            started, finished = job['started_at'], job['finished_at']
+            queued_ids = [j for j in self._order if self._jobs.get(j, {}).get('status') == 'queued']
+            return {
+                'job_id': job_id,
+                'status': job['status'],
+                'queue_position': queued_ids.index(job_id) + 1 if job_id in queued_ids else 0,
+                'queue_wait_s': round((started if started is not None else now) - job['submitted_at'], 4),
+                'running_for_s': round(((finished if finished is not None else now) - started), 4)
+                if started is not None else 0.0,
+                'generation_time_s': round(finished - started, 4) if finished is not None else None,
+                'result': job['result'],
+                'error': job['error'],
+            }
+
+    def wait(self, job_id: str, poll_s: float = 0.05) -> Dict[str, Any]:
+        while True:
+            state = self.status(job_id)
+            if state is None or state['status'] in ('done', 'error'):
+                return state
+            time.sleep(poll_s)
+
+
 class LLMServer:
     def __init__(
         self,
@@ -123,11 +233,15 @@ class LLMServer:
         device: str = 'cuda',
         model_type: str = '',
         quantization: str = '',
+        format_repair: bool = False,
     ):
         self.model_spec = resolve_model_spec(model, model_type)
         self.quantization = normalize_quantization(quantization, use_4bit=use_4bit)
         self.use_4bit = self.quantization == 'bnb4'
         self.device = device
+        # The legacy VLM format-repair regeneration (a second, hidden model call). Off by
+        # default; never used for prompt.version=v2 requests.
+        self.format_repair = bool(format_repair)
         if self.model_spec.model_type == 'vlm':
             from llm_pipeline.vlm_planner import VLMPlanner
 
@@ -155,6 +269,28 @@ class LLMServer:
             debug = self.planner.get_debug_info()
             self.last_request_summary = debug.get('last_request', {})
         return self.loaded
+
+    def settings(self) -> Dict[str, Any]:
+        """Everything that changes what the model generates (GET /settings)."""
+        from llm_pipeline.planner import model_revision, thinking_mode_setting
+
+        model = getattr(self.planner, 'model', None)
+        if model is None:
+            model = getattr(getattr(self.planner, 'legacy_planner', None), 'model', None)
+        return {
+            'api_version': API_VERSION,
+            'planner': 'remote',
+            'model_name': self.model_spec.path,
+            'model_alias': self.model_spec.alias,
+            'model_type': self.model_spec.model_type,
+            'model_revision': model_revision(model),
+            'quantization': self.quantization,
+            'thinking_mode': thinking_mode_setting(),
+            'format_repair': bool(self.format_repair),
+            'serving': 'serial',
+            'server_git_commit': server_git_commit(),
+            'model_loaded': bool(getattr(self, 'loaded', False)),
+        }
 
     def _decode_image_base64(self, payload: Optional[str]):
         if not payload:
@@ -212,6 +348,7 @@ class LLMServer:
                     'max_new_tokens': request.max_new_tokens,
                     'temperature': request.temperature,
                     'prompt_version': request.prompt_version,
+                    'allow_format_repair': bool(getattr(self, 'format_repair', False)),
                 },
             )
             result = self.planner.plan(bundle)
@@ -278,6 +415,7 @@ def create_app(
     device: str = 'cuda',
     model_type: str = '',
     quantization: str = '',
+    format_repair: bool = False,
 ) -> FastAPI:
     app = FastAPI(
         title='Maintained LLM Planner Server',
@@ -299,11 +437,17 @@ def create_app(
         device=device,
         model_type=model_type,
         quantization=quantization,
+        format_repair=format_repair,
     )
+    jobs = PlanJobQueue()
 
     @app.on_event('startup')
     async def startup_event():
         server.load_model()
+
+    @app.get('/settings')
+    def settings():
+        return server.settings()
 
     @app.get('/health', response_model=HealthResponse)
     async def health_check():
@@ -330,23 +474,48 @@ def create_app(
             'last_request': server.last_request_summary,
         }
 
-    @app.post('/plan', response_model=PlanResponse)
-    async def generate_plan(request: PlanRequest):
+    def _job_payload(state):
+        payload = {key: state[key] for key in ('job_id', 'status', 'queue_position', 'queue_wait_s',
+                                               'running_for_s', 'generation_time_s', 'error')}
+        result = state.get('result')
+        dump = getattr(result, 'model_dump', None) or getattr(result, 'dict', None)
+        payload['result'] = dump() if callable(dump) else result
+        return payload
+
+    # Plain (non-async) handlers run in the threadpool, so /health and job polls answer
+    # while the worker thread is generating.
+    @app.post('/plan/submit')
+    def submit_plan(request: PlanRequest):
         if not server.loaded:
             raise HTTPException(status_code=503, detail='Model not loaded')
-        try:
-            return server.generate_plan(request)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+        job_id = jobs.submit(server.generate_plan, request)
+        return {'job_id': job_id, 'status': 'queued'}
+
+    @app.get('/plan/jobs/{job_id}')
+    def plan_job(job_id: str):
+        state = jobs.status(job_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail=f'unknown job {job_id}')
+        return _job_payload(state)
+
+    @app.post('/plan', response_model=PlanResponse)
+    def generate_plan(request: PlanRequest):
+        """Blocking form (queued like every other request)."""
+        if not server.loaded:
+            raise HTTPException(status_code=503, detail='Model not loaded')
+        state = jobs.wait(jobs.submit(server.generate_plan, request))
+        if state['status'] == 'error':
+            raise HTTPException(status_code=500, detail=state['error'])
+        return state['result']
 
     @app.post('/check-goal', response_model=GoalCheckResponse)
-    async def check_goal_completion(request: GoalCheckRequest):
+    def check_goal_completion(request: GoalCheckRequest):
         if not server.loaded:
             raise HTTPException(status_code=503, detail='Model not loaded')
-        try:
-            return server.check_goal_completion(request)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+        state = jobs.wait(jobs.submit(server.check_goal_completion, request))
+        if state['status'] == 'error':
+            raise HTTPException(status_code=500, detail=state['error'])
+        return state['result']
 
     @app.get('/')
     async def root():
@@ -357,7 +526,10 @@ def create_app(
             'model_type': server.model_spec.model_type,
             'endpoints': {
                 '/health': 'GET - Check server health',
-                '/plan': 'POST - Generate direct LLM action plan',
+                '/settings': 'GET - Model, revision, thinking mode, format repair, server commit',
+                '/plan/submit': 'POST - Queue a planner call; returns a job id',
+                '/plan/jobs/{id}': 'GET - Job status, queue wait, generation time, result',
+                '/plan': 'POST - Generate direct LLM action plan (blocking)',
                 '/check-goal': 'POST - Verify whether the goal is complete',
                 '/debug/last-request': 'GET - Inspect last request',
             },
@@ -376,6 +548,9 @@ def main() -> None:
     parser.add_argument('--quantization', choices=['none', 'bnb8', 'bnb4'], default='', help='Explicit quantization mode. Use bnb4 for native bitsandbytes 4-bit.')
     parser.add_argument('--no-4bit', action='store_true', help='Deprecated alias for --quantization none')
     parser.add_argument('--list-models', action='store_true', help='List registered planner models and exit')
+    parser.add_argument('--format-repair', action='store_true',
+                        help='Enable the legacy VLM format-repair regeneration (a second model call; never for '
+                             'prompt v2). Real-model trials refuse a server with it on.')
     args = parser.parse_args()
 
     if args.no_4bit and args.quantization:
@@ -398,6 +573,7 @@ def main() -> None:
     print(f"Model type: {model_spec.model_type}")
     print(f"Quantization: {quantization}")
     print(f"Device hint: {args.device}")
+    print(f"Format repair: {'on' if args.format_repair else 'off'}")
     print(f"Server: http://{args.host}:{args.port}")
     print("=" * 60)
 
@@ -407,6 +583,7 @@ def main() -> None:
         device=args.device,
         model_type=args.model_type,
         quantization=quantization,
+        format_repair=args.format_repair,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

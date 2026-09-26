@@ -30,7 +30,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from llm_pipeline.failures import FailureCheck, FailureCode, failure_check_for  # noqa: E402
+from llm_pipeline.failures import (  # noqa: E402
+    INFRASTRUCTURE_FAILURE_CODES, FailureCheck, FailureCode, TerminationReason, failure_check_for,
+)
 
 AREAS: Dict[int, str] = {
     1: 'plan_format_error',
@@ -54,7 +56,9 @@ FORMAT_CODES = frozenset({
     FailureCode.UNKNOWN_ACTION_TOKEN, FailureCode.PLANNER_OUTPUT_NOT_PARSEABLE, FailureCode.PLANNER_OUTPUT_TOO_VERBOSE,
     FailureCode.UNOBSERVED_OBJECT, FailureCode.INVALID_CORRECTIVE_BLOCK, FailureCode.UNSUPPORTED_ACTION,
 })
-INFRASTRUCTURE_CODES = frozenset({FailureCode.PLANNER_CALL_FAILED, FailureCode.SIMULATOR_ERROR})
+INFRASTRUCTURE_CODES = INFRASTRUCTURE_FAILURE_CODES
+# Termination reasons of failure area 8.
+LOOP_TERMINATIONS = frozenset({TerminationReason.REPLAN_BUDGET_EXHAUSTED, TerminationReason.REPLAN_LOOP})
 
 
 @dataclass
@@ -108,6 +112,9 @@ def _area_for_code(code: str) -> Optional[int]:
 
 
 def condition_key(trial_start: Mapping) -> str:
+    """Planner model plus every logged setting that changes behavior: the Section 0.7 flags
+    that differ between conditions, the prompt version and hints, the replan budget and the
+    simulated planner delay (absent in logs before Phase 7b)."""
     condition = dict(trial_start.get('condition') or {})
     flags = dict(trial_start.get('flags') or condition.get('flags') or {})
     model = condition.get('planner_model') or 'unknown'
@@ -116,6 +123,15 @@ def condition_key(trial_start: Mapping) -> str:
                         ('replan.insertion_mode', 'ins'), ('parallel.enabled', 'par')):
         if name in flags:
             parts.append(f'{short}={flags[name]}')
+    for name, short in (('prompt.version', 'prompt'), ('prompt.corrective_hints', 'hints')):
+        if flags.get(name) not in (None, 'v2', 'off'):
+            parts.append(f'{short}={flags[name]}')
+    max_replans = trial_start.get('max_replans', condition.get('max_replans'))
+    if max_replans is not None:
+        parts.append(f'budget={max_replans}')
+    delay = trial_start.get('simulated_planner_delay_s', condition.get('simulated_planner_delay_s'))
+    if delay:
+        parts.append(f'delay={float(delay):g}s')
     return ' '.join(parts)
 
 
@@ -131,6 +147,8 @@ def _expected_triggers(variant: str) -> Optional[Tuple[Set[str], Set[str]]]:
 
 
 def _observed_triggers(events: Sequence[Mapping]) -> Set[str]:
+    """Objects that triggered a replan: the trigger objects of the trigger checks (both modes
+    from Phase 7b) and, for older discovery logs, of new_object_discovered replans."""
     observed = set()
     for event in events:
         if event.get('event') == 'if_check':
@@ -205,7 +223,7 @@ def diagnose(trial_dir: Path, events: Sequence[Mapping], record: Optional[Mappin
     infrastructure = termination == INFRASTRUCTURE or not end
     errors = collect_errors(events)
     occurrences = {AREAS[e.area] for e in errors}
-    if termination == FailureCode.REPLAN_BUDGET_EXHAUSTED or any(
+    if termination in LOOP_TERMINATIONS or any(
             e.get('event') == 'plan_check' and FailureCode.REPEATED_PLANNER_OUTPUT in (e.get('failure_codes') or [])
             for e in events):
         occurrences.add(AREAS[8])
@@ -226,8 +244,15 @@ def diagnose(trial_dir: Path, events: Sequence[Mapping], record: Optional[Mappin
         primary = INFRASTRUCTURE
     elif success:
         primary = SUCCESS
+    elif termination == TerminationReason.REPLAN_LOOP and not (procedure_missing and replanned):
+        # The same output for the same state after a repeat note stopped the trial.
+        primary = AREAS[8]
     else:
-        unrecovered = [e for e in errors if not e.recovered]
+        # A loop that follows an irreversible procedure violation (raw meat plated early,
+        # overcooked meat) is its consequence: the violation stays the primary cause (area 4)
+        # and the loop is counted as an occurrence (e.g. always_front on G2/G3).
+        consequence_of_violation = bool(procedure_missing and replanned)
+        unrecovered = [e for e in errors if not e.recovered and not (consequence_of_violation and e.area == 8)]
         if unrecovered:
             primary = AREAS[unrecovered[0].area]
         elif procedure_missing:

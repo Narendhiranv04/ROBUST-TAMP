@@ -25,7 +25,7 @@ from llm_pipeline.metrics import (
 )
 from llm_pipeline.failures import TerminationReason
 from llm_pipeline.flags import PipelineFlags
-from llm_pipeline.pipeline import LLMPipelineConfig, LLMOnlyReplanningPipeline
+from llm_pipeline.pipeline import DEFAULT_MAX_REPLANS, LLMPipelineConfig, LLMOnlyReplanningPipeline
 from llm_pipeline.trial_log import TrialLogger
 
 
@@ -181,6 +181,55 @@ def git_commit_info(root: Path = ROOT_DIR) -> Dict[str, Any]:
         return {'commit': None, 'dirty': None}
 
 
+class RefusedRun(RuntimeError):
+    """A real-model trial that must not start (dirty tree, wrong planner settings)."""
+
+
+def git_untracked_count(root: Path = ROOT_DIR) -> Optional[int]:
+    import subprocess
+
+    try:
+        out = subprocess.run(['git', 'status', '--porcelain'], cwd=root, capture_output=True, text=True, timeout=10).stdout
+        return sum(1 for line in out.splitlines() if line.startswith('??'))
+    except Exception:
+        return None
+
+
+def real_model_refusals(git_info: Dict[str, Any], planner_settings: Dict[str, Any]) -> list:
+    """Reasons a real-model trial must not run (B5/B6): empty when it may run.
+
+    * the working tree has uncommitted changes to tracked files (untracked files are only counted);
+    * the planner does not report its settings (a server that predates GET /settings);
+    * thinking mode is not on, or the format-repair call is on.
+    """
+    problems = []
+    if git_info.get('commit') is None:
+        problems.append('the git commit cannot be read')
+    elif git_info.get('dirty'):
+        problems.append('the working tree has uncommitted changes to tracked files; commit them first')
+    if not planner_settings or planner_settings.get('thinking_mode') is None:
+        problems.append('the planner does not report its settings (update the planner server: GET /settings)')
+    else:
+        if planner_settings.get('thinking_mode') != 'on':
+            problems.append(f"thinking mode is {planner_settings.get('thinking_mode')!r}; it must be 'on' "
+                            f"(unset QWEN_THINKING_MODE on the planner server)")
+        if planner_settings.get('format_repair'):
+            problems.append('format repair is on; restart the planner server without --format-repair')
+    return problems
+
+
+def _pre_run_planner_settings(remote: bool, remote_url: str) -> Dict[str, Any]:
+    """Planner settings before any simulator work: the server's for a remote planner, the
+    local environment's for a local one (the model revision is added after loading)."""
+    if remote:
+        from llm_pipeline.client import RemoteTextLLMPlanner
+
+        return RemoteTextLLMPlanner(server_url=remote_url or None).fetch_settings()
+    from llm_pipeline.planner import thinking_mode_setting
+
+    return {'planner': 'local', 'thinking_mode': thinking_mode_setting(), 'format_repair': False}
+
+
 def seed_everything(seed: int) -> None:
     import random
 
@@ -296,7 +345,7 @@ def run_trial(
     model_alias: str,
     icl_mode: str,
     trial_index: int = 1,
-    max_replans: int = 10,
+    max_replans: Optional[int] = None,
     headless: bool = False,
     remote: bool = False,
     remote_url: str = '',
@@ -317,9 +366,25 @@ def run_trial(
     goal_check_max_new_tokens: int = 128,
     flags: Optional[PipelineFlags] = None,
     seed: Optional[int] = None,
+    real_model: bool = True,
+    simulated_planner_delay_s: float = 0.0,
+    attempt: int = 1,
 ) -> Dict[str, Any]:
+    """One trial. ``real_model`` (the default) refuses to start on a dirty working tree or
+    with planner settings other than thinking on and format repair off; the oracle passes
+    ``real_model=False`` and its simulated planner delay, which is always 0 for real models."""
     variant_spec = get_variant_spec(variant_id)
     flags = flags or PipelineFlags()
+    max_replans = DEFAULT_MAX_REPLANS if max_replans is None else int(max_replans)
+    git_info = git_commit_info()
+    pre_run_settings: Dict[str, Any] = {}
+    if real_model:
+        if simulated_planner_delay_s:
+            raise RefusedRun('a simulated planner delay is only allowed for the oracle planner')
+        pre_run_settings = _pre_run_planner_settings(remote, remote_url)
+        problems = real_model_refusals(git_info, pre_run_settings)
+        if problems:
+            raise RefusedRun('refusing to run a real-model trial: ' + '; '.join(problems))
     seed = int(trial_index if seed is None else seed)
     seed_everything(seed)
     if not variant_spec.model_eval_supported:
@@ -388,6 +453,9 @@ def run_trial(
         'replan_mode': replan_mode,
         'max_replans': int(max_replans),
         'planner_max_new_tokens': int(planner_max_new_tokens),
+        'planner_temperature': float(config.planner_temperature),
+        'simulated_planner_delay_s': float(simulated_planner_delay_s) if not real_model else 0.0,
+        'simulated_planner_delay': 'on' if (simulated_planner_delay_s and not real_model) else 'off',
         'flags': flags.to_dict(),
     }
     trial_logger = TrialLogger(trial_log_path_for(json_output_path), trial_id=trial_id)
@@ -402,6 +470,13 @@ def run_trial(
         if trial_start_logged:
             return
         trial_start_logged = True
+        planner = getattr(pipeline, 'planner', None)
+        planner_settings = dict(pre_run_settings)
+        if hasattr(planner, 'planner_settings'):
+            try:
+                planner_settings.update(planner.planner_settings() or {})
+            except Exception as exc:
+                planner_settings['error'] = str(exc)
         trial_logger.emit(
             'trial_start',
             scene=variant_spec.task_family,
@@ -409,10 +484,23 @@ def run_trial(
             condition=condition,
             seed=seed,
             flags=flags.to_dict(),
-            git_commit=git_commit_info(),
+            git_commit=dict(git_info, untracked_files=git_untracked_count()),
             trial_index=int(trial_index),
+            attempt=int(attempt),
+            real_model=bool(real_model),
+            max_replans=int(max_replans),
+            planner_settings=planner_settings,
+            simulated_planner_delay_s=condition['simulated_planner_delay_s'],
             goal=goal_text,
+            goal_check=bool(goal_check),
+            termination_mode=flags.termination_mode,
+            icl_mode=icl_mode,
+            vision=bool(vision),
+            planner_max_new_tokens=int(planner_max_new_tokens),
+            pre_action_checks=bool(config.pre_action_checks_enabled),
+            post_action_checks=bool(config.post_action_checks_enabled),
             backend=os.environ.get('SIM_BACKEND', 'coppelia'),
+            mujoco_shim_sleep=os.environ.get('MUJOCO_SHIM_SLEEP', '1'),
             remote_planner_url=remote_url or None,
             randomization=getattr(pipeline, 'randomization_record', None),
         )
@@ -626,7 +714,7 @@ def main() -> None:
     parser.add_argument('--vision', action='store_true', help='Use the maintained multimodal VLM backend')
     parser.add_argument('--icl-mode', default='zero_shot', choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode (ICL is off by default; few_shot_shared_1 needs --flag prompt.version=legacy)')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
-    parser.add_argument('--max-replans', type=int, default=3, help='Maximum replans during execution')
+    parser.add_argument('--attempt', type=int, default=1, help='Attempt number (infrastructure reruns)')
     parser.add_argument('--planner-max-new-tokens', type=int, default=4096, help='Maximum generation tokens for each planner call')
     parser.add_argument('--goal-check-max-new-tokens', type=int, default=128, help='Maximum generation tokens for each goal-check call')
     parser.add_argument('--goal', default='', help='Optional goal override')
@@ -651,12 +739,20 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=None, help='Trial seed (default: the trial index); logged in trial_log.jsonl')
     args = parser.parse_args()
 
-    record = run_trial(
+    try:
+        record = _run_from_args(args)
+    except RefusedRun as exc:
+        print(f'[TrialRunner] {exc}', file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(record, indent=2))
+
+
+def _run_from_args(args) -> Dict[str, Any]:
+    return run_trial(
         variant_id=args.variant,
         model_alias=args.model,
         icl_mode=args.icl_mode,
         trial_index=args.trial_index,
-        max_replans=args.max_replans,
         headless=args.headless,
         remote=args.remote,
         remote_url=args.remote_url,
@@ -677,8 +773,8 @@ def main() -> None:
         goal_check_max_new_tokens=args.goal_check_max_new_tokens,
         flags=PipelineFlags.from_assignments(args.flag),
         seed=args.seed,
+        attempt=args.attempt,
     )
-    print(json.dumps(record, indent=2))
 
 
 if __name__ == '__main__':

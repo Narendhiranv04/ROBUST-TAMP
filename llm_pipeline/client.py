@@ -1,4 +1,14 @@
-"""Remote client for the maintained text-only LLM planner server."""
+"""Remote client for the maintained text-only LLM planner server.
+
+A planner call is submitted as a job (``POST /plan/submit``) and polled
+(``GET /plan/jobs/<id>``). The request timeout (``LLM_REQUEST_TIMEOUT_S``, 300 s)
+covers **generation only**; waiting in the server's queue has its own, longer limit
+(``LLM_QUEUE_TIMEOUT_S``, 7200 s). Connection errors are retried
+(``LLM_CONNECT_RETRIES``); model outputs are never retried here. A server error, a
+connection that cannot be re-established or a timeout becomes a ``planner_call_failed``
+failure event: the trial ends as ``infrastructure``, is excluded from scoring and is
+rerun by the matrix runner.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +34,16 @@ from llm_pipeline.failures import FailureCode
 from llm_pipeline.region_aliases import planner_region_name
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
+
+
+class PlannerServerError(RuntimeError):
+    """The planner server could not answer (not a model output): infrastructure."""
+
+    def __init__(self, kind: str, detail: str, timing: Optional[Dict[str, Any]] = None):
+        super().__init__(f'{kind}: {detail}')
+        self.kind = kind
+        self.detail = detail
+        self.timing = timing
 
 
 class RemoteTextLLMPlanner:
@@ -64,6 +84,12 @@ class RemoteTextLLMPlanner:
             self.request_timeout_s = 300.0
         self.health_timeout_s = float(os.environ.get('LLM_HEALTH_TIMEOUT_S', '60'))
         self.health_retries = max(1, int(os.environ.get('LLM_HEALTH_RETRIES', '5')))
+        self.queue_timeout_s = float(os.environ.get('LLM_QUEUE_TIMEOUT_S', '7200'))
+        self.connect_retries = max(1, int(os.environ.get('LLM_CONNECT_RETRIES', '5')))
+        self.connect_backoff_s = float(os.environ.get('LLM_CONNECT_BACKOFF_S', '2'))
+        self.poll_interval_s = float(os.environ.get('LLM_POLL_INTERVAL_S', '0.5'))
+        self.http_timeout_s = float(os.environ.get('LLM_HTTP_TIMEOUT_S', '30'))
+        self.server_settings: Dict[str, Any] = {}
 
         self.expected_model = expected_model
         self.loaded = False
@@ -97,6 +123,7 @@ class RemoteTextLLMPlanner:
                     self.model_alias = data.get('model_alias', self.model_alias)
                     self.model_name = data.get('model_name', self.model_name)
                     if self.loaded:
+                        self.server_settings = self.fetch_settings()
                         return True
                     last_error = f"model_not_loaded health={data}"
             except Exception as exc:
@@ -115,6 +142,79 @@ class RemoteTextLLMPlanner:
             'health_retries': self.health_retries,
         }
         return False
+
+    def fetch_settings(self) -> Dict[str, Any]:
+        """The server's settings (GET /settings); {} for a server that predates them."""
+        try:
+            response = requests.get(f'{self.server_url}/settings', timeout=self.health_timeout_s)
+            if response.status_code == 200:
+                return dict(response.json() or {})
+        except Exception:
+            pass
+        return {}
+
+    def planner_settings(self) -> Dict[str, Any]:
+        settings = dict(self.server_settings or {})
+        settings.setdefault('planner', 'remote')
+        settings['server_url'] = self.server_url
+        settings['generation_timeout_s'] = self.request_timeout_s
+        settings['queue_timeout_s'] = self.queue_timeout_s
+        return settings
+
+    # -- HTTP with retries on connection errors (never on model outputs) ------------
+    def _with_retries(self, send):
+        last = None
+        for attempt in range(1, self.connect_retries + 1):
+            try:
+                return send()
+            except (requests.ConnectionError, requests.Timeout) as exc:  # the request never got an answer
+                last = exc
+                if attempt < self.connect_retries:
+                    time.sleep(self.connect_backoff_s * attempt)
+        raise PlannerServerError('connection', f'{type(last).__name__}: {last}')
+
+    def _call_server(self, request_data: Dict[str, Any]):
+        """Submit a planner call and wait for it. Returns (response data, timing)."""
+        submitted = self._with_retries(lambda: requests.post(
+            f'{self.server_url}/plan/submit', json=request_data, timeout=self.http_timeout_s))
+        if submitted.status_code == 404:
+            raise PlannerServerError('server_too_old', 'the planner server has no /plan/submit endpoint')
+        if submitted.status_code != 200:
+            raise PlannerServerError('http_status', f'{submitted.status_code} - {submitted.text[:300]}')
+        job_id = submitted.json().get('job_id')
+        started = time.monotonic()
+        while True:
+            response = self._with_retries(lambda: requests.get(
+                f'{self.server_url}/plan/jobs/{job_id}', timeout=self.http_timeout_s))
+            if response.status_code != 200:
+                raise PlannerServerError('http_status', f'{response.status_code} - {response.text[:300]}')
+            state = response.json()
+            status = state.get('status')
+            timing = {'queue_wait_s': state.get('queue_wait_s'), 'generation_time_s': state.get('generation_time_s')}
+            if status == 'done':
+                return dict(state.get('result') or {}), timing
+            if status == 'error':
+                raise PlannerServerError('server_error', str(state.get('error')), timing)
+            if status == 'running' and float(state.get('running_for_s') or 0.0) > self.request_timeout_s:
+                raise PlannerServerError('generation_timeout',
+                                         f'generation ran longer than {self.request_timeout_s:.0f} s', timing)
+            if status == 'queued' and time.monotonic() - started > self.queue_timeout_s:
+                raise PlannerServerError('queue_timeout', f'queued longer than {self.queue_timeout_s:.0f} s', timing)
+            time.sleep(self.poll_interval_s)
+
+    @staticmethod
+    def _infrastructure_result(error: 'PlannerServerError', started_at: float) -> PlanResult:
+        event = FailureEvent(
+            failure_id=FailureCode.PLANNER_CALL_FAILED,
+            stage=FailureStage.BEFORE_EXECUTION,
+            source=FailureSource.VALIDATION,
+            action=None,
+            evidence={'kind': error.kind, 'detail': error.detail},
+            failure_layer=FailureLayer.LAYER_1,
+            should_replan=False,
+            message=f'Planner call failed ({error.kind}): {error.detail}',
+        )
+        return PlanResult(False, [], '', time.time() - started_at, event.message, event, timing=error.timing)
 
     def plan(self, bundle: Any) -> PlanResult:
         """Unified interface that handles both text and multimodal bundles."""
@@ -194,21 +294,13 @@ class RemoteTextLLMPlanner:
         }
 
         try:
-            response = requests.post(
-                f'{self.server_url}/plan',
-                json=request_data,
-                timeout=self.request_timeout_s,
-            )
-            if response.status_code != 200:
-                return PlanResult(
-                    success=False,
-                    actions=[],
-                    raw_output='',
-                    inference_time=time.time() - started_at,
-                    error_message=f'Server error: {response.status_code} - {response.text}',
-                )
-
-            data = response.json()
+            data, timing = self._call_server(request_data)
+        except PlannerServerError as exc:
+            return self._infrastructure_result(exc, started_at)
+        except Exception as exc:  # anything else on the way to the server is infrastructure too
+            return self._infrastructure_result(PlannerServerError('client_error', f'{type(exc).__name__}: {exc}'),
+                                               started_at)
+        try:
             raw_output = data.get('raw_output', '')
             failure_event = self._decode_failure_event(data.get('failure_event'))
             actions = []
@@ -217,7 +309,8 @@ class RemoteTextLLMPlanner:
                 # Corrective blocks (Phase 5) are parsed and merged by the pipeline.
                 return PlanResult(success=bool(raw_output.strip()), actions=[], raw_output=raw_output,
                                   inference_time=float(data.get('inference_time', time.time() - started_at)),
-                                  error_message=None if raw_output.strip() else 'empty planner output')
+                                  error_message=None if raw_output.strip() else 'empty planner output',
+                                  timing=timing)
             if prompt_version == 'v2' and raw_output.strip():
                 # v2: the client's parse of the raw output is authoritative (only the text
                 # after FINAL ACTIONS: is parsed); the server's own parse is ignored.
@@ -234,6 +327,7 @@ class RemoteTextLLMPlanner:
                     inference_time=float(data.get('inference_time', time.time() - started_at)),
                     error_message=None if parse_ok else failure_event.message,
                     failure_event=failure_event,
+                    timing=timing,
                 )
 
             action_lines = [self._action_line(item) for item in data.get('actions', [])]
@@ -281,15 +375,11 @@ class RemoteTextLLMPlanner:
                 inference_time=float(data.get('inference_time', time.time() - started_at)),
                 error_message=data.get('error_message'),
                 failure_event=failure_event,
+                timing=timing,
             )
-        except Exception as exc:
-            return PlanResult(
-                success=False,
-                actions=[],
-                raw_output='',
-                inference_time=time.time() - started_at,
-                error_message=str(exc),
-            )
+        except Exception as exc:  # a malformed server response
+            return self._infrastructure_result(PlannerServerError('bad_response', f'{type(exc).__name__}: {exc}'),
+                                               started_at)
 
     @staticmethod
     def _plan_check_failure(exc: StrictParseError, raw_output: str) -> FailureEvent:
