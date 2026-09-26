@@ -42,8 +42,11 @@ fi
 
 LOG="$LOG_DIR/vllm_$(date +%Y%m%d_%H%M%S).log"
 ln -sfn "$LOG" "$LOG_DIR/vllm_latest.log"
-CMD=("$VENV/bin/vllm" serve "$MODEL_REPO"
-     --revision "$MODEL_REVISION"
+# Serve the pinned snapshot directory itself: vLLM then reports it as the model "root" in
+# GET /v1/models, which is how the planner client verifies the revision on every call.
+SNAPSHOT="$HF_HOME/hub/models--${MODEL_REPO//\//--}/snapshots/$MODEL_REVISION"
+[ -f "$SNAPSHOT/config.json" ] || { echo "pinned snapshot missing: $SNAPSHOT" >&2; exit 1; }
+CMD=("$VENV/bin/vllm" serve "$SNAPSHOT"
      --served-model-name "$SERVED_NAME"
      --host "$HOST" --port "$PORT"
      --tensor-parallel-size "$TP_SIZE"
