@@ -5,7 +5,8 @@
 
 Writes, for the variant's initial state (MuJoCo backend):
 - isometric.png: isometric view from behind the robot;
-- isometric_labeled.png: the same view with object masks, region boxes and callout labels;
+- isometric_labeled.png: the same view with object masks, region boxes and callout labels
+  (rendered at 4x with 8x multisampling, overlays drawn at 4x, saved at 2x: 3200 px wide);
 - cameras_rgb.png: the 5 camera images (left, right, overhead, wrist, front);
 - semantic_<camera>.png / semantic_<camera>_legend.png: each camera's semantic map alone,
   and with a legend for what appears in it;
@@ -48,6 +49,9 @@ MUTED = (120, 120, 120)
 
 FONT_FILE = Path(__file__).resolve().parent / 'fonts' / 'OpenSans.ttf'   # Open Sans (OFL, fonts/OFL.txt)
 SCALE = 2          # overlays are drawn on the camera image upscaled by this factor (crisper, larger text)
+ISO_SIZE = (1600, 1150)   # isometric figure size at 1x
+ISO_RENDER = 4            # render and draw the isometric figure at this factor ...
+ISO_OUTPUT = 2            # ... and save it at this one (LANCZOS downsampling anti-aliases lines and text)
 TABLE_REGION = 'table'
 
 
@@ -83,16 +87,20 @@ def load_env(variant):
     return env
 
 
-def isometric(env, out: Path, size=(1600, 1150), focus=None):
+def isometric(env, out: Path, size=ISO_SIZE, focus=None, render_scale=ISO_RENDER, output_scale=ISO_OUTPUT):
     """Isometric view from behind and to the side of the robot, looking over its base.
 
     focus: world points (task objects, region corners) the view is framed on: the camera
-    looks at their centre from a distance at which they fill the frame."""
+    looks at their centre from a distance at which they fill the frame. The view is
+    rendered at ``render_scale`` x ``size`` with 8x multisampling; isometric.png is saved at
+    ``output_scale`` x ``size``. Returns the full-resolution image, handles and projector."""
     import mujoco
     from PIL import Image
     world = env.pr._world
+    size = (int(size[0] * render_scale), int(size[1] * render_scale))
     world.m.vis.global_.offwidth = max(int(world.m.vis.global_.offwidth), size[0])
     world.m.vis.global_.offheight = max(int(world.m.vis.global_.offheight), size[1])
+    world.m.vis.quality.offsamples = max(int(world.m.vis.quality.offsamples), 8)
     renderer = mujoco.Renderer(world.m, size[1], size[0])
     opt = mujoco.MjvOption()
     opt.geomgroup[:] = 0
@@ -114,7 +122,8 @@ def isometric(env, out: Path, size=(1600, 1150), focus=None):
     world.m.vis.global_.fovy = 34.0
     renderer.update_scene(world.d, cam, scene_option=opt)
     rgb = renderer.render()
-    Image.fromarray(rgb).save(out / 'isometric.png')
+    final = (size[0] * output_scale // render_scale, size[1] * output_scale // render_scale)
+    Image.fromarray(rgb).resize(final, Image.LANCZOS).save(out / 'isometric.png')
     project_fn = free_camera_projector(renderer, world.m, size)
     renderer.enable_segmentation_rendering()
     renderer.update_scene(world.d, cam, scene_option=opt)
@@ -288,17 +297,65 @@ def _draw_label(draw, rect, item, top, font):
     draw.text((rect[0] + 16, rect[1] + 10 - top), item['text'], fill=ink, font=font)
 
 
-def draw_callouts_gutter(image, items, font, margin=28, gap=14):
+def _pill_metrics(font, scale):
+    """Pill height and text offsets from the font's cap and x heights, identical for every
+    label (so labels with and without descenders sit the same way)."""
+    cap = font.getbbox('H')
+    xh = font.getbbox('x')
+    cap_h, x_h = cap[3] - cap[1], xh[3] - xh[1]
+    height = int(round(cap_h * 2.3))
+    # The optical centre of mixed lowercase text lies between its x-height and cap-height centres.
+    baseline_offset = (cap_h + x_h) / 4.0
+    pad_x = int(round(cap_h * 0.95))
+    return height, baseline_offset, pad_x
+
+
+def _draw_pills(image, layout, font, scale):
+    """Clean pill labels: one blurred shadow layer, then solid pills (objects: filled, white
+    text; regions: white with a coloured border and coloured text), text optically centred."""
+    from PIL import Image, ImageDraw, ImageFilter
+    height, baseline_offset, pad_x = _pill_metrics(font, scale)
+    shadow = Image.new('RGBA', image.size, (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow)
+    for _, rect, _, _ in layout:
+        r = (rect[3] - rect[1]) / 2
+        sdraw.rounded_rectangle((rect[0], rect[1] + 3 * scale, rect[2], rect[3] + 3 * scale), radius=r,
+                                fill=(20, 24, 30, 70))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(4 * scale))
+    image.alpha_composite(shadow)
+    draw = ImageDraw.Draw(image, 'RGBA')
+    border = max(1, int(round(1.6 * scale)))
+    for item, rect, _, _ in layout:
+        color = tuple(item['color'])
+        r = (rect[3] - rect[1]) / 2
+        if item['kind'] == 'object':
+            draw.rounded_rectangle(rect, radius=r, fill=color + (255,))
+            ink = (255, 255, 255)
+        else:
+            draw.rounded_rectangle(rect, radius=r, fill=(255, 255, 255, 250), outline=color + (255,), width=border)
+            ink = tuple(int(0.82 * c) for c in color)
+        cy = (rect[1] + rect[3]) / 2.0
+        draw.text((rect[0] + pad_x, cy + baseline_offset), item['text'], fill=ink, font=font, anchor='ls')
+
+
+def draw_callouts_gutter(image, items, font, margin=28, gap=14, scale=1, clean=False):
     """Figure-style callouts: labels stacked in a left and a right column (split at the
     median anchor x, ordered by anchor height, never overlapping), each joined to its
-    anchor by a leader line. Leaders are drawn first, labels on top."""
+    anchor by a leader line. Leaders are drawn first, labels on top. ``clean``: pill labels
+    with optically centred text and thin haloed leaders (the isometric figure)."""
     from PIL import ImageDraw
     draw = ImageDraw.Draw(image, 'RGBA')
     width, height = image.size
+    margin, gap = margin * scale, gap * scale
     measured = []
+    if clean:
+        pill_h, _, pad_x = _pill_metrics(font, scale)
     for item in items:
         left, top, right, bottom = draw.textbbox((0, 0), item['text'], font=font)
-        measured.append((item, right - left + 32, bottom - top + 20, top))
+        if clean:
+            measured.append((item, right - left + 2 * pad_x, pill_h, top))
+        else:
+            measured.append((item, right - left + 32, bottom - top + 20, top))
     split = float(np.median([m[0]['anchor'][0] for m in measured])) if measured else width / 2
     layout = []
     for side in ('left', 'right'):
@@ -317,6 +374,17 @@ def draw_callouts_gutter(image, items, font, margin=28, gap=14):
             rect = (x, y, x + w, y + h)
             edge = (rect[2], y + h / 2) if side == 'left' else (rect[0], y + h / 2)
             layout.append((item, rect, edge, top))
+    if clean:
+        for item, rect, edge, _ in layout:
+            ax, ay = item['anchor']
+            color = tuple(item['color'])
+            draw.line([(ax, ay), edge], fill=(255, 255, 255, 200), width=int(round(5.5 * scale)))
+            draw.line([(ax, ay), edge], fill=color + (255,), width=int(round(2.2 * scale)))
+            ring, dot = 7.5 * scale, 4.8 * scale
+            draw.ellipse([ax - ring, ay - ring, ax + ring, ay + ring], fill=(255, 255, 255, 255))
+            draw.ellipse([ax - dot, ay - dot, ax + dot, ay + dot], fill=color + (255,))
+        _draw_pills(image, layout, font, scale)
+        return
     for item, rect, edge, _ in layout:
         ax, ay = item['anchor']
         color = tuple(item['color'])
@@ -329,7 +397,7 @@ def draw_callouts_gutter(image, items, font, margin=28, gap=14):
 
 
 def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxes, region_colors, table_handles,
-             region_name, font, line=4, layout='radial'):
+             region_name, font, line=4, layout='radial', scale=1, clean=False):
     """Object masks (fill, contour, box), region boxes (top face, wireframe; the table as its
     segmentation pixels) and callout labels on an RGB image. mask: per-pixel object handle.
     Returns (image, shown_regions, pixel counts per object)."""
@@ -352,7 +420,7 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
                 continue
             layer = np.zeros(tmask.shape + (4,), dtype=np.uint8)
             layer[tmask] = color + (50,)
-            edge = ndimage.binary_dilation(outline(tmask), iterations=2) & tmask
+            edge = ndimage.binary_dilation(outline(tmask), iterations=2 * scale) & tmask
             layer[edge] = color + (230,)
             overlay = Image.alpha_composite(Image.fromarray(layer, 'RGBA'), overlay)
             table_mask = tmask       # its label anchor is chosen once everything else is drawn
@@ -383,10 +451,11 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
         color = object_colors[obj]
         fill = np.zeros(hit.shape + (4,), dtype=np.uint8)
         fill[hit] = color + (115,)
-        fill[ndimage.binary_dilation(outline(hit), iterations=1) & hit] = color + (255,)
+        fill[ndimage.binary_dilation(outline(hit), iterations=scale) & hit] = color + (255,)
         overlay = Image.alpha_composite(overlay, Image.fromarray(fill, 'RGBA'))
-        box = main_blob_box(hit)
-        ImageDraw.Draw(overlay).rounded_rectangle(box, radius=6, outline=color + (255,), width=max(2, line - 1))
+        box = main_blob_box(hit, margin=3 * scale)
+        ImageDraw.Draw(overlay).rounded_rectangle(box, radius=6 * scale, outline=color + (255,),
+                                                  width=max(2, line - scale))
         boxes.append(box)
         object_items.append({'anchor': _interior_point(hit), 'text': obj, 'color': color, 'kind': 'object'})
         pixels[obj] = int(hit.sum())
@@ -394,7 +463,8 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
         if item.get('table'):
             # the most open point of the tabletop: far from every object and region overlay
             occupied = np.array(overlay)[:, :, 3] > 80
-            free = ndimage.binary_erosion(table_mask, iterations=3) & ~ndimage.binary_dilation(occupied, iterations=25)
+            free = (ndimage.binary_erosion(table_mask, iterations=3 * scale)
+                    & ~ndimage.binary_dilation(occupied, iterations=25 * scale))
             if free.any():
                 depth = ndimage.distance_transform_edt(free)
                 y, x = np.unravel_index(int(np.argmax(depth)), depth.shape)
@@ -404,7 +474,7 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
     image = Image.alpha_composite(base, overlay)
     items = [it for it in object_items + region_items if it['anchor'] is not None]
     if layout == 'gutter':
-        draw_callouts_gutter(image, items, font)
+        draw_callouts_gutter(image, items, font, scale=scale, clean=clean)
     else:
         draw_callouts(image, items, font)
     return image.convert('RGB'), shown, pixels
@@ -432,6 +502,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('variant')
     parser.add_argument('--out', default='')
+    parser.add_argument('--only-isometric', action='store_true',
+                        help='Write isometric.png and isometric_labeled.png only (leave the camera maps as they are)')
     args = parser.parse_args()
     out = Path(args.out or ROOT / 'results' / 'visuals' / args.variant).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -518,10 +590,15 @@ def main():
     for label in sorted({handle_to_label[h] for h in np.unique(iso_handles).tolist() if h in handle_to_label}):
         if label not in iso_colors and label in detector.task_objects:
             iso_colors[label] = OBJECT_PALETTE[len(iso_colors) % len(OBJECT_PALETTE)]
+    k = ISO_RENDER
     iso_image, _, _ = annotate(Image.fromarray(iso_rgb), iso_handles, iso_project, handle_to_label, iso_colors,
-                               region_boxes, region_colors, table_handles, planner_region_name, _font(36, weight='SemiBold'),
-                               layout='gutter')
-    iso_image.save(out / 'isometric_labeled.png')
+                               region_boxes, region_colors, table_handles, planner_region_name,
+                               _font(32 * k, weight='SemiBold'), line=3 * k, layout='gutter', scale=k, clean=True)
+    final = (ISO_SIZE[0] * ISO_OUTPUT, ISO_SIZE[1] * ISO_OUTPUT)
+    iso_image.resize(final, Image.LANCZOS).save(out / 'isometric_labeled.png', optimize=True)
+    if args.only_isometric:
+        print(f'wrote {out / "isometric_labeled.png"}', flush=True)
+        os._exit(0)
 
     sensors = camera_sensors(env)
     rgb_tiles, sem_tiles, pixels = [], [], {}
