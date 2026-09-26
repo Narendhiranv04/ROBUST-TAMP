@@ -2,6 +2,83 @@
 
 One entry per phase of `plan.md`: what changed, which flags, which tests.
 
+## Phase 7: diagnostics (branch `phase-7-diagnostics`)
+
+### Changed
+- `diagnostics/report.py`: the 8 failure areas of plan.md 7.1 from the trial logs. It writes `diagnostics_primary.csv` (first unrecovered error; sums to 100% with successes), `diagnostics_occurrences.csv`, `diagnostics_trials.csv`, `summary.md` and `primary_causes.png`, per condition and per variant, plus trigger accuracy and first-proposal urgency accuracy. Infrastructure trials are excluded and counted.
+- `docs/DIAGNOSTICS.md`: definitions, counting rules, log excerpts.
+
+### Tests
+`diagnostics/tests/test_report.py` (11): one hand-made log per area, a multi-error trial for the first-unrecovered-error rule, success/infrastructure/trigger accuracy, and the report files.
+
+### Runs
+- `results/diagnostics/`: 324 oracle trials (Phases 3–6 and the old-variant regression); every failed trial has exactly one primary area (none unassigned). Failures appear only in the insertion-mode ablations (area 4). Recovered motion/grasp errors (area 6 occurrences) in 11 kitchen trials: 7 `grasp_failed`, 4 `pddl_no_plan` on a pick, each fixed by a retry after the replan. Trigger accuracy: 100% in `if_rule` mode, 92.9% in `discovery` (the 10 K2 trials, where discovery replans on the ignored phone).
+- `evaluation/phase8_budget.py`: Phase 8 compute estimate from the smoke-test timings (or assumed ones) and a trimmed matrix for a time budget.
+
+## Phase 6: WHEN, parallel planning and execution (branch `phase-6-when`)
+
+### Changed (behind `parallel.enabled`, default `false`; needs `replan.output_mode=corrective`)
+- `plan_once` split into `_prepare_planning` (main thread), `_call_planner` (thread-safe) and `_finish_planning` (main thread); behavior unchanged with the flag off.
+- `llm_pipeline/parallel.py`: affected set (trigger objects and their regions, their goal regions, parking regions per scene, lids of affected regions) and independent bundles (no affected object or region, no shared object or region with an earlier dependent bundle).
+- `pipeline._plan_in_parallel`: independent actions are listed as completed in the prompt; the planner call runs in a background thread; independent bundles execute one at a time until it returns; the merge uses the updated remaining plan (`anchor_already_executed` → front); a merged plan invalidated by what ran meanwhile is `merge_conflict` → re-query; a failed independent bundle is handled first (full replan). New triggers during the wait are evaluated after the merge.
+- `parallel` trial-log event: affected set, independent actions available/executed, planner latency, robot busy and idle time, merge result.
+- Oracle: `--planner-delay` (simulated planner latency).
+- Parking regions (Section 10, Q10) are a default until you decide: kitchen `table`, `table_staging_area`; grill `table`, `prep_area`.
+
+### Tests
+`test_parallel.py` (7): affected set and independent bundles for the kitchen phone and the grill; independent actions run during a delayed planner call and affected ones do not; urgent block runs right after the wait; executed anchor → front, logged; injected conflict → `merge_conflict` → re-query; trigger never evaluated while holding; flag-off equals Phase 5.
+
+### Runs (`results/phase6/`, report `results/phase6/report.md`)
+- Oracle planner with a simulated 20 s planner latency, 14 variants × seeds 0–1, parallel on and off: 56/56 successful, no merge conflicts.
+- Robot idle time per replan, off → on: K1 / K1-w1 / K1-w2 20 → 0 s; grill variants 20 → about 12 s (the plate move runs during the wait); K3, K4, K3-n2/n3 stay at 20 s (the trigger can's goal is the cupboard, so the grocery moves wait).
+- C2 sweep: independent bundles available 2 / 3 / 4 (w = 0 / 1 / 2), but 2 are executed in each: two bundles (10–12 s each) cover a 20 s wait. The trend in w needs the real planner latency. Trial times vary by about ±15 s between seeds, so trial-time savings from 2 seeds are noisy.
+- Parking regions (Q10, decided): only the dedicated areas (`table_staging_area`, `prep_area`); with the whole table as a parking region, every pick from the table would wait during a replan.
+
+## Phase 5: WHERE, corrective sub-plans, urgency, insertion (branch `phase-5-where`)
+
+### Changed (behind `replan.output_mode`, default `full_replan`, and `replan.insertion_mode`, default `planner`)
+- `llm_pipeline/corrective.py`: block format (`FINAL BLOCKS:`), strict parser (listed trigger objects only, urgency, insertion point, urgent ⇒ front, known anchor ids, actions only on the block's objects), insertion modes (`always_front`, `always_end` override the model), merge (urgent blocks at the front in order; deferred after their anchor or at the end; remaining actions keep their ids), placement-conflict check (`insertion_too_late`).
+- Prompt v2: corrective system prompt and a "What to plan" section (docs/PROMPTS.md §6, for review). The remote client passes block output through unparsed.
+- Pipeline: a replan answering an `if_rule_trigger` is corrective; rejections re-query with the reason (plan-check re-query: same step, counts toward the budget). `insertion` trial-log event per proposal. Execution-failure replans stay full replans.
+- New codes: `invalid_corrective_block`; `insertion_too_late`, `anchor_already_executed`, `merge_conflict` are now emitted.
+- Oracle: blocks from the ground truth with the variant spec's urgency (an urgent meat is parked on the table and plated after the plate reaches the serving area).
+
+- Prompt (decided): the urgency sentence is neutral; the plan.md 5.2 examples are behind `prompt.corrective_hints=on` (default `off`).
+
+### Tests
+`test_corrective.py` (16) and `test_if_where_pipeline.py` (7): valid and malformed block lists; merge front / after-id / end with several blocks; K1/K3 deferral past the next box placement → `insertion_too_late`; G1 deferral past `close(grill_lid)` not blocked by the system but overcooked by the evaluator; `always_front` / `always_end` overrides; re-query after rejection with `first_proposal` logged; neutral prompt by default, hints behind the flag. Golden snapshots of the corrective prompt.
+
+### Runs (`results/phase5/`, report `results/phase5/report.md`)
+- `insertion_mode=planner`: 14 variants × seeds 0–1, 28/28 successful; first-proposal urgency accuracy 100% (the oracle takes the spec's urgency, so this checks the mechanics, not a model).
+- Ablations on K1, K3, K4, G1, G2, G3 (seed 0): see the report. `always_end` fails K1/K3 (`insertion_too_late` until the budget) and G1/G2 (HC-grill, overcooked); `always_front` fails G2/G3 (raw meat plated before cooking). The rest succeed.
+
+## Phase 4: IF, the replan trigger rule (branch `phase-4-if`)
+
+### Changed (behind `replan.trigger_mode`, default `discovery`)
+- `llm_pipeline/if_rule.py`: the rule of plan.md 4.1 (relevant from the scene's goal categories, Q8 default; goal-attained with the evaluator's procedure logic on agent-only inputs; overlapping from system geometry; accounted for = in the remaining plan or a pending replan).
+- Executor hook `set_trigger_check`: called after every bundle that leaves the gripper empty (a trigger mid-bundle waits for the bundle to finish).
+- Pipeline: `_if_rule_check` logs `if_check` (per-object decision) after every bundle, and returns one `if_rule_trigger` for all trigger objects of the observation. The discovery trigger is switched off in this mode. The v2 replan prompt lists each trigger object with its labels.
+
+- A meat on the plate counts as goal-attained once cooked: overcooking and plating before cooking cannot be undone and are left to the evaluator, instead of triggering replans until the budget runs out.
+
+### Tests
+`test_if_rule.py` (14): every row of the rule table in both scenes, overlap only for regions the remaining plan places into, meat procedure for goal-attained (overcooked meat on the plate does not trigger again), objects the robot placed itself are accounted for, all trigger objects of one observation together, pending/held objects, lids. Pipeline tests in `test_if_where_pipeline.py`.
+
+### Runs (`results/phase4/`, report `results/phase4/report.md`)
+- `trigger_mode=if_rule`, 14 variants × seeds 0–1: 28/28 successful. The rule triggers exactly once, with the specified objects, on K1, K3, K4, G1, G2, G3 and the C1/C2 variants (all n objects in one trigger); never on K0, G0, K2. Trigger accuracy 100%.
+- `discovery` (the Phase 3 ceiling, seeds 0–1): trigger accuracy 100% except K2 (0%), where discovery replans on the non-overlapping phone.
+
+## Phase 3: final variant set (branch `phase-3-variants`)
+
+### Changed
+- 14 final variants (`FINAL.<name>`; G1-n3 dropped, Q12), composed scenes, runtime setup, labeled evaluator on simulator ground truth, executor fixes found by the oracle, automated build checks, renderer restyle. Details: commit 5496d4a4, docs/VARIANTS.md, docs/ARCHITECTURE.md "Phase 3 changes".
+
+### Tests
+`test_labeled_rules.py` (15): Q2/Q3 rules, HC-box, HC-grill. `evaluation/check_final_variants.py` on all 14 scenes. `mujoco_port/tests/test_sleep.py` (2): resting-object hold.
+
+### Runs
+- Build checks 14/14; oracle ceiling 140/140 on the final variants (`results/phase3/`); old K1–K3, G1–G3 regression 60/60 (`results/executor_ceiling_regression/`).
+
 ## Phase 2: observation memory (branch `phase-2-memory`)
 
 ### Changed (all behind `memory.enabled`, default `false`)

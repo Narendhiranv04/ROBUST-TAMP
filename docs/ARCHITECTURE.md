@@ -435,6 +435,43 @@ frameworks). Every condition in it has a matching code above.
 
 `memory.enabled=true`: `LLMOnlyReplanningPipeline.memory` (`llm_pipeline/memory.py`) is updated in `_emit_observation`, i.e. at every observation (planning events except plan-check re-queries, and after every bundle). It feeds the v2 prompt (`PromptV2Builder.set_memory_view`), the plan check (`StrictActionParser.set_access_context`: remembered object → last region, closed regions, lid → regions) and the pick pre-check (`failure_checker.remembered_pick_allowed`). Memory is also the input to the Phase 4 IF rule.
 
+## Simulator deviations (MuJoCo port)
+
+Where the MuJoCo backend (`mujoco_port/shim`) behaves differently from plain MuJoCo, on purpose, to match CoppeliaSim:
+
+| Deviation | What | Why | Where / switch |
+|---|---|---|---|
+| Resting-object hold | A free body that stays below 4 mm/s and 0.05 rad/s for 20 substeps (0.1 s) is held at its pose. It wakes on contact with any body that moved in that substep (robot links, a carried object, a lid, a follower), on moving faster than 1 cm/s or 0.1 rad/s, or when its pose is changed from outside (set_pose, grasp followers). | MuJoCo's soft contacts let multi-hull meshes (the mugs) creep across flat supports: up to about 30 cm over one trial of arm motion. This occasionally pushed a staged mug out of reach. CoppeliaSim's engines put resting bodies to sleep, so the original scenes never showed this. | `_World._sleep_resting`, `MUJOCO_SHIM_SLEEP=0` disables it; tests `mujoco_port/tests/test_sleep.py`. About 30% more time per physics step. |
+
+**For the paper:** "As in CoppeliaSim's physics engines, resting objects are put to sleep: a free body that stays nearly still for 0.1 s is held in place until it is touched by a moving body or moved faster than 1 cm/s, which removes MuJoCo's contact-induced creep of multi-part meshes without affecting contact-driven motion."
+
+## Phase 3 changes (final variants)
+
+| Area | What changed | Where |
+|---|---|---|
+| Registry | 14 final variants `FINAL.<name>` (G1-n3 dropped, Q12). `get_variant_spec('FINAL.K1')` builds a `VariantSpec` from the registry; only explicit `FINAL.` ids select them | `evaluation/final_variants.py`, `evaluation/canonical_variants.py` |
+| Scenes | Composed from the extracted scenes (remove / move / copy with new handles; copied props can be made rigid) and built with `build_mjcf` | `mujoco_port/tools/compose_variant.py`, `mujoco_port/scenes/final_*` |
+| Runtime setup | `configure_env` right after the env exists: labels (`chicken` → `raw_meat_1`), object registration (`name_to_obj`, `extra_task_objects` for the detector), placement areas and the grill placement pose, plate slot count | `llm_pipeline/final_variant_setup.py`, `pipeline.initialize` |
+| Evaluator | Final variants use the labeled rules on simulator ground truth (regions of every variant object at the start and end, placement-area contents): goal relations, procedures, HC-box, HC-grill, phone outside every placement area | `evaluation/labeled_rules.py`, `trial_runner._validate_trial` |
+| Executor | Box placements only in the placement area; grill placements at the placement pose; grasp across the short side of elongated objects; `table` samples on the real tabletop within reach, away from other regions; the staging fallback no longer targets the box | `rlbench_kitchen_env.py`, grill GT module, `ground_truth_orchestrator.py` |
+| Checks | Load, hidden objects unseen at the start and in their region, overlap vs spec, added/moved objects settle | `evaluation/check_final_variants.py` |
+
+## Phase 4 changes (IF)
+
+`replan.trigger_mode=if_rule`: after every bundle that leaves the gripper empty, the executor calls `pipeline._if_rule_check(remaining_plan)` (`DirectPrimitiveExecutor.set_trigger_check`). It applies the rule of plan.md 4.1 (`llm_pipeline/if_rule.py`) to every observed object (visible, plus remembered when memory is on) with the agent's own regions (never hidden state), the action history (procedure logic shared with the evaluator) and system geometry for overlap (`final_variant_setup.footprint_overlaps` against `env.placement_areas`). Every evaluation is logged as `if_check`; all trigger objects of one observation become one `if_rule_trigger` event and one replan. The discovery trigger in the failure checker is switched off in this mode. The replan prompt states, per trigger object, relevant or not, goal state or not, and whether it lies where the remaining plan places objects.
+
+## Phase 5 changes (WHERE)
+
+`replan.output_mode=corrective`: a replan answering an `if_rule_trigger` asks for blocks (`FINAL BLOCKS:`; system prompt and a "What to plan" section, docs/PROMPTS.md §6). The pipeline parses them (`llm_pipeline/corrective.py`), applies `replan.insertion_mode` (`planner` / `always_front` / `always_end`), merges them into the remaining plan (the remaining actions keep their ids), and runs the plan check on the merged plan plus the placement-conflict check (`insertion_too_late`). A rejected proposal re-queries with the reason (same planning event, counts toward the budget). Every proposal is logged as `insertion` (proposed urgency and insertion per object, merged plan, `first_proposal`, `accepted`). Replans after execution failures stay full replans.
+
+## Phase 6 changes (WHEN)
+
+`parallel.enabled=true` (with `corrective`): `plan_once` is split into prepare (main thread: observation, prompt), call (thread-safe) and finish (main thread: merge, logs). After an IF trigger, `_plan_in_parallel` computes the affected set (trigger objects and their regions, their goal regions, the parking regions, lids of affected regions; `llm_pipeline/parallel.py`) and the independent bundles, lists those as completed in the prompt, runs the planner call in a background thread and executes the independent bundles one at a time until it returns. The merge then runs on the updated remaining plan (an executed anchor moves the block to the front: `anchor_already_executed`); a merged plan invalidated by what ran meanwhile is a `merge_conflict` and is re-queried. Logged as `parallel` (affected set, independent actions available/executed, planner latency, robot busy and idle time, merge result).
+
+## Phase 7 changes (diagnostics)
+
+`python -m diagnostics.report <dirs> --out <dir>`: 8 failure areas with primary cause and occurrences per condition and variant, trigger accuracy and first-proposal urgency accuracy (docs/DIAGNOSTICS.md).
+
 ## External baselines
 
 Source: `https://github.com/Narendhiranv04/GRAB-TAMP`, branch `baseline_executions`, commit `f2976cc`. It is cloned read-only into `external/GRAB-TAMP`, which is git-ignored. Nothing was run or modified.

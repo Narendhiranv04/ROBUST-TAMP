@@ -10,8 +10,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'mujoco_port' / 'shim'))
 mujoco = pytest.importorskip('mujoco')
-
-from pyrep.backend import _world  # noqa: E402
+try:
+    from pyrep.backend import _world  # noqa: E402
+except ImportError:  # another pyrep (CoppeliaSim) was imported first, e.g. by the pipeline tests
+    pytest.skip('run `python -m pytest mujoco_port/tests` on its own', allow_module_level=True)
 
 SCENE = ROOT / 'mujoco_port' / 'scenes' / 'final_K0'
 
