@@ -24,15 +24,16 @@ class FlagSpec:
 
 FLAG_SPECS: Tuple[FlagSpec, ...] = (
     FlagSpec('memory.enabled', 'memory_enabled', ('true', 'false'), 'false', ('true', 'false'), 2),
-    FlagSpec('replan.trigger_mode', 'replan_trigger_mode', ('discovery', 'if_rule'), 'discovery', ('discovery',), 4),
-    FlagSpec('replan.output_mode', 'replan_output_mode', ('full_replan', 'corrective'), 'full_replan', ('full_replan',), 5),
+    FlagSpec('replan.trigger_mode', 'replan_trigger_mode', ('discovery', 'if_rule'), 'discovery', ('discovery', 'if_rule'), 4),
+    FlagSpec('replan.output_mode', 'replan_output_mode', ('full_replan', 'corrective'), 'full_replan', ('full_replan', 'corrective'), 5),
     FlagSpec(
         'replan.insertion_mode', 'replan_insertion_mode',
-        ('planner', 'always_front', 'always_end'), 'planner', ('planner',), 5,
+        ('planner', 'always_front', 'always_end'), 'planner', ('planner', 'always_front', 'always_end'), 5,
     ),
-    FlagSpec('parallel.enabled', 'parallel_enabled', ('true', 'false'), 'false', ('false',), 6),
+    FlagSpec('parallel.enabled', 'parallel_enabled', ('true', 'false'), 'false', ('true', 'false'), 6),
     FlagSpec('termination.mode', 'termination_mode', ('evaluator', 'agent'), 'agent', ('evaluator', 'agent'), 1),
     FlagSpec('prompt.version', 'prompt_version', ('legacy', 'v2'), 'v2', ('legacy', 'v2'), 1),
+    FlagSpec('prompt.corrective_hints', 'prompt_corrective_hints', ('off', 'on'), 'off', ('off', 'on'), 5),
     FlagSpec(
         'grasp.confirmation', 'grasp_confirmation', ('gripper_state', 'segmentation'), 'gripper_state',
         ('gripper_state', 'segmentation'), 1,
@@ -51,6 +52,7 @@ class PipelineFlags:
     parallel_enabled: str = 'false'
     termination_mode: str = 'agent'
     prompt_version: str = 'v2'
+    prompt_corrective_hints: str = 'off'
     grasp_confirmation: str = 'gripper_state'
     scene_randomization: str = 'pose_jitter'
 

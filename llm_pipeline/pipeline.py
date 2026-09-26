@@ -24,7 +24,7 @@ from llm_pipeline.prompt_builder import TextOnlyContextBuilder
 from llm_pipeline.quantization import normalize_quantization
 from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
 from llm_pipeline.strict_parser import StrictActionParser, split_reasoning
-from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_region
+from llm_pipeline.region_aliases import normalize_region_name, planner_region_name, scene_object_for_region
 from llm_pipeline.region_geometry import resolve_object_regions
 from llm_pipeline.grill_geometry import (
     derive_grill_semantic_facts,
@@ -272,6 +272,12 @@ class LLMOnlyReplanningPipeline:
             self.executor.set_event_sink(self._log_executor_event)
         if hasattr(self.executor, 'set_bundle_end_callback'):
             self.executor.set_bundle_end_callback(self._on_bundle_end)
+        if_rule = self.config.flags.replan_trigger_mode == 'if_rule'
+        if hasattr(self.executor, 'set_trigger_check'):
+            self.executor.set_trigger_check(self._if_rule_check if if_rule else None)
+        if if_rule and hasattr(self.failure_checker, 'replan_on_new_visibility'):
+            # The IF rule replaces discovery-triggered replanning.
+            self.failure_checker.replan_on_new_visibility = False
         if hasattr(self.failure_checker, 'grasp_confirmation'):
             self.failure_checker.grasp_confirmation = self.config.flags.grasp_confirmation
         if hasattr(self.failure_checker, 'remembered_pick_allowed'):
@@ -366,6 +372,13 @@ class LLMOnlyReplanningPipeline:
         self._current_plan_with_ids: List[IdentifiedAction] = []
         self.memory = ObservationMemory()
         self._last_articulation: Dict[str, bool] = {}
+        # IF rule (Phase 4): the agent's own view of object regions.
+        self._first_seen_regions: Dict[str, Optional[str]] = {}
+        self._last_object_regions: Dict[str, Optional[str]] = {}
+        # WHERE (Phase 5): the IF trigger a corrective replan answers, and its proposal count.
+        self._active_trigger: Optional[FailureEvent] = None
+        self._corrective_attempts = 0
+        self._next_plan_ids: Optional[List[str]] = None
 
     def _log_event(self, event: str, **fields) -> None:
         try:
@@ -435,6 +448,10 @@ class LLMOnlyReplanningPipeline:
         newly_visible = [name for name in visible if name not in self._observation_seen]
         self._observation_seen.update(visible)
         self._last_articulation = dict(articulation_states or {})
+        for name in visible:
+            region = (object_region_map or {}).get(name)
+            self._first_seen_regions.setdefault(name, region)
+            self._last_object_regions[name] = region
         if self.memory_enabled:
             self._update_memory(visible, dict(object_region_map or {}), articulation_states, visible_regions)
         self._log_event(
@@ -444,7 +461,22 @@ class LLMOnlyReplanningPipeline:
             object_regions={name: object_region_map.get(name) for name in visible},
             articulation_states={name: ('open' if is_open else 'closed') for name, is_open in articulation_states.items()},
             newly_visible_objects=newly_visible,
+            **self._gt_positions_field(),
         )
+
+    def _gt_positions_field(self) -> Dict[str, Any]:
+        """Final variants: simulator positions of the variant objects, for diagnosing the
+        executor (evaluator-side only; never shown to the planner)."""
+        spec = getattr(self, 'final_variant', None)
+        if spec is None or self.env is None:
+            return {}
+        positions = {}
+        for scene_name, label in spec.labels.items():
+            try:
+                positions[label] = [round(float(v), 3) for v in self.env.get_object(scene_name).get_position()]
+            except Exception:
+                continue
+        return {'gt_positions': positions}
 
     def _on_bundle_end(self, bundle_id, actions, success, failure_event, snapshot) -> None:
         del bundle_id, actions, success, failure_event
@@ -457,7 +489,69 @@ class LLMOnlyReplanningPipeline:
             list(getattr(snapshot, 'visible_regions', []) or []),
         )
 
+    # -- IF rule (plan.md Phase 4) ---------------------------------------------
+    def _if_rule_object_regions(self) -> Dict[str, Optional[str]]:
+        """Observed objects and the region the agent last saw each one in (never hidden state)."""
+        regions = dict(self._last_object_regions)
+        if self.memory_enabled:
+            for entry in self.memory.remembered():
+                regions.setdefault(entry.object_id, entry.last_region)
+        return regions
+
+    def _overlapping_regions(self, object_id: str, regions) -> List[str]:
+        """System geometry: regions whose placement area the object's footprint intersects."""
+        areas = getattr(self.env, 'placement_areas', None) or {}
+        if not areas:
+            return []
+        from llm_pipeline.final_variant_setup import footprint_overlaps
+
+        obj = self.env.get_object(scene_object_for_object(object_id, self.env))
+        if obj is None:
+            return []
+        return [region for region in regions if region in areas and footprint_overlaps(obj, areas[region])]
+
+    def _if_rule_check(self, remaining_plan) -> Optional[FailureEvent]:
+        from llm_pipeline.if_rule import assess_objects, describe_trigger, trigger_objects
+
+        completed = list(getattr(self.executor, 'completed_primitive_actions', []) or [])
+        assessments = assess_objects(
+            scene=(self.config.task_family or 'kitchen').strip().lower(),
+            object_regions=self._if_rule_object_regions(),
+            remaining_plan=list(remaining_plan or []),
+            completed_actions=completed,
+            initial_regions=self._first_seen_regions,
+            overlapping=self._overlapping_regions,
+            held_object=getattr(self.executor, 'held_object', None),
+        )
+        triggers = trigger_objects(assessments)
+        self._log_event('if_check', step=self.step, objects=[a.to_dict() for a in assessments],
+                        trigger_objects=[a.object_id for a in triggers],
+                        remaining_plan=list(remaining_plan or []))
+        if not triggers:
+            return None
+        last_action = completed[-1] if completed else None
+        facts = [describe_trigger(a, planner_region_name) for a in triggers]
+        return FailureEvent(
+            failure_id=FailureCode.IF_RULE_TRIGGER,
+            stage=FailureStage.AFTER_EXECUTION,
+            source=FailureSource.SEGMENTATION,
+            action=last_action,
+            evidence={
+                'trigger_objects': [a.object_id for a in triggers],
+                'trigger_kinds': {a.object_id: a.trigger_kind for a in triggers},
+                'assessments': [a.to_dict() for a in triggers],
+                'trigger_facts': facts,
+            },
+            failure_layer=FailureLayer.LAYER_2,
+            should_replan=True,
+            message='Objects the remaining plan does not handle: ' + '; '.join(facts),
+        )
+
     def _assign_plan_ids(self, actions) -> List[IdentifiedAction]:
+        # A merged plan (Phase 5) keeps the ids of its remaining-plan actions.
+        ids, self._next_plan_ids = self._next_plan_ids, None
+        if ids is not None and len(ids) == len(list(actions)):
+            return [IdentifiedAction(action_id, str(action)) for action_id, action in zip(ids, actions)]
         identified = []
         for action in actions:
             self._action_counter += 1
@@ -570,21 +664,33 @@ class LLMOnlyReplanningPipeline:
         failure_event: Optional[FailureEvent],
         silent: bool = False,
     ) -> Tuple[PlanResult, Dict[str, Any]]:
+        request = self._prepare_planning(goal_text, failure_event, silent=silent)
+        started = time.time()
+        result = self._call_planner(request)
+        return self._finish_planning(request, result, wall_latency_s=time.time() - started)
+
+    def _prepare_planning(self, goal_text: str, failure_event: Optional[FailureEvent], silent: bool = False) -> Dict[str, Any]:
+        """Observation, context and prompt bundle (main thread: reads the simulator)."""
         # 1. Capture and resolve scene state
         state = self._build_scene_state()
         # Every planning event is an observation, except a re-query after a plan-check
         # failure, which belongs to the same planning event (plan.md Section 10, Q7).
         is_plan_check_requery = (
-            failure_event is not None and failure_check_for(failure_event.failure_id) == FailureCheck.PLAN_CHECK
+            failure_event is not None
+            and failure_check_for(failure_event.failure_id) in (FailureCheck.PLAN_CHECK, FailureCheck.INSERTION)
         )
         if not is_plan_check_requery:
             snapshot = getattr(state, '_original_snapshot', None)
             self._emit_observation(state.visible_objects, dict(state.object_region_map or {}), dict(state.lid_states or {}),
                                    list(getattr(snapshot, 'visible_regions', []) or []))
         if hasattr(self.context_builder, 'set_replan_context'):
-            self.context_builder.set_replan_context(
-                ReplanContext(completed=list(self._completed_with_ids), remaining=list(self._remaining_with_ids))
-            )
+            completed, remaining = list(self._completed_with_ids), list(self._remaining_with_ids)
+            # Phase 6: independent actions executed while the planner works are shown as completed.
+            during_wait = getattr(self, '_prompt_executed_ids', None) or set()
+            if during_wait:
+                completed += [item for item in remaining if item.action_id in during_wait]
+                remaining = [item for item in remaining if item.action_id not in during_wait]
+            self.context_builder.set_replan_context(ReplanContext(completed=completed, remaining=remaining))
         # Objects never observed must not reach the planner (plan.md Phase 1, step 5b).
         planner_parser = getattr(self.planner, 'parser', None)
         if planner_parser is not None and hasattr(planner_parser, 'set_observed_objects'):
@@ -607,6 +713,11 @@ class LLMOnlyReplanningPipeline:
                     lid_regions=LID_REGIONS,
                 )
 
+        corrective = self._corrective_context(failure_event)
+        if hasattr(self.context_builder, 'set_corrective'):
+            self.context_builder.set_corrective(*(corrective or (None, None)),
+                                                hints=self.config.flags.prompt_corrective_hints == 'on')
+
         # 2. Build prompt bundle via modular context builder. Completed actions come from
         # the executor's cumulative list; concatenating per-cycle lists duplicated them.
         bundle = self.context_builder.build_bundle(
@@ -623,6 +734,12 @@ class LLMOnlyReplanningPipeline:
             'temperature': float(self.config.planner_temperature),
             'prompt_version': self.config.flags.prompt_version,
         })
+        if corrective is not None:
+            bundle_metadata.update({
+                'output_format': 'corrective_blocks',
+                'trigger_objects': list((corrective[0].evidence or {}).get('trigger_objects') or []),
+                'remaining_plan': [(item.action_id, item.action) for item in self._remaining_with_ids],
+            })
         bundle = replace(bundle, metadata=bundle_metadata)
 
         is_replan = failure_event is not None
@@ -633,21 +750,33 @@ class LLMOnlyReplanningPipeline:
             if is_replan and failure_event is not None:
                 print(f'[LLM] Failure context: {failure_event.message}')
             print(f'{"=" * 60}')
+        return {'state': state, 'bundle': bundle, 'failure_event': failure_event, 'corrective': corrective,
+                'is_replan': is_replan, 'is_plan_check_requery': is_plan_check_requery, 'silent': silent,
+                'step': self.step}
 
-        # 3. Plan using modular planner
+    def _call_planner(self, request: Dict[str, Any]) -> PlanResult:
+        """The planner call only (safe to run off the main thread: no simulator access)."""
+        bundle = request['bundle']
         # We try to use the new .plan() interface, fall back to .generate_plan() for legacy
-        call_started = time.time()
         if hasattr(self.planner, 'plan'):
-            result = self.planner.plan(bundle)
-        else:
-            result = self.planner.generate_plan(
-                system_prompt=bundle.system_prompt,
-                user_prompt=bundle.user_prompt,
-                icl_mode=bundle.icl_mode,
-                max_new_tokens=self.config.planner_max_new_tokens,
-                temperature=self.config.planner_temperature,
-                held_object=getattr(self.executor, 'held_object', None),
-            )
+            return self.planner.plan(bundle)
+        return self.planner.generate_plan(
+            system_prompt=bundle.system_prompt,
+            user_prompt=bundle.user_prompt,
+            icl_mode=bundle.icl_mode,
+            max_new_tokens=self.config.planner_max_new_tokens,
+            temperature=self.config.planner_temperature,
+            held_object=bundle.metadata.get('held_object'),
+        )
+
+    def _finish_planning(self, request: Dict[str, Any], result: PlanResult,
+                         wall_latency_s: float) -> Tuple[PlanResult, Dict[str, Any]]:
+        """Corrective merge, printing, planning-event log and prompt trace (main thread)."""
+        bundle, state, corrective = request['bundle'], request['state'], request['corrective']
+        failure_event, is_replan, silent = request['failure_event'], request['is_replan'], request['silent']
+        # Corrective blocks are parsed here; a planner's own FINAL ACTIONS parse of them is irrelevant.
+        if corrective is not None and (result.raw_output or '').strip():
+            result = self._merge_corrective(result, corrective[0], held_object=getattr(self.executor, 'held_object', None))
 
         if not silent:
             print(f'[LLM] Raw output: {len(result.raw_output or "")} characters')
@@ -665,8 +794,8 @@ class LLMOnlyReplanningPipeline:
             print(f'{"=" * 60}')
 
         if not silent:
-            self._log_planning_event(bundle, result, failure_event, is_replan, is_plan_check_requery,
-                                     wall_latency_s=time.time() - call_started)
+            self._log_planning_event(bundle, result, failure_event, is_replan, request['is_plan_check_requery'],
+                                     wall_latency_s=wall_latency_s, step=request.get('step'))
 
         bundle_trace = self._prompt_bundle_trace(bundle)
         self.last_prompt_trace = {
@@ -681,17 +810,228 @@ class LLMOnlyReplanningPipeline:
             self._update_live_action_sequence([], None)
         return result, dict(self.last_prompt_trace)
 
-    def _log_planning_event(self, bundle, result, failure_event, is_replan, is_plan_check_requery, wall_latency_s) -> None:
+    # -- WHEN (plan.md Phase 6) --------------------------------------------------
+    def _parallel_applicable(self, failure_event) -> bool:
+        flags = self.config.flags
+        return (flags.parallel_enabled == 'true' and flags.replan_output_mode == 'corrective'
+                and failure_event is not None and failure_event.failure_id == FailureCode.IF_RULE_TRIGGER)
+
+    @staticmethod
+    def _direct_action(text: str) -> DirectAction:
+        name, _, rest = str(text).partition('(')
+        args = tuple(arg.strip() for arg in rest.rstrip(')').split(',') if arg.strip())
+        return DirectAction(name.strip(), args)
+
+    def _plan_in_parallel(self, goal_text: str, trigger: FailureEvent) -> Tuple[PlanResult, Dict[str, Any]]:
+        """Replan in the background while executing independent bundles (plan.md 6.1)."""
+        import threading
+
+        from llm_pipeline.parallel import affected_set, independent_bundles, split_bundles
+
+        scene = (self.config.task_family or 'kitchen').strip().lower()
+        object_regions = self._if_rule_object_regions()
+        remaining = [(item.action_id, item.action) for item in self._remaining_with_ids]
+        affected = affected_set(scene, (trigger.evidence or {}).get('trigger_objects') or [], object_regions)
+        independent = independent_bundles(split_bundles(remaining, object_regions), affected)
+        # The prompt lists the independent actions as already executed.
+        self._prompt_executed_ids = {action_id for bundle in independent for action_id in bundle.ids}
+        try:
+            request = self._prepare_planning(goal_text, trigger)
+        finally:
+            self._prompt_executed_ids = set()
+        box: Dict[str, Any] = {}
+
+        def _worker():
+            try:
+                box['result'] = self._call_planner(request)
+            except Exception as exc:  # planner server errors become a planner-call failure
+                box['error'] = exc
+            box['returned_at'] = time.monotonic()
+
+        started = time.monotonic()
+        thread = threading.Thread(target=_worker, name='replan', daemon=True)
+        thread.start()
+        executed_ids: List[str] = []
+        busy_s, wait_failure = 0.0, None
+        saved_check = getattr(self.executor, 'trigger_check', None)
+        if hasattr(self.executor, 'set_trigger_check'):
+            self.executor.set_trigger_check(None)   # new triggers during the wait are handled after the merge
+        try:
+            for bundle in independent:
+                if not thread.is_alive():
+                    break                            # the replan returned: merge after the current bundle
+                actions = [self._direct_action(action) for _, action in bundle.actions]
+                bundle_started = time.monotonic()
+                outcome = self.executor.execute_actions(
+                    actions, self.failure_checker,
+                    pre_action_checks_enabled=self.config.pre_action_checks_enabled,
+                    post_action_checks_enabled=self.config.post_action_checks_enabled,
+                )
+                busy_s += time.monotonic() - bundle_started
+                done = len(actions) - len(list(outcome.remaining_actions or []))
+                executed_ids.extend(bundle.ids[:max(0, done)])
+                if not outcome.success:
+                    wait_failure = outcome.last_failure_event
+                    break
+        finally:
+            if hasattr(self.executor, 'set_trigger_check'):
+                self.executor.set_trigger_check(saved_check)
+        thread.join()
+        latency_s = box.get('returned_at', time.monotonic()) - started
+        executed = set(executed_ids)
+        self._completed_with_ids.extend(item for item in self._remaining_with_ids if item.action_id in executed)
+        self._remaining_with_ids = [item for item in self._remaining_with_ids if item.action_id not in executed]
+        self._wait_executed_ids = list(executed_ids)
+
+        result = box.get('result')
+        if result is None:
+            error = box.get('error')
+            event = FailureEvent(
+                failure_id=FailureCode.PLANNER_CALL_FAILED, stage=FailureStage.BEFORE_EXECUTION,
+                source=FailureSource.VALIDATION, action=None, evidence={'error': str(error)},
+                failure_layer=FailureLayer.LAYER_1, should_replan=False, message=f'Planner call failed: {error}',
+            )
+            result = PlanResult(False, [], '', latency_s, event.message, event)
+        try:
+            plan_result, trace = self._finish_planning(request, result, wall_latency_s=latency_s)
+        finally:
+            self._wait_executed_ids = []
+
+        merge_result = 'accepted' if plan_result.success else 'rejected'
+        if not plan_result.success and plan_result.failure_event is not None and executed and \
+                'the merged plan is invalid' in (plan_result.failure_event.message or ''):
+            # The blocks were valid but the plan no longer fits what was executed during the wait.
+            merge_result = 'merge_conflict'
+            plan_result.failure_event.failure_id = FailureCode.MERGE_CONFLICT
+        if wait_failure is not None:
+            # An independent bundle failed: its failure is handled first (full replan).
+            merge_result = 'discarded_after_execution_failure'
+            plan_result = PlanResult(False, [], plan_result.raw_output, plan_result.inference_time,
+                                     wait_failure.message, wait_failure)
+            self._active_trigger = None
+        self._log_event(
+            'parallel', step=self.step, affected_set=affected,
+            independent_actions_available=[action for bundle in independent for _, action in bundle.actions],
+            independent_actions_executed=[action for action_id, action in remaining if action_id in executed],
+            planner_call_latency_s=round(latency_s, 3), robot_busy_time_s=round(busy_s, 3),
+            robot_idle_time_s=round(max(0.0, latency_s - busy_s), 3), merge_result=merge_result,
+            failure_code=(str(FailureCode.MERGE_CONFLICT) if merge_result == 'merge_conflict' else None),
+        )
+        return plan_result, trace
+
+    # -- WHERE (plan.md Phase 5) -------------------------------------------------
+    CORRECTIVE_REQUERY_CODES = (FailureCode.INVALID_CORRECTIVE_BLOCK, FailureCode.INSERTION_TOO_LATE,
+                                FailureCode.MERGE_CONFLICT)
+
+    def _corrective_context(self, failure_event):
+        """(trigger, rejection) when this planner call must return corrective blocks, else None."""
+        if self.config.flags.replan_output_mode != 'corrective' or failure_event is None:
+            return None
+        if failure_event.failure_id == FailureCode.IF_RULE_TRIGGER:
+            self._active_trigger, self._corrective_attempts = failure_event, 0
+            return failure_event, None
+        if failure_event.failure_id in self.CORRECTIVE_REQUERY_CODES and self._active_trigger is not None:
+            return self._active_trigger, failure_event
+        # Execution failures and other triggers keep the previous full replan.
+        self._active_trigger = None
+        return None
+
+    def _corrective_rejection(self, result, error) -> PlanResult:
+        event = FailureEvent(
+            failure_id=error.failure_id, stage=FailureStage.BEFORE_EXECUTION, source=FailureSource.VALIDATION,
+            action=None, evidence={'fact': error.fact, 'raw_output': result.raw_output}, failure_layer=FailureLayer.LAYER_1,
+            should_replan=True, message=f'Corrective blocks rejected ({error.failure_id}): {error.fact}',
+        )
+        proposal = getattr(self, '_last_proposal', None) or {}
+        self._log_event('insertion', step=self.step, corrective_sub_plans=proposal.get('blocks', []),
+                        urgency=proposal.get('urgency', {}), insertion_point=proposal.get('insert', {}),
+                        merged_plan=[], first_proposal=self._corrective_attempts == 1, accepted=False,
+                        rejection_code=str(error.failure_id), rejection=error.fact)
+        return PlanResult(False, [], result.raw_output, result.inference_time, event.message, event)
+
+    def _merge_corrective(self, result, trigger_event, held_object=None) -> PlanResult:
+        from llm_pipeline.corrective import (
+            CorrectivePlanError, apply_insertion_mode, merge_blocks, parse_blocks, placement_conflict,
+        )
+        from llm_pipeline.strict_parser import StrictParseError
+
+        self._corrective_attempts += 1
+        self._last_proposal = None
+        evidence = dict(trigger_event.evidence or {})
+        triggers = list(evidence.get('trigger_objects') or [])
+        remaining = [(item.action_id, item.action) for item in self._remaining_with_ids]
+        parser = getattr(self.planner, 'parser', None)
+
+        def _parse(lines, held=None):
+            return parser.parse('FINAL ACTIONS:\n' + '\n'.join(lines), held_object=held)
+
+        try:
+            # Anchors may name actions executed during the wait (Phase 6): they go to the front.
+            known_ids = [action_id for action_id, _ in remaining] + list(getattr(self, '_wait_executed_ids', []) or [])
+            blocks = parse_blocks(result.raw_output, triggers, known_ids)
+            for block in blocks:
+                try:
+                    block.actions = [str(action) for action in _parse(block.actions)]
+                except StrictParseError as exc:
+                    raise CorrectivePlanError(exc.failure_id, f'{", ".join(block.objects)} block: {exc.fact or exc}')
+            proposed = [dict(b.to_dict()) for b in blocks]
+            self._last_proposal = {
+                'blocks': proposed,
+                'urgency': {obj: b.urgency for b in reversed(blocks) for obj in b.objects},
+                'insert': {obj: b.insert for b in reversed(blocks) for obj in b.objects},
+            }
+            blocks = apply_insertion_mode(blocks, self.config.flags.replan_insertion_mode)
+
+            def _new_id():
+                self._action_counter += 1
+                return f'a{self._action_counter}'
+
+            merge = merge_blocks(remaining, blocks, _new_id)
+            merged_actions = [action for _, action in merge.merged]
+            try:
+                parsed = _parse(merged_actions, held_object)
+            except StrictParseError as exc:
+                raise CorrectivePlanError(exc.failure_id, f'the merged plan is invalid: {exc.fact or exc}')
+            overlapping = {a['object_id']: list(a.get('overlapping_regions') or [])
+                           for a in evidence.get('assessments') or []}
+            conflict = placement_conflict([str(a) for a in parsed], overlapping)
+            if conflict:
+                raise CorrectivePlanError(FailureCode.INSERTION_TOO_LATE, conflict)
+        except CorrectivePlanError as error:
+            return self._corrective_rejection(result, error)
+
+        self._next_plan_ids = [action_id for action_id, _ in merge.merged]
+        urgency, insertion_point = {}, {}
+        for block in blocks:
+            for obj in block.objects:
+                urgency.setdefault(obj, block.proposed_urgency)
+                insertion_point.setdefault(obj, block.proposed_insert)
+        self._log_event(
+            'insertion', step=self.step, corrective_sub_plans=proposed, urgency=urgency, insertion_point=insertion_point,
+            merged_plan=[f'{action_id}: {action}' for action_id, action in merge.merged],
+            first_proposal=self._corrective_attempts == 1, accepted=True,
+            insertion_mode=self.config.flags.replan_insertion_mode, applied=merge.insertions,
+            anchors_already_executed=list(merge.anchors_already_executed),
+            failure_codes=[str(FailureCode.ANCHOR_ALREADY_EXECUTED)] if merge.anchors_already_executed else [],
+        )
+        self._active_trigger = None
+        return PlanResult(True, list(parsed), result.raw_output, result.inference_time)
+
+    def _log_planning_event(self, bundle, result, failure_event, is_replan, is_plan_check_requery, wall_latency_s,
+                            step: Optional[int] = None) -> None:
+        step = self.step if step is None else step
         trigger_objects = []
         if failure_event is not None and failure_event.failure_id == FailureCode.NEW_OBJECT_DISCOVERED:
             trigger_objects = list((failure_event.evidence or {}).get('newly_visible_objects') or [])
+        elif failure_event is not None and failure_event.failure_id == FailureCode.IF_RULE_TRIGGER:
+            trigger_objects = list((failure_event.evidence or {}).get('trigger_objects') or [])
         prompt_path = self.trial_logger.save_prompt(
-            self.step, bundle.system_prompt, bundle.user_prompt, kind='replan' if is_replan else 'initial',
+            step, bundle.system_prompt, bundle.user_prompt, kind='replan' if is_replan else 'initial',
         )
         parsed = [str(action) for action in (result.actions or [])]
         self._log_event(
             'planning_event',
-            step=self.step,
+            step=step,
             kind='replan' if is_replan else 'initial',
             plan_check_requery=bool(is_plan_check_requery),
             trigger_code=str(failure_event.failure_id) if failure_event is not None else None,
@@ -712,15 +1052,15 @@ class LLMOnlyReplanningPipeline:
             check = failure_check_for(result.failure_event.failure_id)
             self._log_event(
                 'plan_check',
-                step=self.step,
-                result='fail' if check == FailureCheck.PLAN_CHECK else 'not_run',
+                step=step,
+                result='fail' if check in (FailureCheck.PLAN_CHECK, FailureCheck.INSERTION) else 'not_run',
                 failure_codes=[str(result.failure_event.failure_id)],
                 fact=(result.failure_event.evidence or {}).get('fact'),
             )
         elif result.success:
-            self._log_event('plan_check', step=self.step, result='pass', failure_codes=[], plan=parsed)
+            self._log_event('plan_check', step=step, result='pass', failure_codes=[], plan=parsed)
         else:
-            self._log_event('plan_check', step=self.step, result='not_run',
+            self._log_event('plan_check', step=step, result='not_run',
                             failure_codes=[str(FailureCode.PLANNER_CALL_FAILED)], error_message=result.error_message)
 
     def _capture_rgb_frames(self) -> Dict[str, np.ndarray]:
@@ -1105,6 +1445,8 @@ class LLMOnlyReplanningPipeline:
                     plan_result, prompt_trace = self._cached_preflight_plan
                     self._cached_preflight_plan = None
                     self._print_plan_result(plan_result, is_replan, cycle_number, pending_failure)
+                elif self._parallel_applicable(pending_failure):
+                    plan_result, prompt_trace = self._plan_in_parallel(goal_text, pending_failure)
                 else:
                     plan_result, prompt_trace = self.plan_once(goal_text=goal_text, failure_event=pending_failure)
                 cycle = ExecutionCycleRecord(

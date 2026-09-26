@@ -91,6 +91,7 @@ def test_default_flags_match_plan_section_0_7() -> None:
         'parallel.enabled': 'false',
         'termination.mode': 'agent',
         'prompt.version': 'v2',
+        'prompt.corrective_hints': 'off',
         'grasp.confirmation': 'gripper_state',
         'scene.randomization': 'pose_jitter',
     }
@@ -103,14 +104,13 @@ def test_flags_parse_cli_assignments() -> None:
     assert PipelineFlags.from_assignments(flags.to_assignments()) == flags
 
 
-@pytest.mark.parametrize(
-    'assignment',
-    ['replan.trigger_mode=if_rule', 'replan.output_mode=corrective',
-     'replan.insertion_mode=always_front', 'parallel.enabled=true'],
-)
-def test_flags_of_later_phases_are_not_available_yet(assignment) -> None:
-    with pytest.raises(NotImplementedError):
-        PipelineFlags.from_assignments([assignment])
+def test_every_flag_value_is_implemented_after_phase_6() -> None:
+    from llm_pipeline.flags import FLAG_SPECS
+
+    for spec in FLAG_SPECS:
+        assert set(spec.implemented) == set(spec.allowed), spec.name
+        for value in spec.allowed:
+            assert PipelineFlags.from_assignments([f'{spec.name}={value}']).get(spec.name) == value
 
 
 def test_unknown_flag_values_are_rejected() -> None:

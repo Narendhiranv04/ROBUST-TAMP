@@ -58,9 +58,11 @@ def load_gt_actions(variant_id: str) -> List[str]:
 class OraclePlanner:
     """Answers with the remaining ground-truth actions on observed objects."""
 
-    def __init__(self, gt_actions: List[str], executor_ref):
+    def __init__(self, gt_actions: List[str], executor_ref, urgency: Optional[dict] = None, delay_s: float = 0.0):
         self.gt_actions = list(gt_actions)
         self._executor_ref = executor_ref
+        self.urgency = dict(urgency or {})       # final variants: expected urgency per trigger object
+        self.delay_s = float(delay_s)            # simulated planner latency (Phase 6)
         self.model_alias = 'gt_oracle'
         self.model_name = 'gt_oracle'
         self.quantization = 'none'
@@ -80,8 +82,47 @@ class OraclePlanner:
                 remaining.remove(action)
         return remaining
 
+    def _corrective_blocks(self, metadata) -> str:
+        """Blocks for the trigger objects: ground-truth actions, the variant spec's urgency.
+
+        An urgent object whose goal is the plate is first parked on the table (urgent,
+        front) and plated once the plate is in the serving area (deferred).
+        """
+        remaining = list(metadata.get('remaining_plan') or [])
+        plate_anchor = next((action_id for action_id, action in remaining
+                             if action.replace(' ', '') == 'place(plate,serving_area)'), None)
+        blocks = []
+        for obj in metadata.get('trigger_objects') or []:
+            pairs = []
+            for index, action in enumerate(self.gt_actions[:-1]):
+                parsed = parse_action_string(action) or {}
+                if parsed.get('action') == 'pick' and (parsed.get('args') or [None])[0] == obj:
+                    pairs = [action, self.gt_actions[index + 1]]
+            if not pairs:
+                pairs = [f'pick({obj})', f'place({obj}, table)']
+            goal = (parse_action_string(pairs[1]) or {}).get('args', [None, None])[1]
+            if self.urgency.get(obj) == 'urgent':
+                if goal == 'plate_top':
+                    blocks.append(('urgent', 'front', obj, [f'pick({obj})', f'place({obj}, table)']))
+                    blocks.append(('deferred', f'after {plate_anchor}' if plate_anchor else 'end', obj, pairs))
+                else:
+                    blocks.append(('urgent', 'front', obj, pairs))
+            else:
+                blocks.append(('deferred', 'end', obj, pairs))
+        lines = ['FINAL BLOCKS:']
+        for urgency, insert, obj, actions in blocks:
+            lines += ['BLOCK', f'objects: {obj}', f'urgency: {urgency}', f'insert: {insert}',
+                      'reason: ground-truth oracle', 'actions:', *actions, 'END BLOCK']
+        return '\n'.join(lines)
+
     def plan(self, bundle) -> PlanResult:
         self.prompts.append((bundle.system_prompt, bundle.user_prompt))
+        if self.delay_s > 0:
+            import time as _time
+
+            _time.sleep(self.delay_s)
+        if (bundle.metadata or {}).get('output_format') == 'corrective_blocks':
+            return PlanResult(True, [], self._corrective_blocks(bundle.metadata or {}), self.delay_s)
         visible = set(self.parser.planner_visible_objects())
         remaining = self._remaining()
         chosen: List[str] = []
@@ -126,12 +167,15 @@ class OraclePlanner:
 
 def run_oracle_trial(variant_id: str, output_dir: Path, headless: bool = True,
                      flags: Optional[PipelineFlags] = None, max_replans: int = 10,
-                     seed: Optional[int] = None) -> dict:
+                     seed: Optional[int] = None, delay_s: float = 0.0) -> dict:
+    from evaluation.final_variants import get_final_variant, is_final_variant
+
     gt_actions = load_gt_actions(variant_id)
+    urgency = dict(get_final_variant(variant_id).expected_urgency) if is_final_variant(variant_id) else {}
 
     class OraclePipeline(LLMOnlyReplanningPipeline):
         def __init__(self, config):
-            super().__init__(config=config, planner=OraclePlanner(gt_actions, lambda: self.executor))
+            super().__init__(config=config, planner=OraclePlanner(gt_actions, lambda: self.executor, urgency, delay_s))
 
     original = trial_runner.LLMOnlyReplanningPipeline
     trial_runner.LLMOnlyReplanningPipeline = OraclePipeline
@@ -161,10 +205,12 @@ def main() -> None:
     parser.add_argument('--max-replans', type=int, default=10)
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--headless', action='store_true', help='(default)')
+    parser.add_argument('--planner-delay', type=float, default=0.0,
+                        help='Simulated planner latency in seconds (Phase 6 tests)')
     args = parser.parse_args()
     record = run_oracle_trial(args.variant, Path(args.output_dir), headless=not args.gui,
                               flags=PipelineFlags.from_assignments(args.flag), max_replans=args.max_replans,
-                              seed=args.seed)
+                              seed=args.seed, delay_s=args.planner_delay)
     print(json.dumps({key: record.get(key) for key in (
         'variant_id', 'episode_success', 'partial_goal_completion', 'total_cycles', 'total_replans',
         'completed_actions', 'failure_reason')}, indent=2))

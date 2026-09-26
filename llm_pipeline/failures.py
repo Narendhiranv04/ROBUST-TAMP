@@ -94,6 +94,7 @@ class FailureCode(_StrEnum):
     LID_NOT_CLOSED_ENOUGH = 'lid_not_closed_enough'
     # trigger (not a failure): discovery-mode replan trigger
     NEW_OBJECT_DISCOVERED = 'new_object_discovered'
+    IF_RULE_TRIGGER = 'if_rule_trigger'          # Phase 4: replan.trigger_mode = if_rule
     # goal check / evaluation
     GOAL_NOT_SATISFIED = 'goal_not_satisfied'
     GOAL_VALIDATION_FAILED = 'goal_validation_failed'
@@ -106,6 +107,7 @@ class FailureCode(_StrEnum):
     # later phases (reserved; not emitted yet)
     MEMORY_MISMATCH = 'memory_mismatch'
     INSERTION_TOO_LATE = 'insertion_too_late'
+    INVALID_CORRECTIVE_BLOCK = 'invalid_corrective_block'   # Phase 5: block list rejected by the plan check
     ANCHOR_ALREADY_EXECUTED = 'anchor_already_executed'
     MERGE_CONFLICT = 'merge_conflict'
 
@@ -217,6 +219,7 @@ FAILURE_CODE_INFO: Dict[FailureCode, FailureCodeInfo] = {
     FailureCode.LID_NOT_OPEN_ENOUGH: FailureCodeInfo(_EXE, _L2),
     FailureCode.LID_NOT_CLOSED_ENOUGH: FailureCodeInfo(_EXE, _L2),
     FailureCode.NEW_OBJECT_DISCOVERED: FailureCodeInfo(FailureCheck.TRIGGER, _L2),
+    FailureCode.IF_RULE_TRIGGER: FailureCodeInfo(FailureCheck.TRIGGER, _L2, phase=4),
     FailureCode.GOAL_NOT_SATISFIED: FailureCodeInfo(FailureCheck.GOAL_CHECK, _L2),
     FailureCode.GOAL_VALIDATION_FAILED: FailureCodeInfo(FailureCheck.EVALUATION, _L2),
     FailureCode.PLANNER_CALL_FAILED: FailureCodeInfo(FailureCheck.INFRASTRUCTURE, _L1),
@@ -224,9 +227,10 @@ FAILURE_CODE_INFO: Dict[FailureCode, FailureCodeInfo] = {
     FailureCode.REPLAN_BUDGET_EXHAUSTED: FailureCodeInfo(FailureCheck.REPLAN, _L1),
     FailureCode.REPEATED_PLANNER_OUTPUT: FailureCodeInfo(FailureCheck.REPLAN, _L1, emitted=False, phase=7),
     FailureCode.MEMORY_MISMATCH: FailureCodeInfo(FailureCheck.MEMORY, _L2, phase=2),
-    FailureCode.INSERTION_TOO_LATE: FailureCodeInfo(FailureCheck.INSERTION, _L1, emitted=False, phase=5),
-    FailureCode.ANCHOR_ALREADY_EXECUTED: FailureCodeInfo(FailureCheck.PARALLEL, _L1, emitted=False, phase=6),
-    FailureCode.MERGE_CONFLICT: FailureCodeInfo(FailureCheck.PARALLEL, _L1, emitted=False, phase=6),
+    FailureCode.INSERTION_TOO_LATE: FailureCodeInfo(FailureCheck.INSERTION, _L1, phase=5),
+    FailureCode.INVALID_CORRECTIVE_BLOCK: FailureCodeInfo(FailureCheck.PLAN_CHECK, _L1, phase=5),
+    FailureCode.ANCHOR_ALREADY_EXECUTED: FailureCodeInfo(FailureCheck.PARALLEL, _L1, phase=6),
+    FailureCode.MERGE_CONFLICT: FailureCodeInfo(FailureCheck.PARALLEL, _L1, phase=6),
 }
 
 assert set(FAILURE_CODE_INFO) == set(FailureCode), 'every FailureCode needs a FailureCodeInfo entry'

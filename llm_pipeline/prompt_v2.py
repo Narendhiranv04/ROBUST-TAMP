@@ -173,6 +173,12 @@ def trigger_facts(failure_event: FailureEvent, object_region_map: Dict[str, str]
             for name in objects
         ) or '(none)'
         return [f'- After {action}, these objects became visible and had not been seen earlier in this trial: {rendered}.']
+    if code == FailureCode.IF_RULE_TRIGGER:
+        facts = list(evidence.get('trigger_facts') or [])
+        after = f'After {action}, ' if action else ''
+        return [f'- {after}these observed objects are not handled by the remaining plan:'] + [
+            f'  - {fact}' for fact in facts
+        ]
     if code == FailureCode.GOAL_NOT_SATISFIED:
         reason = evidence.get('reason') or ''
         return [f'- A goal check reported that the goal is not satisfied{": " + reason if reason else "."}']
@@ -197,6 +203,9 @@ class PromptV2Builder(BaseContextBuilder):
         self.replan_context: Optional[ReplanContext] = None
         # memory.enabled: (object, last_region, steps since last seen) of remembered objects.
         self.memory_view: Optional[List[Tuple[str, Optional[str], int]]] = None
+        # replan.output_mode = corrective: (trigger event, rejection of the previous blocks or None).
+        self.corrective: Optional[Tuple[FailureEvent, Optional[FailureEvent]]] = None
+        self.corrective_hints = False       # prompt.corrective_hints
 
     def set_env(self, env) -> None:
         self.env = env
@@ -212,6 +221,11 @@ class PromptV2Builder(BaseContextBuilder):
 
     def set_replan_context(self, context: Optional[ReplanContext]) -> None:
         self.replan_context = context
+
+    def set_corrective(self, trigger_event: Optional[FailureEvent], rejection: Optional[FailureEvent] = None,
+                       hints: bool = False) -> None:
+        self.corrective = None if trigger_event is None else (trigger_event, rejection)
+        self.corrective_hints = bool(hints)
 
     def set_memory_view(self, remembered: Optional[Sequence[Tuple[str, Optional[str], int]]]) -> None:
         self.memory_view = None if remembered is None else list(remembered)
@@ -235,6 +249,12 @@ class PromptV2Builder(BaseContextBuilder):
 
     # -- prompts --------------------------------------------------------------
     def system_prompt(self) -> str:
+        if self.corrective is not None:
+            from llm_pipeline.corrective import BLOCK_OUTPUT_FORMAT_TEXT
+
+            definitions = [ACTION_DEFINITIONS[name] for name in self._actions() if name in ACTION_DEFINITIONS]
+            return '\n\n'.join([ROLE_TEXT, 'Actions available in this scene:\n' + '\n'.join(definitions),
+                                BLOCK_OUTPUT_FORMAT_TEXT])
         return system_prompt(self._actions())
 
     def user_sections(
@@ -256,14 +276,25 @@ class PromptV2Builder(BaseContextBuilder):
         sections['remaining_plan'] = ['## Remaining plan (not executed yet)'] + (
             [f'- {item.render()}' for item in context.remaining] or ['- (none)']
         )
-        sections['trigger'] = ['## Why a new plan is requested'] + trigger_facts(
-            failure_event, dict(getattr(state, 'object_region_map', {}) or {})
-        )
+        object_region_map = dict(getattr(state, 'object_region_map', {}) or {})
+        if self.corrective is not None:
+            from llm_pipeline.corrective import corrective_instructions
+
+            trigger_event, rejection = self.corrective
+            sections['trigger'] = ['## Why a new plan is requested'] + trigger_facts(trigger_event, object_region_map)
+            if rejection is not None:
+                fact = (rejection.evidence or {}).get('fact') or rejection.message
+                sections['trigger'].append(
+                    f'- Your previous blocks were rejected (failure code {planner_facing_code(rejection.failure_id)}): {fact}'
+                )
+            sections['what_to_plan'] = corrective_instructions(self.corrective_hints)
+            return sections
+        sections['trigger'] = ['## Why a new plan is requested'] + trigger_facts(failure_event, object_region_map)
         return sections
 
     def user_prompt(self, state: SceneState, goal_text: str, failure_event: Optional[FailureEvent]) -> str:
         sections = self.user_sections(state, goal_text, failure_event)
-        order = REPLAN_SECTIONS if failure_event is not None else ('goal', 'state')
+        order = REPLAN_SECTIONS + ('what_to_plan',) if failure_event is not None else ('goal', 'state')
         return '\n\n'.join('\n'.join(sections[name]) for name in order if name in sections)
 
     def build_bundle(

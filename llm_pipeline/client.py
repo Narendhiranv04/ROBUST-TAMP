@@ -213,6 +213,11 @@ class RemoteTextLLMPlanner:
             failure_event = self._decode_failure_event(data.get('failure_event'))
             actions = []
 
+            if prompt_version == 'v2' and (getattr(bundle, 'metadata', {}) or {}).get('output_format') == 'corrective_blocks':
+                # Corrective blocks (Phase 5) are parsed and merged by the pipeline.
+                return PlanResult(success=bool(raw_output.strip()), actions=[], raw_output=raw_output,
+                                  inference_time=float(data.get('inference_time', time.time() - started_at)),
+                                  error_message=None if raw_output.strip() else 'empty planner output')
             if prompt_version == 'v2' and raw_output.strip():
                 # v2: the client's parse of the raw output is authoritative (only the text
                 # after FINAL ACTIONS: is parsed); the server's own parse is ignored.

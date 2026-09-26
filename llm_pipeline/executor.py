@@ -864,6 +864,7 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         # bundle finishes (success or failure) so the pipeline can take an observation.
         self.event_sink: Optional[Callable[..., None]] = None
         self.bundle_end_callback: Optional[Callable[..., None]] = None
+        self.trigger_check: Optional[Callable[[List[str]], Optional[FailureEvent]]] = None
         self.last_trace_snapshot = None
         self._bundle_counter = 0
         self._current_bundle: Optional[dict] = None
@@ -886,6 +887,35 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
 
     def set_bundle_end_callback(self, callback: Optional[Callable[..., None]]) -> None:
         self.bundle_end_callback = callback
+
+    def set_trigger_check(self, callback: Optional[Callable[[List[str]], Optional[FailureEvent]]]) -> None:
+        """IF rule (replan.trigger_mode = if_rule): called with the remaining plan after every
+        successful bundle that leaves the gripper empty; a returned event stops execution."""
+        self.trigger_check = callback
+
+    def _check_trigger(self, actions, next_index: int):
+        callback = getattr(self, 'trigger_check', None)
+        if callback is None or self.held_object:
+            return None
+        remaining = [str(item) for item in actions[next_index:]]
+        try:
+            event = callback(remaining)
+        except Exception as exc:
+            print(f'[EXEC] trigger check failed: {exc}')
+            return None
+        if event is None:
+            return None
+        print(f'[EXEC] IF rule trigger: {event.message}')
+        self.remaining_actions = remaining
+        self.last_failure_event = event
+        return PrimitiveExecutionOutcome(
+            success=False,
+            completed_actions=list(self.completed_primitive_actions),
+            remaining_actions=list(remaining),
+            held_object=self.held_object,
+            last_failure_event=event,
+            error_message=event.message,
+        )
 
     def _emit_event(self, event: str, **fields) -> None:
         if self.event_sink is None:
@@ -1256,6 +1286,9 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                         )
 
                     skip_counter = bundle.consumed - 1
+                    triggered = self._check_trigger(actions, index + bundle.consumed)
+                    if triggered is not None:
+                        return triggered
                     continue
                 self._current_bundle = None
             # --- End Bundling ---
@@ -1353,6 +1386,9 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
                     pass
             elif self.config.return_home_after_each_action and self.held_object is None:
                 self.go_home()
+            triggered = self._check_trigger(actions, index + 1)
+            if triggered is not None:
+                return triggered
 
         self.remaining_actions = []
         return PrimitiveExecutionOutcome(
