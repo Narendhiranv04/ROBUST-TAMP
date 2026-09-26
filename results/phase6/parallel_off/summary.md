@@ -1,0 +1,18 @@
+# Phase 6: parallel off (oracle, 20 s planner delay)
+
+| Variant | Trials | Task success rate | Partial goal completion | Planner calls (mean) | Trial time s (mean) | Termination reasons |
+|---|---|---|---|---|---|---|
+| FINAL.K0 | 2/2 | 100% (2) | 100% | 1.0 | 95.9 | plan_completed: 2 |
+| FINAL.G0 | 2/2 | 100% (2) | 100% | 1.0 | 91.3 | plan_completed: 2 |
+| FINAL.K1 | 2/2 | 100% (2) | 100% | 2.0 | 129.5 | plan_completed: 2 |
+| FINAL.K2 | 2/2 | 100% (2) | 100% | 1.0 | 99.5 | plan_completed: 2 |
+| FINAL.K3 | 2/2 | 100% (2) | 100% | 2.0 | 131.6 | plan_completed: 2 |
+| FINAL.K4 | 2/2 | 100% (2) | 100% | 2.0 | 139.5 | plan_completed: 2 |
+| FINAL.G1 | 2/2 | 100% (2) | 100% | 2.0 | 150.1 | plan_completed: 2 |
+| FINAL.G2 | 2/2 | 100% (2) | 100% | 2.0 | 142.8 | plan_completed: 2 |
+| FINAL.G3 | 2/2 | 100% (2) | 100% | 2.0 | 137.0 | plan_completed: 2 |
+| FINAL.K3-n2 | 2/2 | 100% (2) | 100% | 2.0 | 157.2 | plan_completed: 2 |
+| FINAL.K3-n3 | 2/2 | 100% (2) | 100% | 2.0 | 173.8 | plan_completed: 2 |
+| FINAL.G1-n1 | 2/2 | 100% (2) | 100% | 2.0 | 127.0 | plan_completed: 2 |
+| FINAL.K1-w1 | 2/2 | 100% (2) | 100% | 2.0 | 148.3 | plan_completed: 2 |
+| FINAL.K1-w2 | 2/2 | 100% (2) | 100% | 2.5 | 184.9 | plan_completed: 2 |
