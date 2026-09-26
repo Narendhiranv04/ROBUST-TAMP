@@ -109,11 +109,29 @@ Implementation order is IF → WHERE → WHEN (not IF → WHEN → WHERE) on pur
 
 With all flags at their defaults, behavior must equal the Phase 1 baseline.
 
-**Run settings that are not flags (Phase 7b):**
+**Run settings that are not flags (Phase 7b, 7c):**
 - The replan budget is `max_replans = 10` for every run type (model, oracle, matrix, benchmark), set in `LLMPipelineConfig` only and logged in `trial_start`.
-- Real-model trials refuse to start on a dirty working tree (modified tracked files), or when the planner does not report thinking mode on and format repair off (`GET /settings` on the planner server). `/no_think` is never added by default.
+- **Planner (Phase 7c):** real-model trials call a vLLM server's OpenAI-compatible API (`--remote`, default `--remote-api openai`; `llm_pipeline/vllm_client.py`, server set-up in `server/SERVER.md`):
+  - thinking is on (`enable_thinking`), and the thinking is logged separately from the answer;
+  - sampling is the model card's recommended thinking-mode setting;
+  - there is no hidden second call, and model outputs are never retried.
+
+  The previous planner server (`--remote-api legacy`) stays available.
+- **Refusals:** real-model trials refuse to start on any of the following:
+  - a dirty working tree (modified tracked files);
+  - a planner that does not report its settings;
+  - thinking not on, or format repair not reported as exactly off;
+  - a served model or model revision different from the requested and pinned one, or an empty revision;
+  - an unknown server identity (vLLM version; the legacy server's clean git commit).
+
+  The refusals apply in `trial_runner` and the `pipeline.py` CLI (the matrix and benchmark runners go through `trial_runner`). The server's settings fingerprint is checked before every planner call; a change during a trial is infrastructure. `/no_think` is never added by default.
 - `trial_start` logs every flag and setting, including the planner settings and the simulated planner delay (oracle tests only; always off for real models).
-- Planner-server errors, connection failures and timeouts are infrastructure: the trial is excluded from scoring and rerun (at most 2 reruns, logged).
+- **Infrastructure:** excluded from scoring and rerun (at most 2 reruns, logged). This covers:
+  - planner-server errors, including runtime errors in the planner such as out of memory or a model that is not loaded (they are never scored as model failures);
+  - an unsuccessful response with no output and no plan-check failure;
+  - connection failures and timeouts (a timed-out job is cancelled);
+  - a simulator exception during an action (`simulator_error`).
+- **Seeding (Phase 7c):** the trial seed also seeds the motion planner (IK sampling, RRT-Connect) and the placement samplers, by purpose and call index (`TAMP_TRIAL_SEED`). Remaining run-to-run variance comes only from wall-clock time limits in IK, RRT and pddlstream (see `mujoco_port/README.md`).
 
 Flags are set on the command line with `--flag name=value` (e.g. `--flag termination.mode=evaluator`); values of flags whose phase is not implemented yet are rejected. In-context examples are off (`--icl-mode zero_shot`); `prompt.version=v2` has none. All runs use `--goal-check` off.
 
@@ -215,7 +233,7 @@ Goal: a set of variants in **three families**. Every variant proves exactly one 
 | **B. Core** | The IF and WHERE cases | K1–K4, G1–G3 |
 | **C. Cardinality** | How the system scales when one count increases | C1: K3-n2, K3-n3, G1-n1, G1-n3 · C2: K1-w2, K1-w4 |
 
-Naming: `-nX` = X trigger objects revealed at once; `-wX` = X extra groceries on the table (extra independent work). Total: 15 variants planned; **14 built** (G1-n3 dropped: three meats do not fit outside the grill placement area; C2 is w = 0, 1, 2 because the cupboard shelf holds about 4 groceries; docs/VARIANTS.md §4, §7, Q12).
+Naming: `-nX` = X trigger objects revealed at once; `-wX` = X extra groceries on the table (extra independent work). Total: 15 variants planned; **14 built** (G1-n3 dropped: three meats do not fit outside the grill placement area; C2 is w = 0, 1, 2 because the cupboard shelf then held about 4 groceries (from Phase 7c the whole shelf interior is used and more fit, docs/VARIANTS.md §10); docs/VARIANTS.md §4, §7, Q12).
 
 ### 3.1 Audit first
 1. Inventory the currently ported variants from the actual MuJoCo scene files: initial objects and regions, hidden objects, lid states, goal relations.
@@ -384,7 +402,7 @@ The replan prompt must:
 1. Take the remaining plan (minus any actions already executed).
 2. Insert blocks: `urgent` blocks at the front (in the order returned), `deferred` blocks after their anchor action or at the end.
 3. Run the plan check on the **merged plan**, including a symbolic simulation of placement conflicts: if a `place` into a region occurs while an overlapping object is still in that region's placement area, reject with `insertion_too_late`.
-4. On rejection, re-query the planner model with the reason (counts toward the replan budget). Log whether the accepted insertion was the **first proposal** or came after a re-query. Every rejection of a corrective output (format, unknown names, a block ending while holding, an invalid merged plan, `insertion_too_late`, `merge_conflict`, a repeated output) re-queries for a corrective output, never a full replan (Phase 7b); every planning event logs its output format and the reason for the call.
+4. On rejection, re-query the planner model with the reason (counts toward the replan budget). Log whether the accepted insertion was the **first proposal** or came after a re-query. Every rejection of a corrective output (format, unknown names, a block ending while holding, an invalid merged plan, `insertion_too_late`, `merge_conflict`, a repeated output) re-queries for a corrective output, never a full replan (Phase 7b); every planning event logs its output format and the reason for the call. A block's anchor may name only an action of the remaining plan shown in the prompt (Phase 7c).
 5. The system never enforces food-related urgency (e.g., overcooking). That reasoning is the planner model's job, and the evaluator scores it.
 
 ### 5.4 Insertion modes (for the ablation)
@@ -413,22 +431,32 @@ Also keep `replan.output_mode = full_replan` (previous system) working.
 Goal: while the replan is being generated, keep executing remaining actions unrelated to it.
 
 ### 6.1 Behavior
-1. **Clean point.** Start the replan only when no bundle is mid-execution (gripper empty, no articulation moving). If a trigger appears mid-bundle, finish the bundle first.
-2. **Affected set** of a replan:
-   - the trigger objects themselves,
-   - the region where a trigger object is (its container, e.g. the opened box or grill) **only if the trigger object overlaps that region's placement area** (Phase 7b). A non-overlapping object is not in the way, so placements into its container remain independent (K4: the mugs go into the box while the can's replan is generated; K3: they wait),
-   - the lid of a trigger object's container, always (closing it would change the trigger object, e.g. overcook a cooked meat left in the grill),
-   - the object of the next action, if that action involves the affected region,
-   - the regions the corrective sub-plan may use: goal regions of the trigger objects and the parking/temporary regions (config),
+(As implemented at Phase 7c; `llm_pipeline/parallel.py`, `pipeline._plan_in_parallel`.)
+1. **Clean point.** The replan starts only after a bundle has finished and left the gripper empty (the trigger check runs only there). A trigger never interrupts a bundle.
+2. **Affected set** of a replan, computed once when the trigger fires, from the region each observed object was last seen in:
+   - the trigger objects themselves;
+   - a trigger object's region (its container, e.g. the opened box) **only if the object's footprint overlaps that region's placement area**. Overlap is the IF rule's geometry: an x/y test of the object's bounding box, taken when it was last visible, against the configured placement area. A non-overlapping object is not in the way, so placements into its container stay independent (K4: the mugs go into the box while the can's replan is generated; K3: they wait). Placement areas are configured only for `inside_box` and `inside_grill`; a trigger object in any other region never makes that region affected (no current variant has one);
+   - the **goal region of each trigger object's category**, always, even when it has room (mug → `inside_box`, grocery → `cupboard_shelf`, raw/cooked meat → `plate_top`, plate → `serving_area`; an irrelevant object such as the phone has none). K3 and K4 therefore keep every grocery move into the cupboard waiting, although the cupboard could take them. This is conservative by design: the corrective sub-plan may put the trigger object there;
+   - the scene's **parking regions** (hard-coded: kitchen `table_staging_area`, grill `prep_area`), where a corrective sub-plan may put things out of the way;
+   - **lids**: every lid that closes off an affected region or a trigger object's container, always (for example `grill_lid` whenever a meat is revealed in the grill, even a raw one that is meant to be cooked in the normal cycle). Closing or opening it would change the trigger object (e.g. overcook a cooked meat left in the grill). This is conservative by design;
    - (the gripper is shared; handled by running one bundle at a time).
-3. **Independent actions:** bundles in the remaining plan whose objects and regions do not intersect the affected set and whose earlier dependencies are done or also independent. Keep their order. (Phase 7b) A bundle intersects the affected set when it uses an affected object, places into an affected region, or picks from an affected region that is not a parking region (taking an object out of a parking area cannot conflict with parking something there). A dependent bundle makes later bundles dependent through its objects and its destination region, not through the region it picks from.
-4. **Asynchronous replan.** Send the planner call without blocking. The prompt lists the independent actions that will already have been executed, so the corrective sub-plan doesn't repeat them and the anchors refer to actions still remaining.
-5. **Execute independent bundles** one at a time while waiting. After each bundle, check whether the replan has returned. Never interrupt a bundle.
-6. **When the replan returns** (after the current bundle): run the Phase 5 merge on the updated remaining plan. `urgent` blocks go to the front, so they execute next: this is the "stop and deal with it now" behavior. If an anchor action was already executed during the wait, treat the block as `front` and log `anchor_already_executed`.
-7. **Merge conflict:** if the merged plan fails the plan check because of something done during the wait (e.g., a region just filled), discard it, re-query with the updated state, and log `merge_conflict`.
-8. **No independent actions:** wait, as before.
-9. **New triggers during the wait** are queued and handled after the merge.
-10. Flag: `parallel.enabled`. Must work with every insertion mode.
+   The plan does not add "the object of the next action" separately: the next action's bundle is dependent exactly when it touches the affected set (item 3).
+3. **Bundles and independent bundles.**
+   - **Bundles:** a `pick(o)` immediately followed by `place(o, r)` is one bundle; every other action (a lid action, a lone pick or place) is a bundle of its own.
+   - **Sources and destinations:** a bundle's **pick source** is the region its object is in when the bundle runs, projected along the remaining plan (an earlier bundle may have moved it). Its **destinations** are the place region, or for a lid action the regions the lid closes off.
+   - **Dependent bundles:** a bundle is dependent when it uses an affected object, places into an affected region, or picks from an affected region that is not a parking region (taking an object out of a parking area cannot conflict with parking something there).
+   - **What a dependent bundle blocks:**
+     - through its **objects**: a later bundle using one of them is dependent;
+     - through its **destinations**: a later bundle placing into, or picking from, one of them is dependent;
+     - through its **pick sources**: a later bundle placing into one of them is dependent (the region is not freed until the dependent bundle runs; e.g. groceries must not fill the cupboard while mug3 is still in it). Picking from a shared source stays independent.
+   - **Order:** independent bundles run in their plan order and may run before an earlier dependent bundle they share nothing with.
+4. **Asynchronous replan.** The planner call runs in the background. The prompt shows the **current** state (the observation when the trigger fired) and the actually completed actions. The independent bundles are listed in their own section, "Scheduled to run before your corrective block is applied (not executed yet)", never as completed. The remaining plan excludes them, and a block's `insert: after <id>` may name only an action of the remaining plan (an anchor on a scheduled action is rejected and re-queried).
+5. **Execute independent bundles** one at a time while waiting. Before each bundle, check whether the replan has returned; if it has, stop starting new ones. Never interrupt a bundle. Scheduled bundles that did not start stay in the remaining plan at their position.
+6. **When the replan returns** (after the current bundle): run the Phase 5 merge on the updated remaining plan. `urgent` blocks go to the front, so they execute next: this is the "stop and deal with it now" behavior. (An anchor that was executed in between is still moved to the front and logged `anchor_already_executed`; with scheduled actions excluded from anchors this no longer happens in practice.)
+7. **Merge conflict:** a merged plan that fails the plan check ("merged plan is invalid") after at least one action ran during the wait is labelled `merge_conflict` and re-queried for blocks. The code does not check whether the wait caused it.
+8. **No independent actions:** wait.
+9. **New triggers during the wait:** the trigger check is off during the wait; nothing is queued. The next post-bundle check after the merge (the first bundle of the merged plan) evaluates the state from scratch, so a situation that arose during the wait is picked up then.
+10. Flag: `parallel.enabled` (with `replan.output_mode = corrective`). Works with every insertion mode.
 
 ### 6.2 Logging
 Per replan: affected set, independent actions executed, planner-call latency, robot busy time during the call, robot idle time, merge result, total trial time.
@@ -463,9 +491,9 @@ Goal: a simple report of **8 failure areas**, each with the **percentage of tota
 | 5 | **Task plan error** | The initial plan (not the replan) leads to an unmet goal | trial end, no replan involved |
 | 6 | **Motion/grasp error** | An action failed after all local retries | `action_end` codes |
 | 7 | **Merge conflict** | Merged plan conflicted with actions executed during the wait and was not resolved | `parallel` events |
-| 8 | **Replan budget exhausted** | Replan limit reached, or the same output was produced again for the same state (Phase 7b: hash of abstract state and output; the first repeat is re-queried once with a note that it was already tried and failed, a second repeat stops the trial with termination reason `replan_loop`) | planning events, trial end |
+| 8 | **Replan budget exhausted** | Replan limit reached, or the same output was produced again for the same state (Phase 7c: counted per abstract state, output and failure answered (failure code and failed action), not per trial; the first repeat is re-queried once with a note that it was already tried and failed, and the reason it failed; a second repeat of the same key stops the trial with termination reason `replan_loop`) | planning events, trial end |
 
-Infrastructure problems (planner server down, errors, connection failures, timeouts; simulator crash) are logged as `infrastructure`, excluded from comparisons, counted separately, and rerun at most twice (Phase 7b).
+Infrastructure problems (planner server down, errors including planner runtime errors such as out of memory, connection failures, timeouts, a server whose settings change during a trial; a simulator crash or a simulator exception during an action) are logged as `infrastructure`, excluded from comparisons, counted separately, and rerun at most twice (Phase 7b, 7c).
 
 Separately from failures, report **trigger accuracy**: the % of trials where the IF rule's decisions matched each variant's expected IF decision. This is a system check, not a failure area.
 

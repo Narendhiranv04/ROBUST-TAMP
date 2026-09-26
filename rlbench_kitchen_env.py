@@ -23,6 +23,40 @@ DEFAULT_SCENE_FILE = os.path.join(os.path.dirname(__file__), "task1_variation1.t
 SCENE_FILE = os.environ.get("KITCHEN_SCENE_FILE", DEFAULT_SCENE_FILE)
 MUG_PLACEMENT_MIN_SAMPLE_Z = float(os.environ.get("MUG_PLACEMENT_MIN_SAMPLE_Z", "0.8"))
 
+def _quat_xyzw_from_matrix(R):
+    """Rotation matrix -> quaternion (x, y, z, w)."""
+    R = np.asarray(R, dtype=float)
+    t = np.trace(R)
+    if t > 0:
+        s = 0.5 / np.sqrt(t + 1.0)
+        w, x, y, z = 0.25 / s, (R[2, 1] - R[1, 2]) * s, (R[0, 2] - R[2, 0]) * s, (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w, x, y, z = (R[2, 1] - R[1, 2]) / s, 0.25 * s, (R[0, 1] + R[1, 0]) / s, (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w, x, y, z = (R[0, 2] - R[2, 0]) / s, (R[0, 1] + R[1, 0]) / s, 0.25 * s, (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w, x, y, z = (R[1, 0] - R[0, 1]) / s, (R[0, 2] + R[2, 0]) / s, (R[1, 2] + R[2, 1]) / s, 0.25 * s
+    q = np.array([x, y, z, w])
+    return (q / np.linalg.norm(q)).tolist()
+
+
+def side_grasp_quat(approach_yaw, gamma):
+    """Tip orientation of a horizontal side grasp: the tip z axis (approach) points along
+    ``approach_yaw`` in the horizontal plane, and the fingers close horizontally (the tip x
+    axis, the closing axis, is horizontal and perpendicular to the approach). ``gamma`` = +-pi/2
+    picks which way round; the pick and the cupboard place of one object use the same gamma,
+    so the object is not rolled over between them. R = Rz(yaw) Ry(pi/2) Rz(gamma)."""
+    cz, sz = np.cos(approach_yaw), np.sin(approach_yaw)
+    Rz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]])
+    Ry = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+    cg, sg = np.cos(gamma), np.sin(gamma)
+    Rg = np.array([[cg, -sg, 0.0], [sg, cg, 0.0], [0.0, 0.0, 1.0]])
+    return _quat_xyzw_from_matrix(Rz @ Ry @ Rg)
+
+
 class NoFreePlacement(RuntimeError):
     """A region has no spot where the object's footprint is clear of the other objects."""
 
@@ -362,6 +396,52 @@ class RLBenchKitchenEnv:
         w_max = np.max(world_corners, axis=0)
         return w_min[0], w_max[0], w_min[1], w_max[1], w_min[2], w_max[2]
 
+    # -- cupboard placement (Phase 7c) -------------------------------------------------------
+    CUPBOARD_WALL_THICKNESS = 0.011     # side/back walls and shelves of the cupboard model
+    CUPBOARD_WALL_CLEARANCE = 0.02      # fingers beside the object + margin, from each side wall
+    CUPBOARD_FRONT_INSET = 0.02         # an object's front face this far inside the open front
+    GRIPPER_MAX_OPENING = 0.075         # widest side a side grasp may close across
+
+    def cupboard_interior(self):
+        """Usable interior of the lower cupboard shelf from the cupboard model: the open front,
+        the back wall, the side walls' inner faces and the shelf top (all kitchen variants
+        share the cupboard). Falls back to the cupboard_boundary strip without the model."""
+        cup = getattr(self, 'cupboard', None)
+        wall = float(os.environ.get('CUPBOARD_WALL_THICKNESS', str(self.CUPBOARD_WALL_THICKNESS)))
+        if cup is not None:
+            x0, x1, y0, y1, z0, _ = self._get_world_bounding_box(cup)
+            return {'front_x': x0, 'back_x': x1 - wall, 'min_y': y0 + wall, 'max_y': y1 - wall, 'shelf_z': z0 + wall}
+        x0, x1, y0, y1, z0, z1 = self._get_world_bounding_box(self.cupboard_boundary)
+        return {'front_x': x0, 'back_x': x1, 'min_y': y0, 'max_y': y1, 'shelf_z': z1 - 0.07}
+
+    def cupboard_placement_spec(self, obj):
+        """How a cupboard-bound object is picked and placed (None: previous behaviour).
+
+        The object is picked top-down with the fingers closing across its thinner footprint side
+        (``closing_yaw``). At the cupboard the hand is horizontal (approach +X) and rolled so the
+        fingers close horizontally along Y (``side_grasp_quat``): the object then lies with its
+        height along the cupboard's depth, its longer footprint side vertical and its thinner
+        side across the shelf, so it takes only ``thin`` of the shelf's width. Before Phase 7c
+        the hand closed vertically at the cupboard, which laid the object's longer side across
+        the shelf (sugar 9.5 cm instead of 3.5 cm). Requires an upright object whose thinner side
+        fits the gripper and whose longer side fits under the upper shelf."""
+        if os.environ.get('CUPBOARD_THIN_SIDE_PLACEMENT', '1') == '0':
+            return None
+        try:
+            lx0, lx1, ly0, ly1, lz0, lz1 = obj.get_bounding_box()
+            _, _, _, qx, qy, qz, qw = obj.get_pose()
+        except Exception:
+            return None
+        if 1.0 - 2.0 * (qx * qx + qy * qy) < 0.97:          # local z more than ~14 deg from vertical
+            return None
+        dx, dy, height = lx1 - lx0, ly1 - ly0, lz1 - lz0
+        yaw = float(np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
+        long_side, thin_side, thin_yaw = (dx, dy, yaw + np.pi / 2) if dx >= dy else (dy, dx, yaw)
+        if thin_side > self.GRIPPER_MAX_OPENING or long_side > 0.20 or long_side - thin_side < 0.01:
+            return None                                  # round or square: the old placement is as narrow
+        return {'long': float(long_side), 'thin': float(thin_side), 'height': float(height),
+                'closing_yaw': float(thin_yaw)}
+
     def _placement_rng(self, obj, region_name):
         """Random generator for one placement sample (Phase 7c).
 
@@ -385,21 +465,19 @@ class RLBenchKitchenEnv:
         return np.random.default_rng([int(seed) % (2 ** 32), zlib.crc32(name.encode()), zlib.crc32(key[1].encode()),
                                       calls[key]])
 
-    def _cupboard_free_candidates(self, obj, min_x, max_x, min_y, max_y, w_min_z, w_max_z):
-        """Shelf positions where the object's footprint does not overlap any other object's
-        footprint (plus a margin), ordered by how tightly they pack against an object or a wall.
+    def _cupboard_free_candidates(self, obj, half_y, interior):
+        """Shelf positions (y) where the object's width (half_y + margin) is clear of every
+        other object on the shelf, ordered by how tightly they pack against an object or a
+        side wall.
 
-        The shelf is shallow (about 9 cm), so objects on it form a row along y; a spot is free
-        when the object's y-interval (half-extent + margin) is clear of every other object's.
-        Packing against a neighbour or a wall leaves the free width in one piece, so a later
-        grocery still fits (Phase 7c: the old sampler picked among the 8 best spots of a coarse
-        5x5 grid by centre distance and could target a spot overlapping a can)."""
+        Objects on the shelf form a row along y at its front (their depth does not matter:
+        the shelf is 31 cm deep), so a spot is free when its y-interval is clear. Packing
+        against a neighbour or a wall leaves the free width in one piece (Phase 7c: the old
+        sampler picked among the 8 best spots of a coarse grid by centre distance and could
+        target a spot overlapping a can)."""
         margin = float(os.environ.get('CUPBOARD_FREE_MARGIN', '0.01'))
-        try:
-            ox0, ox1, oy0, oy1, _, _ = self._get_world_bounding_box(obj)
-            half_x, half_y = 0.5 * (ox1 - ox0), 0.5 * (oy1 - oy0)
-        except Exception:
-            half_x, half_y = 0.03, 0.03
+        clearance = float(os.environ.get('CUPBOARD_WALL_CLEARANCE', str(self.CUPBOARD_WALL_CLEARANCE)))
+        min_y, max_y = interior['min_y'] + clearance, interior['max_y'] - clearance
         occupied = []
         seen = set()
         for name, other in getattr(self, 'name_to_obj', {}).items():
@@ -418,32 +496,26 @@ class RLBenchKitchenEnv:
                 bx0, bx1, by0, by1, bz0, bz1 = self._get_world_bounding_box(other)
             except Exception:
                 continue
-            if bz1 < w_min_z - 0.05 or bz0 > w_max_z + 0.20:
+            if bz0 > interior['shelf_z'] + 0.25 or bz1 < interior['shelf_z'] - 0.02:
                 continue                           # not on this shelf
-            if bx1 < min_x - 0.10 or bx0 > max_x + 0.10 or by1 < min_y - 0.10 or by0 > max_y + 0.10:
+            if bx1 < interior['front_x'] - 0.02 or bx0 > interior['back_x'] or by1 < min_y - 0.10 or by0 > max_y + 0.10:
                 continue
             occupied.append((by0, by1))
-        grid_x = max(1, int(os.environ.get('CUPBOARD_SAMPLE_GRID_X', '3')))
-        grid_y = max(2, int(os.environ.get('CUPBOARD_SAMPLE_GRID_Y', '25')))
+        grid_y = max(2, int(os.environ.get('CUPBOARD_SAMPLE_GRID_Y', '41')))
         lo_y, hi_y = min_y + half_y + margin, max_y - half_y - margin
         if lo_y > hi_y:
-            lo_y = hi_y = 0.5 * (min_y + max_y)
-        xs = np.linspace(min_x, max_x, grid_x + 2)[1:-1] if grid_x > 1 else [0.5 * (min_x + max_x)]
-        ys = np.linspace(lo_y, hi_y, grid_y)
+            return []
         free = []
-        for y in ys:
+        for y in np.linspace(lo_y, hi_y, grid_y):
             y0, y1 = y - half_y - margin, y + half_y + margin
             if any(y0 < b1 and b0 < y1 for b0, b1 in occupied):
                 continue
-            # Packing score: gap to the nearest neighbour or wall on either side (smaller = tighter).
             edges_below = [b1 for b0, b1 in occupied if b1 <= y0] + [min_y]
             edges_above = [b0 for b0, b1 in occupied if b0 >= y1] + [max_y]
             gap = min(y0 - max(edges_below), min(edges_above) - y1)
-            for x in xs:
-                free.append((round(max(0.0, gap), 4), float(y), float(x)))
-        # Tightest first; ties from the low-y wall, then the front of the shelf.
-        free.sort()
-        return [(gap, x, y) for gap, y, x in free]
+            free.append((round(max(0.0, gap), 4), float(y)))
+        free.sort()       # tightest first; ties from the low-y wall
+        return free
 
     def sample_stable_pose(self, obj, region_name):
         """Return a stable 7D pose (x,y,z,qx,qy,qz,qw) for obj in region."""
@@ -649,27 +721,35 @@ class RLBenchKitchenEnv:
             if is_mug:
                 sample_z = max(sample_z, MUG_PLACEMENT_MIN_SAMPLE_Z)
         elif region_name in ('cupboard_lower', 'cupboard_shelf'):
-            cupboard_padding = float(os.environ.get("CUPBOARD_LOWER_SAMPLE_PADDING", str(padding)))
-            if (w_max_x - w_min_x) < 2 * cupboard_padding:
-                cupboard_padding = 0
-            if (w_max_y - w_min_y) < 2 * cupboard_padding:
-                cupboard_padding = 0
-            min_x = w_min_x + cupboard_padding
-            max_x = w_max_x - cupboard_padding
-            min_y = w_min_y + cupboard_padding
-            max_y = w_max_y - cupboard_padding
-            # Only spots where the object's footprint is clear of every other object (Phase 7c).
-            free = self._cupboard_free_candidates(obj, min_x, max_x, min_y, max_y, w_min_z, w_max_z)
+            # Phase 7c: the whole lower-shelf interior (side walls, open front) for every kitchen
+            # variant, and only spots where the object's width is clear of every other object.
+            # A side-graspable object stands upright with its long side along the depth; any
+            # other object keeps the previous behaviour (turned by the horizontal insertion).
+            interior = self.cupboard_interior()
+            spec = self.cupboard_placement_spec(obj)
+            if spec is not None:
+                # The hand's tip is on the object's axis: the object lies with its longer footprint
+                # side vertical, so its bottom is 1 cm above the shelf when the tip is at
+                # shelf + long/2 + 1 cm; its top (facing the robot) is about 6 cm in front of the tip.
+                half_x, half_y = 0.06, 0.5 * spec['thin']
+                sample_z = interior['shelf_z'] + 0.5 * spec['long'] + 0.01
+            else:
+                try:
+                    ox0, ox1, oy0, oy1, _, _ = self._get_world_bounding_box(obj)
+                    half_x, half_y = 0.5 * max(ox1 - ox0, oy1 - oy0), 0.5 * max(ox1 - ox0, oy1 - oy0)
+                except Exception:
+                    half_x = half_y = 0.05
+                sample_z = w_max_z + 0.005
+            free = self._cupboard_free_candidates(obj, half_y, interior)
             if not free:
                 raise NoFreePlacement(f'no free spot for {obj.get_name()} on the cupboard shelf')
             # The k-th sample for this object takes the k-th tightest free spot: the first reachable
             # one packs against a neighbour or a wall; the planner's retries (unreachable spots)
             # walk on through the free width.
             k = int(getattr(self, '_last_placement_call', 1)) - 1
-            _, sample_x, sample_y = free[k % len(free)]
-
-            # Keep the previous lower-cupboard Z behavior; only choose clearer XY.
-            sample_z = w_max_z + 0.005
+            _, sample_y = free[k % len(free)]
+            inset = float(os.environ.get('CUPBOARD_FRONT_INSET', str(self.CUPBOARD_FRONT_INSET)))
+            sample_x = min(interior['front_x'] + inset + half_x, interior['back_x'] - half_x)
         elif region_name == 'table':
             # Anywhere on the table except inside another region: the box (whose floor
             # is at table height), the open box lid, the cupboard, and the placement areas.
@@ -1196,6 +1276,14 @@ class RLBenchKitchenEnv:
                      # Legacy behavior
                      angles = np.linspace(0, 2*np.pi, 16)
 
+            cupboard_spec = (self.cupboard_placement_spec(obj)
+                             if getattr(self, 'target_region_name', None) in CUPBOARD_TARGET_REGIONS else None)
+            if cupboard_spec is not None:
+                # Phase 7c: close exactly across the thin side (the fingers close along the grasp
+                # frame's x axis = (cos angle, sin angle)), so the cupboard place (fingers along Y)
+                # puts the thin side across the shelf.
+                closing = cupboard_spec['closing_yaw']
+                angles = [closing, closing + np.pi] + [closing + d for d in (np.pi / 12, -np.pi / 12)] + list(angles)
             for angle in angles:
                 q = quaternion_from_euler(np.pi, 0, angle)
                 grasp_quats.append(q)
@@ -1203,7 +1291,7 @@ class RLBenchKitchenEnv:
             # opening in one direction: try first the grasps whose fingers close
             # across its shorter side (the fingers close along the grasp frame's x axis).
             ext_x, ext_y = (w_max_x - w_min_x), (w_max_y - w_min_y)
-            if abs(ext_x - ext_y) > 0.01 and max(ext_x, ext_y) > 0.07:
+            if cupboard_spec is None and abs(ext_x - ext_y) > 0.01 and max(ext_x, ext_y) > 0.07:
                 long_axis = np.array([1.0, 0.0, 0.0]) if ext_x > ext_y else np.array([0.0, 1.0, 0.0])
 
                 def _closing_alignment(q):
@@ -1287,6 +1375,10 @@ class RLBenchKitchenEnv:
                             t3 = get_configs(path3)
 
                             grasp = [0]*7
+                            if not adaptive_pick_mode:
+                                # Phase 7c: how far below the object's top the fingers hold it (the
+                                # cupboard thin-side place sets its insertion depth from it).
+                                self.__dict__.setdefault('planned_grasp_depths', {})[obj.get_name()] = float(depth)
                             return grasp, q_hover, q_hover_end, (t2, t3)
 
                         except Exception:
@@ -1304,6 +1396,7 @@ class RLBenchKitchenEnv:
     def compute_place_trajectory(self, obj, pose, region_name=None):
         """Return grasp, q_start, q_end, and trajectory for placing obj at pose (LOWER & RELEASE)."""
         original_conf = self.get_robot_conf()
+        place_targets = None   # Phase 7c: several (place, hover) targets for the cupboard thin-side place
         try:
             # 1. Determine Strategy based on Region
             region_name = normalize_region_name(region_name)
@@ -1351,11 +1444,30 @@ class RLBenchKitchenEnv:
                 # Try multiple rolls to find one that works (e.g. fingers horizontal vs vertical)
                 # Base orientation: Ry=pi/2 (Z points +X)
                 base_ry = np.pi/2
-                # User requires strict "FACING X DIRECTION" without weird rotations.
-                # Restricting to roll=0 ensures the gripper is upright/aligned standardly.
-                for roll in [0]:
-                     q = quaternion_from_euler(roll, base_ry, 0)
-                     grasp_quats.append(q)
+                cupboard_spec = self.cupboard_placement_spec(obj)
+                if cupboard_spec is not None:
+                    # Phase 7c: fingers closing horizontally (along Y) at the cupboard, so the
+                    # object's thin side (the one the top-down pick closed across) is across the
+                    # shelf. Both roll signs give the same footprint. The hand in this roll only
+                    # clears the shelf when the tip is well above it, so the tip goes only as deep
+                    # as needed (the object's near face 1 cm inside the open front; the object
+                    # itself reaches into the cupboard) and at the lowest collision-free height,
+                    # from the object's bottom 1 cm above the shelf upwards.
+                    grasp_quats.extend([side_grasp_quat(0.0, np.pi / 2), side_grasp_quat(0.0, -np.pi / 2)])
+                    interior = self.cupboard_interior()
+                    depth = float((getattr(self, 'planned_grasp_depths', {}) or {}).get(obj.get_name(), 0.02))
+                    tip_x = interior['front_x'] + 0.01 + depth
+                    lowest = interior['shelf_z'] + 0.5 * cupboard_spec['long'] + 0.01
+                    place_targets = []
+                    for dz in np.arange(0.0, 0.10, 0.01):
+                        z = max(lowest, float(pose[2])) + dz
+                        place_targets.append(([tip_x, pose[1], z], [tip_x - hover_dist, pose[1], z]))
+                else:
+                    # User requires strict "FACING X DIRECTION" without weird rotations.
+                    # Restricting to roll=0 ensures the gripper is upright/aligned standardly.
+                    for roll in [0]:
+                         q = quaternion_from_euler(roll, base_ry, 0)
+                         grasp_quats.append(q)
 
             else:
                 # --- VERTICAL APPROACH (Top-Down) ---
@@ -1400,70 +1512,73 @@ class RLBenchKitchenEnv:
                     q = quaternion_from_euler(np.pi, 0, angle)
                     grasp_quats.append(q)
             
-            # 3. Solve IK
-            for grasp_rot in grasp_quats:
-                try:
-                    # A. Solve IK for Hover Pose
-                    ik_time_ms = 150 if is_box_region else 50
-                    path_configs_hover = self.robot.solve_ik_via_sampling(
-                        target_pos_hover,
-                        quaternion=grasp_rot,
-                        max_configs=1,
-                        max_time_ms=ik_time_ms,
-                        ignore_collisions=True,
-                    )
-                    if path_configs_hover is None or len(path_configs_hover) == 0: 
-                        continue
-                    q_hover = path_configs_hover[0]
+            # 3. Solve IK (Phase 7c: over the place targets; one unless the cupboard
+            # thin-side placement lists several heights)
+            targets = place_targets or [(target_pos_place, target_pos_hover)]
+            for target_pos_place, target_pos_hover in targets:
+                for grasp_rot in grasp_quats:
+                    try:
+                        # A. Solve IK for Hover Pose
+                        ik_time_ms = 150 if is_box_region else 50
+                        path_configs_hover = self.robot.solve_ik_via_sampling(
+                            target_pos_hover,
+                            quaternion=grasp_rot,
+                            max_configs=1,
+                            max_time_ms=ik_time_ms,
+                            ignore_collisions=True,
+                        )
+                        if path_configs_hover is None or len(path_configs_hover) == 0: 
+                            continue
+                        q_hover = path_configs_hover[0]
                     
-                    # B. Solve IK for Place Pose
-                    path_configs_place = self.robot.solve_ik_via_sampling(
-                        target_pos_place,
-                        quaternion=grasp_rot,
-                        max_configs=1,
-                        max_time_ms=ik_time_ms,
-                        ignore_collisions=True,
-                    )
-                    if path_configs_place is None or len(path_configs_place) == 0: 
-                        continue
-                    q_place = path_configs_place[0]
+                        # B. Solve IK for Place Pose
+                        path_configs_place = self.robot.solve_ik_via_sampling(
+                            target_pos_place,
+                            quaternion=grasp_rot,
+                            max_configs=1,
+                            max_time_ms=ik_time_ms,
+                            ignore_collisions=True,
+                        )
+                        if path_configs_place is None or len(path_configs_place) == 0: 
+                            continue
+                        q_place = path_configs_place[0]
                     
-                    # C. Plan Hover -> Place (Linear)
-                    path_down = self._get_linear_path(
-                        q_hover,
-                        target_pos_place,
-                        grasp_rot,
-                        steps=50,
-                        ignore_collisions=is_box_region,
-                    )
-                    if not path_down: 
-                        continue
+                        # C. Plan Hover -> Place (Linear)
+                        path_down = self._get_linear_path(
+                            q_hover,
+                            target_pos_place,
+                            grasp_rot,
+                            steps=50,
+                            ignore_collisions=is_box_region,
+                        )
+                        if not path_down: 
+                            continue
                     
-                    # D. Plan Place -> Hover (Linear Return)
-                    path_up = self._get_linear_path(
-                        q_place,
-                        target_pos_hover,
-                        grasp_rot,
-                        steps=50,
-                        ignore_collisions=is_box_region,
-                    )
-                    if not path_up:
-                        path_down.remove()
-                        continue
+                        # D. Plan Place -> Hover (Linear Return)
+                        path_up = self._get_linear_path(
+                            q_place,
+                            target_pos_hover,
+                            grasp_rot,
+                            steps=50,
+                            ignore_collisions=is_box_region,
+                        )
+                        if not path_up:
+                            path_down.remove()
+                            continue
                         
-                    # Extract configs
-                    def get_configs(p):
-                        return p._path_points.reshape(-1, 7).tolist()
+                        # Extract configs
+                        def get_configs(p):
+                            return p._path_points.reshape(-1, 7).tolist()
 
-                    t_down = get_configs(path_down)
-                    t_up = get_configs(path_up)
+                        t_down = get_configs(path_down)
+                        t_up = get_configs(path_up)
                     
-                    grasp = [0]*7
-                    # Return split trajectories
-                    return grasp, q_hover, q_hover, (t_down, t_up)
+                        grasp = [0]*7
+                        # Return split trajectories
+                        return grasp, q_hover, q_hover, (t_down, t_up)
 
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
 
             raise RuntimeError(f"Could not find valid place configuration for region {region_name}")
         finally:

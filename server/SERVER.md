@@ -91,8 +91,8 @@ Exact serve command (`logs/serve_command.txt`):
 ```sh
 export HF_HOME=/home/projects/long-horizon/.cache/huggingface HF_HUB_OFFLINE=1 CUDA_HOME=/usr/local/cuda
 export PATH=~/robust_tamp_infer/.venv/bin:/usr/local/cuda/bin:$PATH   # flashinfer JIT needs ninja + nvcc
-~/robust_tamp_infer/.venv/bin/vllm serve Qwen/Qwen3-VL-8B-Thinking \
-  --revision 92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b \
+~/robust_tamp_infer/.venv/bin/vllm serve \
+  /home/projects/long-horizon/.cache/huggingface/hub/models--Qwen--Qwen3-VL-8B-Thinking/snapshots/92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b \
   --served-model-name qwen3-vl-8b-thinking \
   --host 127.0.0.1 --port 8000 \
   --tensor-parallel-size 1 \
@@ -118,7 +118,7 @@ ssh -i ~/keyfile -N -L 8000:127.0.0.1:8000 long-horizon@gvlab2.iiit.ac.in
 curl http://127.0.0.1:8000/v1/models
 ```
 
-**Integration note:** this is the OpenAI-compatible API (`/v1/chat/completions`). The maintained ROBUST TAMP client (`llm_pipeline/client.py`) speaks the project's own planner-server protocol (`/settings`, `/plan/submit`, `/plan/jobs/<id>`). Real-model trials need an adapter, or a client for this API, before they can use this server. That work is not done here.
+**Integration (Phase 7c):** the pipeline talks to this server directly: `python -m llm_pipeline.trial_runner --remote --model qwen3-vl-8b-thinking --remote-url http://127.0.0.1:8000 ...` (default `--remote-api openai`; `llm_pipeline/vllm_client.py`). The script serves the pinned snapshot **directory** (not the repo id), so `GET /v1/models` reports `root = .../snapshots/<revision>`: the client reads the revision from it and refuses a trial if it differs from the pinned one (`vllm_client.PINNED_MODELS`), and re-checks it before every call.
 
 ## Health checks (2026-09-27, `health_check.py`, output in `logs/health_check.json`)
 

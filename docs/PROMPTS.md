@@ -326,3 +326,28 @@ pick(phone)
 place(phone, table)
 END BLOCK
 ```
+
+
+## 7. Replan prompt during parallel planning (Phase 6, revised in Phase 7c)
+
+With `parallel.enabled = true`, the robot runs the independent bundles of the remaining plan while the planner works (plan.md 6.1). The corrective replan prompt then has one more section between "Completed actions" and "Remaining plan":
+
+```
+## Completed actions
+- a1: pick(mug2)
+- a2: place(mug2, table_center_area)
+- a3: open(box_lid)
+
+## Scheduled to run before your corrective block is applied (not executed yet)
+- a4: pick(spam)
+- a5: place(spam, cupboard_shelf)
+- a6: pick(sugar)
+- a7: place(sugar, cupboard_shelf)
+- These actions run while you plan. Do not repeat them, and do not use their ids as an insertion point; the Current state does not include their effects yet.
+
+## Remaining plan (not executed yet)
+- a8: pick(mug2)
+- a9: place(mug2, inside_box)
+```
+
+The Current state is the observation when the trigger fired, and "Completed actions" lists only what actually ran, so the state and the lists cannot contradict each other (before Phase 7c the scheduled actions were listed as completed while the state still showed the objects where they were; audit 1 S-2, audit 3). A block may anchor (`insert: after <id>`) only on an action of the remaining plan. Snapshot: `llm_pipeline/tests/snapshots/prompt_v2_kitchen_parallel_corrective_user.txt`; the consistency check is `test_phase7c.prompt_contradictions`.

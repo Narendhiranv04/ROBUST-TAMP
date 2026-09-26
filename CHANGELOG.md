@@ -2,6 +2,66 @@
 
 One entry per phase of `plan.md`: what changed, which flags, which tests.
 
+## Phase 7c: fixes from audit 3, real-model planner on vLLM (branch `phase-7c-fixes`)
+
+Audit 3 (branch `audit`, `docs/AUDIT-3.md`) found one blocker and a list of should-fix items; all are addressed here, and the real-model planner now talks to the lab's vLLM server directly (`server/SERVER.md`).
+
+### Changed
+- **Real-model planner on vLLM** (`llm_pipeline/vllm_client.py`, `--remote --remote-api openai`, the default):
+  - it uses the OpenAI-compatible chat API with thinking on, and logs the thinking separately (`planning_event.reasoning`);
+  - sampling is the model card's recommended thinking-mode setting (VL preset with an image, text preset otherwise);
+  - `planning_event` logs `finish_reason`, the token counts, the sampling preset and the settings fingerprint;
+  - the served model, the snapshot revision, the context length and the vLLM version are re-read and compared before every call.
+
+  The server script serves the pinned snapshot directory, so the revision is visible. The previous planner server stays available as `--remote-api legacy`.
+- **B-1 runtime errors are infrastructure:**
+  - the in-process planners raise on runtime errors (out of memory, CUDA errors, model not loaded) instead of returning an ordinary failed plan, so the server job ends as `error`, the client reports `planner_call_failed`, and the trial ends as `infrastructure`, excluded from scoring and rerun;
+  - an unsuccessful response with empty output and no plan-check failure is infrastructure too;
+  - unparseable model outputs stay model failures.
+
+  Mock tests cover the serial and the parallel corrective path.
+- **Planner settings (item 6):**
+  - real-model trials also refuse a model or revision mismatch, `format_repair` missing or not exactly `False`, an empty revision, an unknown vLLM version or a dirty/unknown legacy server commit, and a legacy model that is not loaded;
+  - the refusals are enforced in `trial_runner` and the `pipeline.py` CLI (the matrix and benchmark runners use `trial_runner`);
+  - the legacy server returns a settings fingerprint with every job status, and the client checks it on every call (a change is infrastructure).
+- **Timeouts and simulator errors (item 7):**
+  - a timed-out legacy job is cancelled (`POST /plan/jobs/<id>/cancel`), and a timed-out vLLM request is aborted when the connection closes;
+  - an exception inside an action primitive that is not a motion-planning failure is `simulator_error` → `infrastructure`.
+- **Reproducibility (item 2):** `TAMP_TRIAL_SEED`, set from the trial seed, seeds the MuJoCo shim's IK and RRT-Connect and every kitchen placement sample, by purpose and call index. Two runs of K3-n3 seed 0 were identical to the millimetre at every step. The remaining variance comes from wall-clock time limits (documented in `mujoco_port/README.md`).
+- **Cupboard (item 2, all kitchen variants):**
+  - the usable region is the lower shelf's interior from the cupboard model: about 51.6 × 31 cm, 2 cm from each side wall;
+  - only spots where the object's width plus 1 cm is clear of every other object are used, packed tightest first, and a full shelf gives no sample;
+  - non-round groceries are picked top-down with the fingers closing exactly across their thin side, and inserted with the fingers closing horizontally at the lowest collision-free tip height and only as deep as needed. They lie with the thin side across the shelf: sugar 3.5 cm (was 9.5 cm), spam about 5 cm;
+  - cans keep the previous placement;
+  - K3-n3 and K1-w2 now fit without pushing each other (before, the sampler targeted occupied spots and succeeded only by shoving earlier groceries deeper).
+- **Replan-wait prompt (item 3):**
+  - independent bundles are listed as "Scheduled to run before your corrective block is applied (not executed yet)", never as completed;
+  - the Current state is the observation at the trigger;
+  - anchors may name only remaining actions;
+  - the bundle metadata (`remaining_plan`, `scheduled_actions`) matches the prompt.
+- **Repeated outputs (item 4):** counted per (abstract state, output, failure answered), not per trial; the note keeps the reason the earlier output failed.
+- **WHEN rule (item 5):** a dependent bundle's pick source blocks later places into it, and pick sources are projected along the plan.
+- **Legacy runners (item 8):** `run_model_trial.py` and `run_model_benchmark.py` are removed.
+- **Docs:** every docs/code mismatch from audit 3 is fixed:
+  - plan.md 0.7, 5.3, 6.1 (the exact WHEN rule, including the dropped "object of the next action" rule and the three conservative choices kept by design: the lid of a trigger object's container always affected, the trigger's goal region always affected, placement areas only for the box and the grill), and 7.1;
+  - ARCHITECTURE sections 3 and 7, Phase 6, and a Phase 7c table;
+  - PROMPTS §7, DIAGNOSTICS, VARIANTS §10, mujoco_port/README, server/SERVER.md.
+
+### Tests
+328 pass (`test_phase7c.py`: 29 new, covering:
+- runtime errors;
+- the vLLM client;
+- refusals;
+- the fingerprint;
+- cancellation;
+- simulator errors;
+- the parallel-prompt snapshot and consistency check;
+- repeats per key;
+- the WHEN pick-source rule, including the K1-w2 "mug3 left in the cupboard" plan;
+- cupboard geometry.
+
+Updated: `test_parallel` (an anchor on a scheduled action is re-queried), `test_phase7b` (repeats per key), `test_trial_runner` (refusals)).
+
 ## Phase 7b: fixes from the audit (branch `phase-7b-fixes`)
 
 The independent audit (branch `audit`, `docs/AUDIT.md`) found six blockers for real-model Phase 8 runs plus two more items the user added (B7, B8). All are fixed here; every oracle suite was rerun at one clean commit.

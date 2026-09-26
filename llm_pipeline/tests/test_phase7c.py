@@ -387,3 +387,94 @@ def test_pick_sources_are_projected_along_the_plan() -> None:
                  ('a7', 'open(grill_lid)'), ('a8', 'pick(raw_meat_1)'), ('a9', 'place(raw_meat_1, plate_top)')]
     bundles = split_bundles(remaining, {'raw_meat_1': 'prep_area'})
     assert bundles[0].sources == {'prep_area'} and bundles[-1].sources == {'inside_grill'}
+
+
+# ------------------------------------------------------------------- cupboard placement (item 2)
+class _Box:
+    """A shape stand-in: local bounding box, pose and a world bounding box."""
+
+    def __init__(self, name, center, dims, yaw=0.0):
+        import math
+        self.name, self.center, self.dims, self.yaw = name, center, dims, yaw
+        self.q = [0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2)]
+
+    def get_name(self):
+        return self.name
+
+    def get_handle(self):
+        return id(self)
+
+    def get_bounding_box(self):
+        dx, dy, dz = self.dims
+        return [-dx / 2, dx / 2, -dy / 2, dy / 2, -dz / 2, dz / 2]
+
+    def get_pose(self):
+        return list(self.center) + self.q
+
+    def world(self):
+        import math
+        dx, dy, dz = self.dims
+        c, s = abs(math.cos(self.yaw)), abs(math.sin(self.yaw))
+        hx, hy = 0.5 * (dx * c + dy * s), 0.5 * (dx * s + dy * c)
+        x, y, z = self.center
+        return [x - hx, x + hx, y - hy, y + hy, z - dz / 2, z + dz / 2]
+
+
+def _kitchen_env(objects):
+    import rlbench_kitchen_env as K
+
+    env = object.__new__(K.RLBenchKitchenEnv)
+    env.cupboard = _Box('cupboard', (0.5945, 0.0, 1.533), (0.321, 0.538, 0.644))
+    env.name_to_obj = {o.name: o for o in objects}
+    env._get_world_bounding_box = lambda o: o.world()
+    return env
+
+
+def test_the_side_grasp_quaternion_approaches_horizontally_and_closes_horizontally() -> None:
+    import numpy as np
+    import rlbench_kitchen_env as K
+
+    for yaw in (0.0, 0.7):
+        x, y, z, w = K.side_grasp_quat(yaw, np.pi / 2)
+        R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                      [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                      [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+        approach, closing = R[:, 2], R[:, 0]
+        assert np.allclose(approach, [np.cos(yaw), np.sin(yaw), 0.0], atol=1e-9)
+        assert abs(closing[2]) < 1e-9 and abs(float(np.dot(closing, approach))) < 1e-9
+
+
+def test_non_round_groceries_are_placed_thin_side_across_and_cans_keep_the_old_placement() -> None:
+    import numpy as np
+
+    sugar = _Box('sugar', (0.06, -0.40, 0.8375), (0.035, 0.09, 0.175), yaw=0.29)
+    can = _Box('soup', (0.0, 0.26, 0.80), (0.055, 0.055, 0.10))
+    env = _kitchen_env([sugar, can])
+    spec = env.cupboard_placement_spec(sugar)
+    assert spec['thin'] == pytest.approx(0.035) and spec['long'] == pytest.approx(0.09)
+    # The pick closes across the thin side: the local x axis (0.035) rotated by the object yaw.
+    assert np.isclose(np.cos(spec['closing_yaw'] - 0.29), 1.0) or np.isclose(np.cos(spec['closing_yaw'] - 0.29), -1.0)
+    assert env.cupboard_placement_spec(can) is None
+    interior = env.cupboard_interior()
+    assert interior['min_y'] == pytest.approx(-0.258) and interior['max_y'] == pytest.approx(0.258)
+    assert interior['shelf_z'] == pytest.approx(1.222)
+
+
+def test_the_cupboard_sampler_only_returns_free_spots_packed_tightest_first() -> None:
+    placed = [_Box('can_a', (0.48, -0.15, 1.25), (0.055, 0.055, 0.10)),
+              _Box('can_b', (0.48, 0.05, 1.25), (0.055, 0.055, 0.10))]
+    sugar = _Box('sugar', (0.06, -0.40, 0.8375), (0.035, 0.09, 0.175))
+    env = _kitchen_env(placed + [sugar])
+    interior = env.cupboard_interior()
+    free = env._cupboard_free_candidates(sugar, 0.0175, interior)
+    assert free, 'the shelf has room'
+    for _, y in free:
+        for box in placed:
+            _, _, y0, y1, _, _ = box.world()
+            assert y + 0.0175 + 0.01 <= y0 + 1e-9 or y - 0.0175 - 0.01 >= y1 - 1e-9
+    gaps = [gap for gap, _ in free]
+    assert gaps == sorted(gaps) and gaps[0] == pytest.approx(0.0, abs=0.006)
+    # A shelf with no room gives no spot (the place then has no plan).
+    row = [_Box(f'c{i}', (0.48, -0.21 + 0.068 * i, 1.25), (0.055, 0.055, 0.10)) for i in range(7)]
+    full = _kitchen_env(row + [sugar])
+    assert full._cupboard_free_candidates(sugar, 0.0175, full.cupboard_interior()) == []

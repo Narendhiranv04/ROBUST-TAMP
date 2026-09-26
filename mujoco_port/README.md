@@ -69,6 +69,28 @@ Run parallel jobs from separate working directories: pddlstream writes
 `./temp/output.sas`, so concurrent runs in one cwd corrupt each other
 (`run_gt_matrix.py` and `tools/run_partial.py` already do this).
 
+## Seeding and remaining run-to-run variance (Phase 7c)
+
+`TAMP_TRIAL_SEED` (the trial runner sets it to the trial seed) seeds every random draw of the
+execution stack, per purpose and call index, so the draws do not depend on what else consumed
+random numbers:
+- the shim's IK sampling (`simGetConfigForTipPose`) and RRT-Connect (`getNonlinearPath`):
+  `_world.trial_rng('ik' | 'rrt', call index)`;
+- every placement sample of the kitchen env (`sample_stable_pose`, `find_best_placement`):
+  `(seed, object, region, sample index)`.
+
+Before Phase 7c the IK and RRT generators were unseeded (`np.random.default_rng()`), so two runs of
+the same seed and commit diverged at the millimetre level from the first arm motion, and a marginal
+placement could succeed in one run and fail in the next (docs/AUDIT-3.md, section 5).
+
+**What still varies:** wall-clock time limits. IK stops after `max_time_ms` (10-1000 ms by caller;
+the shim caps it at 250 ms), RRT-Connect after `MUJOCO_SHIM_RRT_TIME` (2 s), and pddlstream's
+adaptive search samples "for up to" a time budget and stops at `max_time=60` s. A slower or busier
+machine may therefore try fewer IK seeds or stream samples before giving up; with the same draws in
+the same order this changes an outcome only when a solution is found late in the budget. Runs on
+the same machine under the same load are identical to the millimetre (K3-n3 seed 0, two runs, every
+observation step identical); the Phase 7c ceiling was run twice to measure the rest (CHANGELOG).
+
 ## Fidelity model (CoppeliaSim semantics that are emulated)
 
 | CoppeliaSim | MuJoCo port |

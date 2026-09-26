@@ -178,7 +178,7 @@ Each sweep changes exactly one count, and everything else equals the core varian
 | K1-w1 | same | +1 (`can_of_beans` on the table) | 1 |
 | K1-w2 | same | +2 (`can_of_beans`, `can_of_beans_2`) | 2 |
 
-(Reduced from w = 0, 2, 4 by Q12: the cupboard shelf holds about 4 groceries.)
+(Reduced from w = 0, 2, 4 by Q12: the cupboard shelf held about 4 groceries with the placement of the time. From Phase 7c the whole lower-shelf interior is usable (about 51.6 cm wide) and non-round groceries lie with their thin side across the shelf, so K3-n3's five groceries and K1-w2's four fit without pushing each other; see §10.)
 
 The extra groceries go to the cupboard, so they don't touch the phone's replan (box, phone, region outside the placement area).
 
@@ -256,3 +256,13 @@ Results: section 9.
 **K2/K4 mug fit (Q4):** the three mugs are placed in the box placement area without moving the hidden object in all 20 trials; the phone (K2) and the can (K4) stay in the far half.
 
 **Regression and later phases:** results/executor_ceiling_regression/ (old K1–K3, G1–G3) and results/phase4–6/, reported with Phases 4–6.
+
+
+## 10. Cupboard placement (Phase 7c, all kitchen variants)
+
+The cupboard is shared by every kitchen variant. From the cupboard model: lower shelf top z = 1.222, upper shelf underside z = 1.528 (30.6 cm clearance), side walls' inner faces at y = ±0.258 (51.6 cm), open front at x = 0.434, back wall at x = 0.745. Before Phase 7c the placement sampler used only the `cupboard_boundary` strip (9.4 x 37 cm, minus 5 cm at each end = 27 cm of width) and picked among the 8 best spots of a coarse grid by centre distance, often targeting a spot overlapping an earlier grocery and pushing it deeper. From Phase 7c:
+- **Usable region:** the whole interior width, 2 cm from each side wall (fingers + margin); objects are placed at the front.
+- **Free spots only:** an object's width plus 1 cm on each side must be clear of every other object on the shelf; spots are tried tightest first (packing against a neighbour or a wall), and a full shelf gives no sample (the place then has no plan).
+- **Orientation:** a non-round grocery is picked top-down with the fingers closing exactly across its thinner side, and inserted with the fingers closing horizontally, so it lies with its height along the depth and its thin side across the shelf: sugar 3.5 cm (was 9.5 cm), spam about 5 cm (was 7-9 cm). Cans (round) keep the previous placement (5.5 cm).
+
+Widths across the shelf: K3-n3 (3 cans, spam, sugar) about 25 cm plus margins; K1-w2 (2 cans, spam, sugar) about 19.5 cm plus margins; both well inside the 47.6 cm usable width.

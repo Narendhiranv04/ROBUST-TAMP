@@ -164,6 +164,17 @@ Not on the main path: `debug_state_builder.py` (`debug_state_recognition` :346),
 
 ## 3. Planner client and remote planner server
 
+**From Phase 7c the real-model planner is a vLLM server's OpenAI-compatible API**
+(`llm_pipeline/vllm_client.py` `VLLMChatPlanner`; server set-up in `server/SERVER.md`): one planner
+call is one `POST /v1/chat/completions` with thinking on (`chat_template_kwargs.enable_thinking`),
+the model card's recommended sampling (VL preset with an image, text preset otherwise), and the
+thinking returned separately (`reasoning_content`, logged as `planning_event.reasoning`). Before every
+call the client re-reads `GET /v1/models` and `/version` (served model, snapshot revision from the
+served path, context length, vLLM version) and compares the settings fingerprint with the one at
+trial start; a change, an HTTP error, a timeout or a malformed response is `planner_call_failed`
+(infrastructure). vLLM aborts a request whose client disconnected, so a timed-out call does not
+keep the GPU busy. The table below describes the previous planner server (`--remote-api legacy`).
+
 | Part | File / class | Interface |
 |---|---|---|
 | Client | `llm_pipeline/client.py` `RemoteTextLLMPlanner` (:27) | `plan(bundle)` :117 → `generate_plan` :135 POST `/plan`; `check_goal_completion` :249 POST `/check-goal`; `load_model` :81 GET `/health` |
@@ -297,9 +308,11 @@ the `FailureEvent` becomes `pending_failure` and the next cycle is a replan.
 - **Output mode today:** the whole remaining plan is regenerated
   (plan.md's `replan.output_mode = full_replan`). Insertion, urgency, memory and
   parallel execution do not exist.
-- **Replan budget:** `max_replans` (config default 10, `trial_runner` CLI default
-  3, `run_10_trials_and_aggregate.py` default 10); up to `max_replans + 1` planner
-  calls; plan-check failures consume budget. **No repeated-output detection.**
+- **Replan budget:** `max_replans = 10` (`DEFAULT_MAX_REPLANS` in `LLMPipelineConfig`, the only
+  default since Phase 7b; no runner has its own). Up to `max_replans + 1` planner calls; plan-check,
+  corrective and repeated-output re-queries and execution-failure replans all consume budget.
+  Repeated outputs are detected from Phase 7b (per state, output and failure answered from
+  Phase 7c; see the Phase 7c section).
 - **Stop conditions:** (a) plan executed and goal check off (the trial default)
   → success (:952); (b) goal check on → `_check_goal_completion_with_deterministic_override`
   (:734): the evaluator's `validate_variant_success` (§8) runs on the current
@@ -476,7 +489,7 @@ Where the MuJoCo backend (`mujoco_port/shim`) behaves differently from plain MuJ
 
 ## Phase 6 changes (WHEN)
 
-`parallel.enabled=true` (with `corrective`): `plan_once` is split into prepare (main thread: observation, prompt), call (thread-safe) and finish (main thread: merge, logs). After a trigger (IF rule, and from Phase 7b discovery), `_plan_in_parallel` computes the affected set (`llm_pipeline/parallel.py`: the trigger objects; a trigger object's container only if the object overlaps that region's placement area, from Phase 7b; the lid of a trigger object's container, always; the trigger objects' goal regions; the parking regions; lids of affected regions) and the independent bundles (from Phase 7b: a bundle is dependent if it uses an affected object, places into an affected region, or picks from an affected non-parking region; a dependent bundle blocks later bundles through its objects and destination, not its pick source), lists those as completed in the prompt, runs the planner call in a background thread and executes the independent bundles one at a time until it returns. The merge then runs on the updated remaining plan (an executed anchor moves the block to the front: `anchor_already_executed`); a merged plan invalidated by what ran meanwhile is a `merge_conflict` and is re-queried. Logged as `parallel` (affected set, independent actions available/executed, planner latency, robot busy and idle time, merge result).
+`parallel.enabled=true` (with `corrective`): `plan_once` is split into prepare (main thread: observation, prompt), call (thread-safe) and finish (main thread: merge, logs). After a trigger (IF rule or discovery), `_plan_in_parallel` computes the affected set and the independent bundles (`llm_pipeline/parallel.py`), runs the planner call in a background thread and executes the independent bundles one at a time until it returns (a bundle is never interrupted); then the merge runs on the updated remaining plan. The exact rule, as of Phase 7c, is plan.md 6.1: affected set (trigger objects; a trigger object's container only if it overlaps the container's placement area, which exists only for `inside_box` and `inside_grill`; the goal region of each trigger object's category, always; the parking regions `table_staging_area` / `prep_area`, hard-coded; the lid closing off an affected region or a trigger object's container, always), bundles (pick+place pairs, every other action alone; pick sources projected along the plan), dependent bundles (affected object, place into an affected region, pick from an affected non-parking region) and what a dependent bundle blocks (later uses of its objects; places into or picks from its destinations; places into its pick sources). The replan prompt lists the independent bundles as scheduled, never as completed, and anchors may name only remaining actions (Phase 7c). A merged plan that fails the plan check after something ran during the wait is logged `merge_conflict` and re-queried. The trigger check is off during the wait (nothing is queued); the first post-bundle check after the merge sees any new situation. Logged as `parallel` (affected set as computed at the trigger, independent actions available/executed, planner latency, robot busy and idle time, merge result).
 
 ## Phase 7 changes (diagnostics)
 
@@ -496,8 +509,24 @@ Where the MuJoCo backend (`mujoco_port/shim`) behaves differently from plain MuJ
 | B8 repeated outputs | Hash of (abstract state, output); first repeat re-queried with a note (`repeated_planner_output`), second stops the trial (`replan_loop`) | `pipeline._repeated_output`, `_abstract_state` |
 | IF rule and memory | Visible ∪ remembered objects only with memory on; overlap from the footprint at last sight (a remembered object's live pose is never read) | `pipeline._if_rule_object_regions`, `_overlapping_regions`, `_overlap_at_last_sight` |
 | Parallel logs | `planning_event` / `plan_check` are logged at the current step with `prompt_step`, so every Phase 6 log passes `validate_trial_log` | `pipeline._log_planning_event` |
-| Affected set | A trigger object's container is affected only if the object overlaps its placement area (overlap from `_overlapping_regions`, the IF rule's geometry); the container's lid always is; pick sources no longer propagate dependencies, and picks from parking regions are allowed (K4: the mugs go into the box during the replan; K3: they wait) | `parallel.affected_set`, `parallel.independent_bundles`, `pipeline._plan_in_parallel` |
+| Affected set (superseded in Phase 7c: pick sources also block later places into them, and are projected along the plan) | A trigger object's container is affected only if the object overlaps its placement area (overlap from `_overlapping_regions`, the IF rule's geometry); the container's lid always is; pick sources no longer propagate dependencies, and picks from parking regions are allowed (K4: the mugs go into the box during the replan; K3: they wait) | `parallel.affected_set`, `parallel.independent_bundles`, `pipeline._plan_in_parallel` |
 | Tests | Root `conftest.py` selects the MuJoCo `pyrep` shim before collection | `conftest.py` |
+
+## Phase 7c changes (fixes from audit 3, docs/AUDIT-3.md on branch `audit`)
+
+| Item | Change | Where |
+|---|---|---|
+| Real-model planner | vLLM's OpenAI-compatible API (section 3): thinking on, model-card sampling, thinking logged separately, settings fingerprint re-checked before every call, every non-output failure is infrastructure. `--remote-api openai` (default) / `legacy` | `llm_pipeline/vllm_client.py`, `pipeline.LLMPipelineConfig.remote_planner_api`, `trial_runner` |
+| Runtime errors (audit B-1) | The in-process planners raise on runtime errors (out of memory, CUDA errors, model not loaded) instead of returning an ordinary failed plan: the server job ends as `error`, the client reports `planner_call_failed`, the trial ends as `infrastructure` (serial and parallel paths). An unsuccessful response with empty output and no plan-check failure is also infrastructure. Unparseable model outputs stay model failures | `planner.PlannerRuntimeError`, `vlm_pipeline/vlm_planner.py`, `client.RemoteTextLLMPlanner.generate_plan` |
+| Refusals and settings | Refuse a model or revision mismatch, `format_repair` not exactly `False`, an empty revision, an unknown vLLM version or a dirty/unknown legacy server commit, a legacy model not loaded; enforced in `trial_runner` and the `pipeline.py` CLI. The legacy server returns a settings fingerprint with every job status; the client compares it on every call | `trial_runner.real_model_refusals`, `server.settings_fingerprint` |
+| Timeouts | A timed-out legacy job is cancelled (`POST /plan/jobs/<id>/cancel`; a queued job never runs, a running one is discarded); a timed-out vLLM request is aborted by closing the connection | `server.PlanJobQueue.cancel`, `client._cancel` |
+| Simulator errors | An exception inside an action primitive that is not a motion-planning failure (mujoco `FatalError`, `MemoryError`, `OSError`, `AttributeError`, `TypeError`, `KeyError`, `IndexError`, ...) is `simulator_error` → infrastructure | `executor.is_simulator_exception`, `pipeline.run` |
+| Seeding | `TAMP_TRIAL_SEED` (set from the trial seed) seeds the shim's IK and RRT-Connect and every placement sample, by purpose/object/region and call index; remaining variance: wall-clock time limits | `mujoco_port/shim/pyrep/backend/_world.trial_rng`, `rlbench_kitchen_env._placement_rng` |
+| Cupboard | Usable region = the lower shelf's interior from the cupboard model (side walls' inner faces, open front, shelf top; about 51.6 x 31 cm) for every kitchen variant; only spots where the object's width is clear of every other object's (1 cm margin, 2 cm from the side walls), packed tightest first; a full shelf gives no sample (no plan). Non-round groceries are picked top-down closing exactly across their thin side and inserted with the fingers closing horizontally, so they lie with the thin side across the shelf (sugar 3.5 cm, spam 5 cm); cans keep the previous placement | `rlbench_kitchen_env.cupboard_interior`, `_cupboard_free_candidates`, `cupboard_placement_spec`, `compute_pick_trajectory`, `compute_place_trajectory` |
+| Replan-wait prompt | Independent bundles are listed as "Scheduled to run before your corrective block is applied (not executed yet)", never as completed; the Current state is the observation at the trigger; anchors may name only remaining actions; the bundle metadata matches the prompt | `prompt_v2.ReplanContext.scheduled`, `pipeline._prepare_planning`, `_merge_corrective` |
+| Repeated outputs | Counted per (abstract state, output, failure answered), not per trial; the note keeps the earlier failure reason | `pipeline._repeated_output`, `_failure_signature` |
+| WHEN rule | A dependent bundle's pick source blocks later places into it; pick sources are projected along the plan (plan.md 6.1) | `parallel.split_bundles`, `independent_bundles` |
+| Legacy runners | `run_model_trial.py`, `run_model_benchmark.py` removed | — |
 
 ## External baselines
 
@@ -569,7 +598,7 @@ What it would take to run them on our final variants and log in our JSONL schema
    insertion needs; `Completed Actions` in replan prompts contains duplicates
    because cumulative per-cycle lists are concatenated (pipeline.py:408–412 with
    :922) — a baseline behavior bug to confirm before fixing.
-10. **No repeated-output detection** (plan.md Phase 7 area 8); e.g. a K3 trial
+10. **(Resolved in Phase 7b/7c: repeated-output detection per state, output and failure.) No repeated-output detection** (plan.md Phase 7 area 8); e.g. a K3 trial
     repeats `pddl_no_plan` until the budget runs out.
 11. **No placement-area definition or category config**; both are new config
     that Phase 3/4 require.
