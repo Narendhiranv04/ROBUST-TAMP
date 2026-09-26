@@ -22,11 +22,13 @@ def test_affected_set_and_independent_bundles_for_the_kitchen_phone() -> None:
                  ('a10', 'pick(mug2)'), ('a11', 'place(mug2, inside_box)')]
     regions = {'phone': 'inside_box', 'spam': 'pantry_area', 'mug1': 'pantry_area', 'sugar': 'pantry_area',
                'mug2': 'table_staging_area'}
-    affected = affected_set('kitchen', ['phone'], regions)
-    assert affected == {'objects': ['box_lid', 'phone'], 'regions': ['inside_box', 'table_staging_area']}
+    affected = affected_set('kitchen', ['phone'], regions, overlapping={'phone': ['inside_box']})
+    assert affected == {'objects': ['box_lid', 'phone'], 'regions': ['inside_box', 'table_staging_area'],
+                        'parking_regions': ['table_staging_area']}
     independent = independent_bundles(split_bundles(remaining, regions), affected)
-    # sugar shares pantry_area with the dependent mug1 bundle before it, so it waits too.
-    assert [b.ids for b in independent] == [['a4', 'a5']]
+    # mug1 places into the overlapped box and waits; sugar only shares mug1's pick source
+    # (pantry_area), which is not a dependency, so it runs during the replan (Phase 7b).
+    assert [b.ids for b in independent] == [['a4', 'a5'], ['a8', 'a9']]
 
 
 def test_grill_plate_move_is_independent_of_cooked_meat_in_the_grill() -> None:
@@ -171,3 +173,46 @@ def test_parallel_off_matches_phase_5(tmp_path) -> None:
         'pick(mug2)', 'place(mug2, inside_box)']
     assert sorted(summary_off['completed_actions']) == sorted(summary_on['completed_actions'])
     assert summary_off['success'] is summary_on['success'] is True
+
+
+# ---------------------------------------------------------------- Phase 7b: container only if overlapping
+_K_REMAINING = [('a6', 'pick(spam)'), ('a7', 'place(spam, cupboard_shelf)'), ('a8', 'pick(sugar)'),
+                ('a9', 'place(sugar, cupboard_shelf)'), ('a10', 'pick(mug1)'), ('a11', 'place(mug1, inside_box)'),
+                ('a12', 'pick(mug2)'), ('a13', 'place(mug2, inside_box)'), ('a14', 'pick(mug3)'),
+                ('a15', 'place(mug3, inside_box)')]            # the K3/K4 remaining plan when the box opens
+_K_REGIONS = {'can_of_beans': 'inside_box', 'spam': 'pantry_area', 'sugar': 'pantry_area', 'mug1': 'pantry_area',
+              'mug2': 'table_staging_area', 'mug3': 'table_staging_area'}
+
+
+def _mug_ids(independent):
+    return [b.ids for b in independent if any('mug' in action for _, action in b.actions)]
+
+
+def test_k4_mug_placements_into_the_box_are_independent_during_the_replan() -> None:
+    # K4: the can lies in the box's far half, outside the placement area, so the box is not affected.
+    affected = affected_set('kitchen', ['can_of_beans'], _K_REGIONS, overlapping={'can_of_beans': []})
+    assert 'inside_box' not in affected['regions'] and 'cupboard_shelf' in affected['regions']
+    independent = independent_bundles(split_bundles(_K_REMAINING, _K_REGIONS), affected)
+    assert _mug_ids(independent) == [['a10', 'a11'], ['a12', 'a13'], ['a14', 'a15']]
+    # The groceries go to the can's goal region (cupboard) and wait for the replan.
+    assert not any('spam' in a or 'sugar' in a for b in independent for _, a in b.actions)
+
+
+def test_k3_mug_placements_into_the_box_wait_for_the_replan() -> None:
+    # K3: the can overlaps the box placement area; every place into the box is dependent.
+    affected = affected_set('kitchen', ['can_of_beans'], _K_REGIONS, overlapping={'can_of_beans': ['inside_box']})
+    assert 'inside_box' in affected['regions']
+    assert _mug_ids(independent_bundles(split_bundles(_K_REMAINING, _K_REGIONS), affected)) == []
+
+
+def test_the_lid_of_a_non_overlapping_trigger_objects_container_stays_affected() -> None:
+    # G1: cooked meat in the grill's far slots (not overlapping). Placing raw meat in the placement
+    # slot may run, but closing the grill during the wait would overcook the cooked meat.
+    remaining = [('a2', 'pick(plate)'), ('a3', 'place(plate, serving_area)'), ('a4', 'pick(raw_meat_1)'),
+                 ('a5', 'place(raw_meat_1, inside_grill)'), ('a6', 'close(grill_lid)'), ('a7', 'open(grill_lid)')]
+    regions = {'plate': 'dish_rack', 'raw_meat_1': 'prep_area', 'cooked_meat_1': 'inside_grill'}
+    affected = affected_set('grill', ['cooked_meat_1'], regions, overlapping={'cooked_meat_1': []})
+    assert 'grill_lid' in affected['objects'] and 'inside_grill' not in affected['regions']
+    ids = [b.ids for b in independent_bundles(split_bundles(remaining, regions), affected)]
+    assert ['a6'] not in ids and ['a7'] not in ids
+    assert ['a2', 'a3'] in ids

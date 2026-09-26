@@ -906,7 +906,11 @@ class LLMOnlyReplanningPipeline:
         scene = (self.config.task_family or 'kitchen').strip().lower()
         object_regions = self._known_object_regions()
         remaining = [(item.action_id, item.action) for item in self._remaining_with_ids]
-        affected = affected_set(scene, (trigger.evidence or {}).get('trigger_objects') or [], object_regions)
+        trigger_objects = (trigger.evidence or {}).get('trigger_objects') or []
+        # A trigger object's container is affected only if the object overlaps its placement area.
+        affected = affected_set(scene, trigger_objects, object_regions,
+                                overlapping={obj: self._overlapping_regions(obj, [object_regions.get(obj)])
+                                             for obj in trigger_objects if object_regions.get(obj)})
         independent = independent_bundles(split_bundles(remaining, object_regions), affected)
         # The prompt lists the independent actions as already executed.
         self._prompt_executed_ids = {action_id for bundle in independent for action_id in bundle.ids}
