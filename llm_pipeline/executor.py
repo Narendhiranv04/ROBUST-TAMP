@@ -70,6 +70,13 @@ def _ensure_kitchen_gt_imports() -> None:
     run_open_box = _gt.run_open_box
 
 
+# Post-place failures that mean the object is not where the place was meant to put it.
+PLACE_FAILURE_CODES = frozenset({
+    FailureCode.PLACEMENT_FAILED, FailureCode.GEOMETRIC_PLACEMENT_FAILED, FailureCode.OBJECT_DROPPED,
+    FailureCode.OBJECT_MISSING_AFTER_PLACE,
+})
+
+
 @dataclass
 class PrimitiveExecutionOutcome:
     success: bool
@@ -586,6 +593,11 @@ class UnifiedActionBundler:
                         if stage_action.action_name == 'pick' and post_failure.failure_id == FailureCode.GRASP_FAILED:
                             held_object = previous_held
                             self.executor.held_object = held_object
+                            if completed and completed[-1] == str(stage_action):
+                                completed.pop()
+                        if stage_action.action_name == 'place' and post_failure.failure_id in PLACE_FAILURE_CODES:
+                            # The object is not where the place put it: the place is not a
+                            # completed action (history, action_end outcome, evaluator replay).
                             if completed and completed[-1] == str(stage_action):
                                 completed.pop()
                         if post_failure.failure_id == FailureCode.NEW_OBJECT_DISCOVERED and stage_action.action_name != 'place':
@@ -1362,7 +1374,8 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
 
                 print(f'[EXEC] POST-CHECK FAILED: {post_failure.message}')
                 self.last_failure_event = post_failure
-                self._end_bundle([] if action.action_name == 'pick' else [str(action)], False, post_failure)
+                failed_place = action.action_name == 'place' and post_failure.failure_id in PLACE_FAILURE_CODES
+                self._end_bundle([] if action.action_name == 'pick' or failed_place else [str(action)], False, post_failure)
                 return PrimitiveExecutionOutcome(
                     success=False,
                     completed_actions=list(self.completed_primitive_actions),

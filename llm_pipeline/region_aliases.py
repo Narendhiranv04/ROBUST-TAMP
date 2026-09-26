@@ -114,17 +114,17 @@ def normalize_region_name(region_name: str | None) -> str:
 
 
 def regions_match_for_target(observed_region: str | None, target_region: str | None) -> bool:
-    """Return whether an observed region satisfies the requested target region."""
+    """Return whether an observed region satisfies the requested target region.
+
+    Strict (Phase 7b): the object must be observed in exactly the target region. Before,
+    the table and its named areas (staging, pantry) were accepted for each other, so a
+    placement observed in another region passed the post-check while every later prompt
+    showed the object somewhere else than the completed action said. A mismatch is now a
+    placement failure, and the replan puts the object where it was meant to go.
+    """
     observed = normalize_region_name(observed_region)
     target = normalize_region_name(target_region)
-    if observed == target:
-        return True
-    if target == "table_staging_area" and observed in {"table", "pantry_area"}:
-        return True
-    # The table's named sub-areas are part of the table.
-    if target == "table" and observed in {"table_staging_area", "pantry_area", "placement_boundary"}:
-        return True
-    return False
+    return bool(observed) and observed == target
 
 
 def region_semantics(region_name: str | None) -> str:

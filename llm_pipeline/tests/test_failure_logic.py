@@ -269,7 +269,9 @@ def test_postcheck_accepts_geometric_region_when_object_mask_is_hidden() -> None
     assert failure is None
 
 
-def test_postcheck_accepts_gt_table_area_for_table_staging_area() -> None:
+def test_postcheck_rejects_a_placement_observed_in_another_table_region() -> None:
+    # Phase 7b (B7): a staging-area placement observed in the pantry area is a placement
+    # failure, not a success; the planner's state must agree with its completed actions.
     snapshot = _snapshot(
         {
             'mug3': SegmentationObjectEvidence(name='mug3', visible=True, mask_regions=['pantry_area']),
@@ -282,7 +284,13 @@ def test_postcheck_accepts_gt_table_area_for_table_staging_area() -> None:
         held_object=None,
         snapshot=snapshot,
     )
-    assert failure is None
+    assert failure is not None and failure.failure_id == 'placement_failed'
+    ok = _snapshot(
+        {'mug3': SegmentationObjectEvidence(name='mug3', visible=True, mask_regions=['table_staging_area'])},
+        visible_regions=['table_staging_area'],
+        object_region_map={'mug3': 'table_staging_area'},
+    )
+    assert checker.postcheck(DirectAction('place', ('mug3', 'table_staging_area')), held_object=None, snapshot=ok) is None
 
 
 def test_postcheck_triggers_replan_for_new_visibility() -> None:

@@ -457,6 +457,15 @@ class RLBenchKitchenEnv:
 
                 # Shuffle to avoid deterministic tie bias in symmetric scenes.
                 np.random.shuffle(candidates)
+                if mode == "clear_random":
+                    # Any candidate with enough clearance, uniformly: the planner's repeated
+                    # samples then cover the whole free area instead of the same few
+                    # maximum-clearance spots (which can all be unreachable).
+                    min_clear = float(os.environ.get("CLEAR_XY_MIN_CLEARANCE", "0.07"))
+                    clear = [c for c in candidates if _clearance_score(c) >= min_clear]
+                    if clear:
+                        return clear[int(np.random.randint(0, len(clear)))]
+                    mode = "top_random"
                 if mode == "top_random":
                     scored = sorted(candidates, key=_clearance_score, reverse=True)
                     top_n = max(1, min(len(scored), int(os.environ.get("CLEAR_XY_TOP_RANDOM", "8"))))
@@ -587,16 +596,17 @@ class RLBenchKitchenEnv:
             except Exception:
                 pass
             # Margins match the region resolver (llm_pipeline/region_geometry.py REGION_PADDING)
-            # plus 1 cm, so a table placement is never observed in another region: regions at
-            # table height (the box interior, the pantry and staging areas) get their padding;
+            # plus 3 cm (a placed object ends up to ~2 cm from the sampled point: grasp offset),
+            # so a table placement is never observed in another region: regions at table height
+            # (the box interior, the pantry and staging areas) get their padding plus that;
             # physical fixtures (box walls, the lid, the cupboard) get 2 cm of clearance.
             exclude = []
             for other, margin in ((getattr(self, 'box_boundary', None), 0.05), (getattr(self, 'box', None), 0.02),
                                   (getattr(self, 'box_lid', None), 0.02),
                                   (getattr(self, 'cupboard_boundary', None), 0.02),
                                   (getattr(self, 'cupboard', None), 0.02),
-                                  (getattr(self, 'groceries_boundary', None), 0.06),
-                                  (getattr(self, 'placement_boundary', None), 0.01)):
+                                  (getattr(self, 'groceries_boundary', None), 0.03),
+                                  (getattr(self, 'placement_boundary', None), 0.03)):
                 if other is None:
                     continue
                 try:
@@ -613,14 +623,17 @@ class RLBenchKitchenEnv:
                 rx, ry = None, None
             reach = None
             if rx is not None:
-                reach_min, reach_max = 0.35, 0.62
+                # 0.28 m includes the free patch in front of the robot, between the pantry and
+                # staging areas (the only table surface outside every region that is reachable
+                # without passing over staged objects).
+                reach_min, reach_max = 0.28, 0.62
                 reach = lambda c: reach_min <= float(np.hypot(c[0] - rx, c[1] - ry)) <= reach_max  # noqa: E731
             sample_x, sample_y = sample_clear_xy(
                 w_min_x + padding, w_max_x - padding, w_min_y + padding, w_max_y - padding,
                 max(3, int(os.environ.get("TABLE_SAMPLE_GRID", "48"))),
                 float(os.environ.get("TABLE_OCCUPANCY_PAD_XY", "0.04")),
                 float(os.environ.get("TABLE_OCCUPANCY_PAD_Z", "0.12")),
-                mode="top_random", exclude=exclude, keep=reach, strict_exclude=True,
+                mode="clear_random", exclude=exclude, keep=reach, strict_exclude=True,
             )
             sample_z = w_max_z + 0.005
         else:

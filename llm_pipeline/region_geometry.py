@@ -61,7 +61,10 @@ REGION_PADDING = {
     # Keep container interiors tight. A large XY padding here makes objects that
     # fall beside the box on the table look like they are still inside it.
     "inside_box": 0.04,
-    "pantry_area": 0.05,
+    # The pantry and staging boxes cover most of the kitchen table within reach; unpadded, so
+    # a table placement next to them is observed on the table (every initial pantry object
+    # lies well inside the pantry box, jitter included).
+    "pantry_area": 0.0,
     "table_staging_area": 0.0,
     "table": 0.04,
     "inside_grill": 0.08,
