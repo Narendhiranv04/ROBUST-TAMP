@@ -5,6 +5,7 @@
 
 Writes, for the variant's initial state (MuJoCo backend):
 - isometric.png: isometric view from behind the robot;
+- isometric_labeled.png: the same view with object masks, region boxes and callout labels;
 - cameras_rgb.png: the 5 camera images (left, right, overhead, wrist, front);
 - semantic_<camera>.png / semantic_<camera>_legend.png: each camera's semantic map alone,
   and with a legend for what appears in it;
@@ -82,11 +83,16 @@ def load_env(variant):
     return env
 
 
-def isometric(env, out: Path, size=(1400, 1000)):
-    """Isometric view from behind and to the side of the robot, looking over its base."""
+def isometric(env, out: Path, size=(1600, 1150), focus=None):
+    """Isometric view from behind and to the side of the robot, looking over its base.
+
+    focus: world points (task objects, region corners) the view is framed on: the camera
+    looks at their centre from a distance at which they fill the frame."""
     import mujoco
     from PIL import Image
     world = env.pr._world
+    world.m.vis.global_.offwidth = max(int(world.m.vis.global_.offwidth), size[0])
+    world.m.vis.global_.offheight = max(int(world.m.vis.global_.offheight), size[1])
     renderer = mujoco.Renderer(world.m, size[1], size[0])
     opt = mujoco.MjvOption()
     opt.geomgroup[:] = 0
@@ -97,11 +103,28 @@ def isometric(env, out: Path, size=(1400, 1000)):
     table = world.m.body_pos[bid] if bid >= 0 else world.m.stat.center
     cam.lookat[:] = np.array([table[0] + 0.05, table[1], table[2] + 0.475])
     cam.distance = 2.3       # stays inside the room (walls 2.5 m from the centre)
+    if focus is not None and len(focus):
+        pts = np.asarray(focus, float)
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        cam.lookat[:] = (lo + hi) / 2.0
+        radius = float(np.linalg.norm(hi - lo)) / 2.0
+        cam.distance = float(np.clip(1.15 * radius / np.sin(np.radians(34.0) / 2.0), 1.3, 2.3))
     cam.azimuth = -35.0      # robot base on the -x side facing +x: camera behind its right shoulder
     cam.elevation = -35.264  # isometric elevation, narrow perspective angle below
     world.m.vis.global_.fovy = 34.0
     renderer.update_scene(world.d, cam, scene_option=opt)
-    Image.fromarray(renderer.render()).save(out / 'isometric.png')
+    rgb = renderer.render()
+    Image.fromarray(rgb).save(out / 'isometric.png')
+    project_fn = free_camera_projector(renderer, world.m, size)
+    renderer.enable_segmentation_rendering()
+    renderer.update_scene(world.d, cam, scene_option=opt)
+    seg = renderer.render()
+    renderer.disable_segmentation_rendering()
+    geom_ids, types = seg[:, :, 0], seg[:, :, 1]
+    handles = np.full(geom_ids.shape, -1, dtype=np.int64)
+    is_geom = (types == int(mujoco.mjtObj.mjOBJ_GEOM)) & (geom_ids >= 0)
+    handles[is_geom] = world.geom_handle[geom_ids[is_geom]]
+    return rgb, handles, project_fn
 
 
 def camera_sensors(env):
@@ -145,37 +168,6 @@ def outline(mask):
     return edge & mask
 
 
-def _free_spot(x, y, w, h, bounds, placed):
-    """Move a tag down/up until it does not overlap already placed tags."""
-    x = int(min(max(x, 2), bounds[0] - w - 2))
-    for dy in [0] + [s * k for k in range(1, 12) for s in (1, -1)]:
-        yy = int(min(max(y + dy * (h + 2), 2), bounds[1] - h - 2))
-        rect = (x, yy, x + w, yy + h)
-        if not any(rect[0] < r[2] and r[0] < rect[2] and rect[1] < r[3] and r[1] < rect[3] for r in placed):
-            return rect
-    return (x, int(min(max(y, 2), bounds[1] - h - 2)), x + w, int(min(max(y, 2), bounds[1] - h - 2)) + h)
-
-
-def label_chip(draw, xy, text, color, font, bounds, placed=()):
-    """Object tag: filled with the object colour, white text."""
-    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-    w, h = right - left + 20, bottom - top + 14
-    rect = _free_spot(xy[0], xy[1] - h - 4, w, h, bounds, placed)
-    draw.rounded_rectangle(rect, radius=8, fill=color, outline=(255, 255, 255), width=2)
-    draw.text((rect[0] + 10, rect[1] + 7 - top), text, fill=(255, 255, 255), font=font)
-    return rect
-
-
-def outlined_chip(draw, xy, text, color, font, bounds, placed=()):
-    """Region tag: white box with a coloured border and coloured text."""
-    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-    w, h = right - left + 22, bottom - top + 16
-    rect = _free_spot(xy[0], xy[1] - h - 6, w, h, bounds, placed)
-    draw.rounded_rectangle(rect, radius=8, fill=(255, 255, 255, 235), outline=color, width=3)
-    draw.text((rect[0] + 11, rect[1] + 8 - top), text, fill=color, font=font)
-    return rect
-
-
 def main_blob_box(mask, keep=0.15, margin=3):
     """Bounding box of the object's main connected blob(s), ignoring stray pixels."""
     from scipy import ndimage
@@ -186,6 +178,254 @@ def main_blob_box(mask, keep=0.15, margin=3):
     big = [i + 1 for i, s in enumerate(sizes) if s >= keep * sizes.max()]
     ys, xs = np.nonzero(np.isin(labels, big))
     return [int(xs.min()) - margin, int(ys.min()) - margin, int(xs.max()) + margin, int(ys.max()) + margin]
+
+
+def _interior_point(mask):
+    """A pixel deep inside the mask's largest blob (label anchor)."""
+    from scipy import ndimage
+    labels, count = ndimage.label(mask)
+    if count == 0:
+        return None
+    sizes = ndimage.sum(mask, labels, range(1, count + 1))
+    blob = labels == (int(np.argmax(sizes)) + 1)
+    depth = ndimage.distance_transform_edt(blob)
+    y, x = np.unravel_index(int(np.argmax(depth)), depth.shape)
+    return int(x), int(y)
+
+
+def _segment_hits_rect(p, q, rect, pad=6):
+    """Whether segment p-q passes through rect (sampled)."""
+    for s in np.linspace(0.08, 0.92, 24):
+        x, y = p[0] + s * (q[0] - p[0]), p[1] + s * (q[1] - p[1])
+        if rect[0] - pad <= x <= rect[2] + pad and rect[1] - pad <= y <= rect[3] + pad:
+            return True
+    return False
+
+
+def draw_callouts(image, items, font, reserved=()):
+    """Callout labels: a dot on the anchor, a leader line, and a label box placed where it
+    overlaps no other label and its leader crosses no other label. items: dicts with
+    anchor, text, color, kind (object/region). Objects get a filled box in their colour with
+    white text; regions a white box with a coloured border and coloured text. All leader
+    lines are drawn before the boxes, so no line runs over a label."""
+    import math
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(image, 'RGBA')
+    width, height = image.size
+    boxes = [tuple(r) for r in reserved]
+    anchors = [it['anchor'] for it in items]
+    dots = [(x - 12, y - 12, x + 12, y + 12) for x, y in anchors]
+    leaders = []
+    layout = []
+
+    def fits(rect, anchor, nearest):
+        if not (rect[0] >= 4 and rect[1] >= 4 and rect[2] <= width - 4 and rect[3] <= height - 4):
+            return False
+        for r in boxes + dots:
+            if rect[0] < r[2] + 8 and r[0] < rect[2] + 8 and rect[1] < r[3] + 8 and r[1] < rect[3] + 8:
+                return False
+        if any(_segment_hits_rect(anchor, nearest, r) for r in boxes):
+            return False
+        # the new box must not cover an existing leader line
+        return not any(_segment_hits_rect(a, b, rect, pad=4) for a, b in leaders)
+
+    for item in items:
+        ax, ay = item['anchor']
+        left, top, right, bottom = draw.textbbox((0, 0), item['text'], font=font)
+        w, h = right - left + 32, bottom - top + 20
+        rect = None
+        for dist in (70, 110, 160, 220, 300, 380):
+            for angle in (-55, -125, -25, -155, 25, 155, -90, 90, 0, 180):
+                cx = ax + dist * math.cos(math.radians(angle))
+                cy = ay + dist * math.sin(math.radians(angle))
+                candidate = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+                nearest = (min(max(ax, candidate[0]), candidate[2]), min(max(ay, candidate[1]), candidate[3]))
+                if fits(candidate, (ax, ay), nearest):
+                    rect = candidate
+                    break
+            if rect:
+                break
+        if rect is None:
+            cx = min(max(ax, w / 2 + 4), width - w / 2 - 4)
+            cy = min(max(ay - 80, h / 2 + 4), height - h / 2 - 4)
+            rect = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        nearest = (min(max(ax, rect[0]), rect[2]), min(max(ay, rect[1]), rect[3]))
+        boxes.append(rect)
+        leaders.append(((ax, ay), nearest))
+        layout.append((item, rect, nearest, top))
+
+    for item, rect, nearest, _ in layout:            # pass 1: leaders and dots
+        ax, ay = item['anchor']
+        color = tuple(item['color'])
+        draw.line([(ax, ay), nearest], fill=(255, 255, 255, 230), width=7)
+        draw.line([(ax, ay), nearest], fill=color + (255,), width=3)
+        draw.ellipse([ax - 9, ay - 9, ax + 9, ay + 9], fill=(255, 255, 255, 255))
+        draw.ellipse([ax - 6, ay - 6, ax + 6, ay + 6], fill=color + (255,))
+    for item, rect, _, top in layout:                  # pass 2: label boxes on top
+        color = tuple(item['color'])
+        shadow = (rect[0] + 3, rect[1] + 4, rect[2] + 3, rect[3] + 4)
+        draw.rounded_rectangle(shadow, radius=12, fill=(0, 0, 0, 70))
+        if item['kind'] == 'object':
+            draw.rounded_rectangle(rect, radius=12, fill=color + (255,), outline=(255, 255, 255, 255), width=2)
+            ink = (255, 255, 255)
+        else:
+            draw.rounded_rectangle(rect, radius=12, fill=(255, 255, 255, 240), outline=color + (255,), width=3)
+            ink = color
+        draw.text((rect[0] + 16, rect[1] + 10 - top), item['text'], fill=ink, font=font)
+    return boxes
+
+
+def _draw_label(draw, rect, item, top, font):
+    color = tuple(item['color'])
+    shadow = (rect[0] + 3, rect[1] + 4, rect[2] + 3, rect[3] + 4)
+    draw.rounded_rectangle(shadow, radius=12, fill=(0, 0, 0, 70))
+    if item['kind'] == 'object':
+        draw.rounded_rectangle(rect, radius=12, fill=color + (255,), outline=(255, 255, 255, 255), width=2)
+        ink = (255, 255, 255)
+    else:
+        draw.rounded_rectangle(rect, radius=12, fill=(255, 255, 255, 242), outline=color + (255,), width=3)
+        ink = color
+    draw.text((rect[0] + 16, rect[1] + 10 - top), item['text'], fill=ink, font=font)
+
+
+def draw_callouts_gutter(image, items, font, margin=28, gap=14):
+    """Figure-style callouts: labels stacked in a left and a right column (split at the
+    median anchor x, ordered by anchor height, never overlapping), each joined to its
+    anchor by a leader line. Leaders are drawn first, labels on top."""
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(image, 'RGBA')
+    width, height = image.size
+    measured = []
+    for item in items:
+        left, top, right, bottom = draw.textbbox((0, 0), item['text'], font=font)
+        measured.append((item, right - left + 32, bottom - top + 20, top))
+    split = float(np.median([m[0]['anchor'][0] for m in measured])) if measured else width / 2
+    layout = []
+    for side in ('left', 'right'):
+        group = [m for m in measured if (m[0]['anchor'][0] <= split) == (side == 'left')]
+        group.sort(key=lambda m: m[0]['anchor'][1])
+        ys, cursor = [], margin
+        for item, w, h, _ in group:
+            y = max(item['anchor'][1] - h / 2, cursor)
+            ys.append(y)
+            cursor = y + h + gap
+        overflow = cursor - gap - (height - margin)
+        if overflow > 0:
+            ys = [max(margin, y - overflow) for y in ys]
+        for (item, w, h, top), y in zip(group, ys):
+            x = margin if side == 'left' else width - margin - w
+            rect = (x, y, x + w, y + h)
+            edge = (rect[2], y + h / 2) if side == 'left' else (rect[0], y + h / 2)
+            layout.append((item, rect, edge, top))
+    for item, rect, edge, _ in layout:
+        ax, ay = item['anchor']
+        color = tuple(item['color'])
+        draw.line([(ax, ay), edge], fill=(255, 255, 255, 220), width=7)
+        draw.line([(ax, ay), edge], fill=color + (255,), width=3)
+        draw.ellipse([ax - 10, ay - 10, ax + 10, ay + 10], fill=(255, 255, 255, 255))
+        draw.ellipse([ax - 7, ay - 7, ax + 7, ay + 7], fill=color + (255,))
+    for item, rect, _, top in layout:
+        _draw_label(draw, rect, item, top, font)
+
+
+def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxes, region_colors, table_handles,
+             region_name, font, line=4, layout='radial'):
+    """Object masks (fill, contour, box), region boxes (top face, wireframe; the table as its
+    segmentation pixels) and callout labels on an RGB image. mask: per-pixel object handle.
+    Returns (image, shown_regions, pixel counts per object)."""
+    from PIL import Image, ImageDraw
+    from scipy import ndimage
+    base = base.convert('RGBA')
+    overlay = Image.new('RGBA', base.size, (0, 0, 0, 0))
+    object_masks = {}
+    for handle, obj in handle_to_label.items():
+        if obj in object_colors:
+            hit = mask == int(handle)
+            if hit.any():
+                object_masks[obj] = object_masks.get(obj, np.zeros_like(hit)) | hit
+    shown, region_items, table_mask = [], [], None
+    for region, (lo, hi) in region_boxes.items():
+        color = region_colors[region]
+        if region == TABLE_REGION:
+            tmask = np.isin(mask, table_handles) if table_handles else np.zeros(mask.shape, bool)
+            if not tmask.any():
+                continue
+            layer = np.zeros(tmask.shape + (4,), dtype=np.uint8)
+            layer[tmask] = color + (50,)
+            edge = ndimage.binary_dilation(outline(tmask), iterations=2) & tmask
+            layer[edge] = color + (230,)
+            overlay = Image.alpha_composite(Image.fromarray(layer, 'RGBA'), overlay)
+            table_mask = tmask       # its label anchor is chosen once everything else is drawn
+            region_items.append({'anchor': None, 'text': region_name(region), 'color': color, 'kind': 'region',
+                                 'table': True})
+            shown.append(region)
+            continue
+        corners = np.array([[x, y, z] for z in (lo[2], hi[2]) for x, y in
+                            ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))])
+        uv, in_front = project_fn(corners)
+        if not in_front.all():
+            continue
+        if uv[:, 0].max() < 0 or uv[:, 0].min() > base.width or uv[:, 1].max() < 0 or uv[:, 1].min() > base.height:
+            continue
+        odraw = ImageDraw.Draw(overlay)
+        bottom, top = [tuple(map(float, q)) for q in uv[:4]], [tuple(map(float, q)) for q in uv[4:]]
+        odraw.polygon(top, fill=color + (60,))
+        for ring in (bottom, top):
+            odraw.line(ring + [ring[0]], fill=color + (220,), width=line)
+        for a, b in zip(bottom, top):
+            odraw.line([a, b], fill=color + (220,), width=line)
+        cx = float(np.clip(np.mean([q[0] for q in top]), 10, base.width - 10))
+        cy = float(np.clip(np.mean([q[1] for q in top]), 10, base.height - 10))
+        region_items.append({'anchor': (cx, cy), 'text': region_name(region), 'color': color, 'kind': 'region'})
+        shown.append(region)
+    object_items, pixels, boxes = [], {}, []
+    for obj, hit in object_masks.items():
+        color = object_colors[obj]
+        fill = np.zeros(hit.shape + (4,), dtype=np.uint8)
+        fill[hit] = color + (115,)
+        fill[ndimage.binary_dilation(outline(hit), iterations=1) & hit] = color + (255,)
+        overlay = Image.alpha_composite(overlay, Image.fromarray(fill, 'RGBA'))
+        box = main_blob_box(hit)
+        ImageDraw.Draw(overlay).rounded_rectangle(box, radius=6, outline=color + (255,), width=max(2, line - 1))
+        boxes.append(box)
+        object_items.append({'anchor': _interior_point(hit), 'text': obj, 'color': color, 'kind': 'object'})
+        pixels[obj] = int(hit.sum())
+    for item in region_items:
+        if item.get('table'):
+            # the most open point of the tabletop: far from every object and region overlay
+            occupied = np.array(overlay)[:, :, 3] > 80
+            free = ndimage.binary_erosion(table_mask, iterations=3) & ~ndimage.binary_dilation(occupied, iterations=25)
+            if free.any():
+                depth = ndimage.distance_transform_edt(free)
+                y, x = np.unravel_index(int(np.argmax(depth)), depth.shape)
+                item['anchor'] = (int(x), int(y))
+            else:
+                item['anchor'] = _interior_point(table_mask)
+    image = Image.alpha_composite(base, overlay)
+    items = [it for it in object_items + region_items if it['anchor'] is not None]
+    if layout == 'gutter':
+        draw_callouts_gutter(image, items, font)
+    else:
+        draw_callouts(image, items, font)
+    return image.convert('RGB'), shown, pixels
+
+
+def free_camera_projector(renderer, model, size):
+    """Pixel projection for a MuJoCo free camera after renderer.update_scene()."""
+    import math
+    gl = renderer.scene.camera[0]
+    pos, forward, up = (np.array(gl.pos, float), np.array(gl.forward, float), np.array(gl.up, float))
+    right = np.cross(forward, up)
+    width, height = size
+    focal = (height / 2.0) / math.tan(math.radians(model.vis.global_.fovy) / 2.0)
+
+    def project_fn(points):
+        v = np.asarray(points, float) - pos
+        z = v @ forward
+        u = width / 2.0 + focal * (v @ right) / np.maximum(z, 1e-6)
+        w = height / 2.0 - focal * (v @ up) / np.maximum(z, 1e-6)
+        return np.stack([u, w], axis=1), z > 0.01
+    return project_fn
 
 
 def main():
@@ -200,9 +440,9 @@ def main():
     from llm_pipeline.object_aliases import canonical_object_name
     from llm_pipeline.region_aliases import normalize_region_name, planner_region_name, scene_object_for_region
     from llm_pipeline.segmentation_adapter import SegmentationEvidenceAdapter
+    from pyrep.backend import sim
 
     env = load_env(args.variant)
-    isometric(env, out)
     adapter = SegmentationEvidenceAdapter(env=env, live_segmentation_view=False)
     adapter.refresh_visibility(event='initial')
     snapshot = adapter.capture_snapshot(event='initial')
@@ -261,8 +501,29 @@ def main():
             draw.text((x + 44, y), planner_region_name(region), fill=INK, font=body)
         page.save(path)
 
+    handle_to_label = {int(h): canonical_object_name(label) for h, label in detector.handle_to_task_name.items()}
+    tag = _font(30, weight='SemiBold')
+
+    # Isometric view framed on the task objects and regions, with every task object the
+    # view sees (masks) and every region labelled.
+    focus = [corner for region, (lo, hi) in region_boxes.items() if region != TABLE_REGION
+             for corner in (lo, hi)]
+    for handle, label in handle_to_label.items():
+        try:
+            focus.append(np.array(sim.simGetObjectPosition(int(handle), -1)))
+        except Exception:
+            pass
+    iso_rgb, iso_handles, iso_project = isometric(env, out, focus=focus)
+    iso_colors = dict(object_colors)
+    for label in sorted({handle_to_label[h] for h in np.unique(iso_handles).tolist() if h in handle_to_label}):
+        if label not in iso_colors and label in detector.task_objects:
+            iso_colors[label] = OBJECT_PALETTE[len(iso_colors) % len(OBJECT_PALETTE)]
+    iso_image, _, _ = annotate(Image.fromarray(iso_rgb), iso_handles, iso_project, handle_to_label, iso_colors,
+                               region_boxes, region_colors, table_handles, planner_region_name, _font(36, weight='SemiBold'),
+                               layout='gutter')
+    iso_image.save(out / 'isometric_labeled.png')
+
     sensors = camera_sensors(env)
-    tag = _font(26, weight='SemiBold')
     rgb_tiles, sem_tiles, pixels = [], [], {}
     for name in CAMERAS:
         cam = sensors.get(name)
@@ -272,82 +533,16 @@ def main():
         image = capture_rgb(cam)
         big_size = (image.shape[1] * SCALE, image.shape[0] * SCALE)
         rgb_tiles.append((name, Image.fromarray(image)))
-        base = Image.fromarray(dimmed(image)).resize(big_size, Image.LANCZOS).convert('RGBA')
+        base = Image.fromarray(dimmed(image)).resize(big_size, Image.LANCZOS)
         mask = np.repeat(np.repeat(mask, SCALE, axis=0), SCALE, axis=1)
-        overlay = Image.new('RGBA', base.size, (0, 0, 0, 0))
-        odraw = ImageDraw.Draw(overlay)
-        pixels[name] = {}
-        object_masks = {}
-        for handle, label in detector.handle_to_task_name.items():
-            obj = canonical_object_name(label)
-            if obj not in object_colors:
-                continue
-            hit = mask == int(handle)
-            if hit.any():
-                object_masks[obj] = object_masks.get(obj, np.zeros_like(hit)) | hit
-        # Regions first: projected 3D box, translucent top face + full wireframe.
-        shown_regions, region_tags = [], []
-        for region, (lo, hi) in region_boxes.items():
-            corners = np.array([[x, y, z] for z in (lo[2], hi[2]) for x, y in
-                                ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))])
-            uv, in_front = project(cam, corners)
-            uv = uv * SCALE
-            if not in_front.all():
-                continue
-            if uv[:, 0].max() < 0 or uv[:, 0].min() > base.width or uv[:, 1].max() < 0 or uv[:, 1].min() > base.height:
-                continue
-            color = region_colors[region]
-            bottom, top = [tuple(map(float, p)) for p in uv[:4]], [tuple(map(float, p)) for p in uv[4:]]
-            if region == TABLE_REGION:
-                # The whole table as the camera sees it (its segmentation pixels, so
-                # occluders stay on top): a soft fill and a contour, under everything else.
-                tmask = np.isin(mask, table_handles) if table_handles else np.zeros(mask.shape, bool)
-                table_layer = Image.new('RGBA', base.size, (0, 0, 0, 0))
-                if tmask.any():
-                    layer = np.zeros(tmask.shape + (4,), dtype=np.uint8)
-                    layer[tmask] = color + (55,)
-                    edge = outline(tmask)
-                    from scipy import ndimage
-                    edge = ndimage.binary_dilation(edge, iterations=2) & tmask
-                    layer[edge] = color + (230,)
-                    table_layer = Image.fromarray(layer, 'RGBA')
-                    ys, xs = np.nonzero(tmask)
-                    top_row = ys.min()
-                    anchor = (int(xs[ys <= top_row + 4].min()) + 16, int(top_row) + 60)
-                else:
-                    ImageDraw.Draw(table_layer).polygon(top, fill=color + (45,), outline=color + (220,))
-                    anchor = (24, base.height - 24)
-                overlay = Image.alpha_composite(table_layer, overlay)
-                odraw = ImageDraw.Draw(overlay)
-                region_tags.append((anchor, planner_region_name(region), color))
-                shown_regions.append(region)
-                continue
-            odraw.polygon(top, fill=color + (70,))
-            for ring in (bottom, top):
-                odraw.line(ring + [ring[0]], fill=color + (230,), width=4)
-            for a, b in zip(bottom, top):
-                odraw.line([a, b], fill=color + (230,), width=4)
-            region_tags.append((min(top, key=lambda q: q[1]), planner_region_name(region), color))
-            shown_regions.append(region)
-        # Objects on top: translucent fill, solid contour, 2D bounding box.
-        object_tags = []
-        for obj, hit in object_masks.items():
-            color = object_colors[obj]
-            fill = np.zeros(hit.shape + (4,), dtype=np.uint8)
-            fill[hit] = color + (120,)
-            fill[outline(hit)] = color + (255,)
-            overlay = Image.alpha_composite(overlay, Image.fromarray(fill, 'RGBA'))
-            box = main_blob_box(hit)
-            ImageDraw.Draw(overlay).rectangle(box, outline=color + (255,), width=4)
-            object_tags.append(((box[0], box[1]), obj, color))
-            pixels[name][obj] = int(hit.sum()) // (SCALE * SCALE)
-        tile = Image.alpha_composite(base, overlay).convert('RGB')
-        draw = ImageDraw.Draw(tile)
-        placed = []
-        for xy, text, color in object_tags:   # objects: filled tag (placed first, on their box)
-            placed.append(label_chip(draw, xy, text, color, tag, tile.size, placed))
-        for xy, text, color in region_tags:   # regions: outlined tag
-            placed.append(outlined_chip(draw, xy, text, color, tag, tile.size, placed))
+
+        def project_fn(points, cam=cam):
+            uv, in_front = project(cam, points)
+            return uv * SCALE, in_front
+
+        tile, shown_regions, counts = annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxes,
+                                               region_colors, table_handles, planner_region_name, tag)
+        pixels[name] = {obj: n // (SCALE * SCALE) for obj, n in counts.items()}
         sem_tiles.append((name, tile))
         tile.save(out / f'semantic_{name}.png')  # the map alone, no legend
         save_single(out / f'semantic_{name}_legend.png', name, tile, [o for o in object_colors if pixels[name].get(o)],
