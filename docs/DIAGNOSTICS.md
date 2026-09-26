@@ -7,15 +7,19 @@
 | # | Area | Plain definition | Detected from (trial log) |
 |---|---|---|---|
 | 1 | Plan format error | The planner output can't be read, or uses an unknown action, object, region or block field | `plan_check` fail with a format code: `planner_output_not_parseable`, `planner_output_too_verbose`, `unknown_action_token`, `unobserved_object`, `unsupported_action`, `invalid_corrective_block` |
-| 2 | Plan rule error | Readable but breaks the action rules (place without pick, pick while holding, pick from a closed region, ...) | `plan_check` fail with any other plan-check code; `pre_action_check` fail |
+| 2 | Plan rule error | Readable but breaks the action rules (place without pick, pick while holding, pick from a closed region, a corrective block that ends while holding, ...) | `plan_check` fail with any other plan-check code (e.g. `block_ends_holding`); `pre_action_check` fail |
 | 3 | Corrective sub-plan error | The replan's actions don't resolve the trigger: at the end of the trial a trigger object is not where the goal needs it (wrong destination, missed object, phone left in a placement area) | accepted `insertion` + `trial_end.missing` naming a trigger object |
 | 4 | Insertion error | Wrong urgency or position: too late (`insertion_too_late`, overcooked meat, a hard constraint violated) or too early (raw meat plated before cooking) | `insertion` rejections; evaluator procedure checks in `trial_end.missing` after a replan |
 | 5 | Task plan error | The plan leads to an unmet goal with no other error to blame (includes a failed trial with no replan) | `trial_end.missing`, nothing else unrecovered |
 | 6 | Motion/grasp error | An action failed after all local retries | `action_end` with `outcome = failure` and an execution-failure code |
 | 7 | Merge conflict | A merged plan conflicted with what was executed during the wait (Phase 6) and was not resolved | `parallel` with `merge_result = merge_conflict` |
-| 8 | Replan budget exhausted | The replan limit was reached (or the same output came back for the same state) with no earlier unrecovered error | `trial_end.termination_reason = replan_budget_exhausted` |
+| 8 | Replan budget exhausted | The replan limit was reached, or the same output came back for the same state (repeated-output detection, Phase 7b), with no earlier unrecovered error | `trial_end.termination_reason` = `replan_budget_exhausted` or `replan_loop`; `plan_check` fail with `repeated_planner_output` |
 
-Infrastructure problems (planner server down, simulator crash; `termination_reason = infrastructure`, or no `trial_end`) are excluded from every percentage and counted separately.
+Infrastructure problems (planner server errors, connection failures and timeouts, i.e. `planner_call_failed`; simulator crashes; `termination_reason = infrastructure`, or no `trial_end`) are excluded from every percentage and counted separately. `run_trial_matrix` reruns such a trial up to twice and logs each rerun (`infrastructure_reruns.jsonl`); only the last attempt is read.
+
+**Repeated-output detection** (area 8, Phase 7b): at every planning event the pipeline hashes the abstract state (visible objects and regions, remembered objects, lid states, gripper, remaining plan, trigger objects; not the rejection notes) together with the output after its last `FINAL ACTIONS:` / `FINAL BLOCKS:` marker. The first repeat in a trial is rejected (`repeated_planner_output`) and re-queried once with the fact "This output was already tried in the same state and it did not work."; a second repeat stops the trial with `termination_reason = replan_loop`.
+
+**Not detected as areas 2 and 3** (plan.md 7.1 lists them): moving a goal-attained object (area 2) and moving a non-overlapping irrelevant object (area 3) are not checked. In corrective mode a block that misses a listed object or acts on an unlisted one is rejected by the block parser (`invalid_corrective_block`) and counted as area 1.
 
 ## 2. Counting rules
 
@@ -24,16 +28,18 @@ Infrastructure problems (planner server down, simulator crash; `termination_reas
   - an insertion rejection or merge conflict is recovered when a later insertion is accepted;
   - an action failure is recovered when the same action later succeeds.
   
+  A trial stopped by repeated-output detection (`replan_loop`) gets area 8, unless an evaluator procedure check failed after a replan: a loop that follows an irreversible procedure violation (raw meat plated before cooking, overcooked meat) is its consequence, so the violation stays the primary cause (area 4) and the loop is an occurrence (the `always_front` runs on G2/G3, section 4).
+
   A failed trial with no unrecovered error gets:
   - area 4 when an evaluator procedure or hard-constraint check failed after a replan (area 5 without a replan);
   - otherwise area 3 when an accepted corrective sub-plan's trigger object is named in the unmet goal;
   - otherwise area 8 when the replan budget ran out;
   - otherwise area 5.
 - **Occurrences** (can overlap): the share of trials in which each area happened at least once, recovered or not (e.g. an `insertion_too_late` fixed by a re-query).
-- **Trigger accuracy** (a system check, not a failure area): the share of trials whose triggered objects match the variant spec. Every object with an expected IF decision other than `ignore` triggered, and no `ignore` object triggered. In `discovery` mode the triggered objects are those of `new_object_discovered` replans; in `if_rule` mode, those of the `if_check` events.
+- **Trigger accuracy** (a system check, not a failure area): the share of trials whose triggered objects match the variant spec. Every object with an expected IF decision other than `ignore` triggered, and no `ignore` object triggered. The triggered objects are the `trigger_objects` of the `if_check` events, which both trigger modes log from Phase 7b (`trigger_mode` says which rule chose them); for older discovery logs, those of `new_object_discovered` replans.
 - **First-proposal urgency accuracy**: for the first corrective proposal of a trial (accepted or not), the share of trigger objects whose proposed urgency equals the variant spec.
 
-Both tables are written per condition and per variant. A condition is the planner model plus the flags `memory.enabled`, `replan.trigger_mode`, `replan.output_mode`, `replan.insertion_mode`, `parallel.enabled`.
+Both tables are written per condition and per variant. A condition is the planner model plus the flags `memory.enabled`, `replan.trigger_mode`, `replan.output_mode`, `replan.insertion_mode`, `parallel.enabled`, and (when logged, from Phase 7b) `prompt.version` / `prompt.corrective_hints` if not the default, the replan budget (`budget=`) and the simulated planner delay (`delay=`), so runs with and without the delay are never merged.
 
 ## 3. Log excerpts per area
 
@@ -53,9 +59,12 @@ Real excerpts come from the oracle runs where the area occurred. The oracle plan
 
 ## 4. Results so far (oracle planner)
 
-`results/diagnostics/` (324 trials: the Phase 3 ceiling, Phases 4–6, the old-variant regression). Every failed trial has exactly one primary area; there are none unassigned.
-- All failures are in the insertion-mode ablations (area 4).
-- Motion/grasp errors occurred and were recovered in 11 kitchen trials.
-- Trigger accuracy is 100% in `if_rule` mode and 92.9% in `discovery` mode (the K2 trials).
+`results/phase7b/diagnostics/` (Phase 7b reruns, 292 trials from clean commits: the Phase 3 ceiling, Phases 4–6, and the IF-ablation and full-system conditions; old-variant regression not included). Every failed trial has exactly one primary area; none unassigned; 0 infrastructure trials.
+- The designed failures of the insertion-mode ablations are area 4 (always_end K1/K3 `insertion_too_late`, G1/G2 overcooked; always_front G2/G3 raw meat plated early, whose repeated-output loop is counted as an area-8 occurrence).
+- K3-n3 seed 0 fails in the three parallel corrective conditions (area 8): the fifth grocery does not fit on the cupboard shelf (CHANGELOG Phase 7b, known limit).
+- Motion/grasp errors (area 6 occurrences) happened and were recovered in 1–14% of trials per condition.
+- Trigger accuracy is 100% in `if_rule` mode and 92.9% in `discovery` mode (the K2 trials, where discovery triggers on the ignored phone; the oracle then answers `NO_ACTIONS`).
+
+The earlier `results/diagnostics/` (324 trials, Phases 3–6 before Phase 7b) is kept for comparison: failures only in the insertion-mode ablations; motion/grasp errors recovered in 10 kitchen trials (7 `grasp_failed`, 3 `pddl_no_plan`; first reported as 11).
 
 These numbers check the pipeline, not a planner model; the real distribution comes from the Phase 8 runs.

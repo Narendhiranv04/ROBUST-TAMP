@@ -189,7 +189,8 @@ User:
 ### 3.5 What else changed with v2
 
 - **Images unchanged.** With `--vision`, the same 5-camera composite image is attached. Images are perception, not prompt text.
-- **No format repair.** The server-side format-repair call (L5) is disabled for v2 requests (`PlanRequest.prompt_version`). An unparseable answer becomes a logged plan-check failure and a counted re-query. The planner server needs this branch's code for that to take effect.
+- **No format repair.** The server-side format-repair call (L5) is disabled for v2 requests (`PlanRequest.prompt_version`). An unparseable answer becomes a logged plan-check failure and a counted re-query. From Phase 7b format repair is also a server flag (`--format-repair`, default off), the server reports it in `GET /settings`, and real-model trials refuse a server with it on or without `/settings`.
+- **Thinking on (Phase 7b).** `/no_think` is never added by default; only `QWEN_THINKING_MODE=off` on the server adds it, and real-model trials refuse that setting.
 - **All lids listed.** Lid states for every lid in the scene come from joint and pose values, not only for visible lids. This stands in for camera perception (`docs/ARCHITECTURE.md`).
 - **Neutral plan-check facts.** Plan-check failures are shown as the code plus a plain fact, never with the old advice-bearing messages. A never-observed object is shown exactly like a name that does not exist (`unknown_action_token`); `unobserved_object` appears only in the trial log.
 
@@ -283,13 +284,13 @@ Regions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rac
 
 ## 6. Corrective replan prompt (Phase 5, `replan.output_mode = corrective`)
 
-Used only for a replan after an IF-rule trigger (`replan.trigger_mode = if_rule`). Replans after execution failures keep the full-replan prompt above.
+Used for a replan after a trigger: an IF-rule trigger, and from Phase 7b also a discovery trigger (`replan.trigger_mode = discovery`), which lists its trigger objects with the same labels so the two modes differ only in which objects are listed. Replans after execution failures keep the full-replan prompt above.
 
 What changes compared with the v2 replan prompt:
-- **System prompt:** the output format asks for blocks after a `FINAL BLOCKS:` line (objects, urgency `urgent`/`deferred`, insert `front` / `after <id>` / `end`, one-sentence reason, actions). Everything else is unchanged.
+- **System prompt:** the output format asks for blocks after a `FINAL BLOCKS:` line (objects, urgency `urgent`/`deferred`, insert `front` / `after <id>` / `end`, one-sentence reason, actions). Everything else is unchanged. From Phase 7b the format also says: "The actions of a block must end with the gripper empty. If a listed object needs no action, handle it with a block whose actions section is the single line NO_ACTIONS; such a block needs no urgency or insert line. If no listed object needs any action, write NO_ACTIONS as the only line after FINAL BLOCKS:." (snapshot `prompt_v2_kitchen_corrective_system.txt`).
 - **Why a new plan is requested:** one plain fact per trigger object with the labels plan.md 4.2 asks for: relevant or not, in its goal state or not, and whether it lies where the remaining plan places objects (computed by the system from geometry; no coordinates).
 - **What to plan** (new section): plan only for the listed objects; keep the remaining plan; do not move goal-attained or unlisted irrelevant objects; "Decide each block's urgency and where it goes in the remaining plan by considering what would go wrong if its actions were delayed."
-- A re-query after a rejected proposal adds one fact: "Your previous blocks were rejected (failure code …): <reason>".
+- A re-query after a rejected proposal adds one fact: "Your previous blocks were rejected (failure code …): <reason>". From Phase 7b every rejection is re-queried this way, including an unknown name, a block that ends while holding (`block_ends_holding`), an invalid merged plan and a repeated output ("This output was already tried in the same state and it did not work.").
 - No in-context examples. Nothing in the prompt names a variant or its expected answer.
 
 **Decision (approved):** the urgency sentence is neutral. The plan.md 5.2 examples ("an object lying where other objects will be placed", "food that would be cooked again") give away the K1/K3 and G1/G2 answers and are removed. They are kept behind `prompt.corrective_hints=on` (default `off`) for a possible hinted-vs-neutral comparison; every real-model run uses the neutral version. Snapshots: `llm_pipeline/tests/snapshots/prompt_v2_kitchen_corrective_{system,user}.txt`.

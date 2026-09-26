@@ -2,6 +2,51 @@
 
 One entry per phase of `plan.md`: what changed, which flags, which tests.
 
+## Phase 7b: fixes from the audit (branch `phase-7b-fixes`)
+
+The independent audit (branch `audit`, `docs/AUDIT.md`) found six blockers for real-model Phase 8 runs plus two more items the user added (B7, B8). All are fixed here; every oracle suite was rerun at one clean commit.
+
+### Changed
+- **B1 corrective re-query.** Any rejection of corrective blocks re-queries for blocks with the specific error (block format, unknown names, a block ending while holding, an invalid merged plan, `insertion_too_late`, `merge_conflict`, a repeated output); it never falls back to a full replan. New plan-check code `block_ends_holding` ("block N ends with the gripper holding X; a block must end with the gripper empty"). Every `planning_event` logs `output_format` and `replan_reason`.
+- **B2 one trigger path.** Discovery and IF-rule triggers come from the same post-bundle check (`pipeline._trigger_check`, shared object classifier) and go through the same corrective output, insertion and parallel paths; the modes differ only in which objects trigger, so the IF ablation isolates the trigger rule. Explicit no-action output (`NO_ACTIONS` per block or for all listed objects), valid in both modes, logged (`insertion.no_action_objects`, `all_no_action`). The failure checker's discovery trigger is off in both modes.
+- **B3 replan budget.** `max_replans = 10` for every run type, from `LLMPipelineConfig` (`DEFAULT_MAX_REPLANS`); the runners no longer have their own defaults; logged in `trial_start`.
+- **B4 infrastructure.** Planner-server errors, connection failures and timeouts are `planner_call_failed` → termination `infrastructure`, excluded from scoring; `run_trial_matrix` reruns them up to twice (`infrastructure_reruns.jsonl`, `seed_NN.infra_attemptK/`, `trial_start.attempt`). The server serves planner calls as jobs (`POST /plan/submit`, `GET /plan/jobs/<id>`, one worker); `planning_event` logs `queue_wait_s` and `generation_time_s`; the client timeout covers generation only; connection errors are retried, model outputs never.
+- **B5 planner settings.** `GET /settings` (model, revision, thinking mode, format repair, server commit), logged as `trial_start.planner_settings`; real-model trials refuse thinking off, format repair on, or a server without settings. `/no_think` is never added by default; format repair is a server flag (`--format-repair`, off).
+- **B6 provenance.** Real-model trials refuse a dirty working tree. `trial_start` logs every setting, including the simulated planner delay (0/off for real models), the attempt and the untracked-file count.
+- **B7 regions.** The staging area resolves before the pantry area; neither is padded. The kitchen `table` sampler excludes both (+3 cm), prefers a 0.28–0.62 m reach ring and samples uniformly among spots with ≥7 cm clearance. The post-place check is strict (an object observed in another region is `placement_failed`), and a place rejected by the post-check is not a completed action. `evaluation/check_place_regions.py`.
+- **B8 repeated outputs.** Hash of (abstract state, output): the first repeat is re-queried once with "This output was already tried in the same state and it did not work."; a second repeat stops the trial with `termination_reason = replan_loop` (area 8).
+- Phase 6 affected set: a trigger object's container is affected only if the object overlaps that region's placement area; the container's lid always is; a dependent bundle blocks later bundles through its objects and destination (not its pick source), and picks from parking regions are allowed. K4's mug placements into the box now run during the replan; K3's still wait.
+- IF rule: visible objects, plus remembered ones only with `memory.enabled`; overlap from the footprint when the object was last visible (never the live pose of a hidden object).
+- Parallel `planning_event` / `plan_check` are logged at the current step (`prompt_step` kept), so every Phase 6 log passes the schema check.
+- Diagnostics: `replan_loop` is area 8, except after an evaluator procedure violation (the violation stays area 4); the condition key includes the replan budget, simulated delay and non-default prompt settings.
+- Phase 8 estimate: documented as a lower bound; with a serialized server it is at least the per-lane time.
+- Root `conftest.py` puts the MuJoCo `pyrep` shim first, so the simulator tests pass in the full suite; `PDDLSTREAM_DIR` and the empty submodule are documented in `mujoco_port/README.md`.
+- Corrected counts: the test suite had 268 tests at Phase 7 (266 was the count without the MuJoCo env, where the 2 simulator tests were skipped); recovered motion/grasp errors were in 10 trials (7 + 3), not 11.
+
+### Tests
+295 pass (`test_phase7b.py`: 23 new; updated `test_if_where_pipeline`, `test_remote_client`, `test_trial_runner`, `test_vlm_contract`, `test_failure_logic`, corrective prompt snapshot). The B7 log test checks every successful place in `results/phase7b`.
+
+### Runs
+All oracle suites rerun from clean worktrees (`evaluation/rerun_oracle_suites.sh`): Phases 3–5 at `9718620a`, Phase 6 and the two Phase 8 conditions at `ea46db46` (the only runtime difference is the Phase 6 scheduler, which Phases 3–5 do not use). 292 trials under `results/phase7b/`: every log records its clean commit (`dirty: false`) and passes the schema check; 0 infrastructure trials; 0 place-region mismatches in 2045 placements (the old Phase 3 ceiling had 129 of 980); no non-overlapping hidden object moved before its own pick (194 object-trial pairs).
+
+| Suite | Old | New | Notes |
+|---|---|---|---|
+| Phase 3 ceiling (14 × seeds 0–9) | 140/140 | **140/140** | |
+| Phase 4 IF rule (14 × 2) | 28/28 | **28/28** | triggers exactly as specified |
+| Phase 5 planner insertion (14 × 2) | 28/28 | **28/28** | first-proposal urgency 100% (oracle) |
+| Phase 5 always_front (6) | 4/6 | 4/6 | G2, G3 fail by design (raw meat plated early); now stopped by `replan_loop` (3 planner calls on average instead of 5) |
+| Phase 5 always_end (6) | 2/6 | 2/6 | K1, K3 (`insertion_too_late`, now `replan_loop`) and G1, G2 (overcooked) fail by design |
+| Phase 6 parallel off (14 × 2, 20 s delay) | 28/28 | **28/28** | |
+| Phase 6 parallel on (14 × 2, 20 s delay) | 28/28 | 27/28 | K3-n3 seed 0: cupboard overflow (below) |
+| Ablation: IF (14 × 1) | — | 13/14 | first run; K3-n3 seed 0 |
+| Full system with memory (14 × 1) | — | 13/14 | first run; K3-n3 seed 0 |
+
+Robot idle time per replan, parallel on (20 s simulated planner latency): K1 / K1-w1 / K1-w2 0 s (unchanged); **K4 20 → 0 s** (the three mug placements into the box run during the replan); K3, K3-n2, K3-n3 20 s (unchanged: the overlapping can blocks the box); grill 12 → 5 s (the raw meat now goes into the grill's placement slot during the wait; the grill lid stays blocked). Independent bundles available: K4 0 → 3, grill 1 → 2.
+
+Diagnostics (`results/phase7b/diagnostics/`): every failed trial has one primary area; the ablation failures are area 4 (including the always_front G2/G3 loops, which follow an irreversible plating), the three K3-n3 failures area 8. Trigger accuracy 100% (IF rule) and 92.9% (discovery; K2's phone triggers, then gets `NO_ACTIONS`).
+
+**Known limit, K3-n3 seed 0 (3 of 292 trials):** five groceries on a cupboard shelf that holds about four. With this seed's layout the cupboard sampler (maximum clearance) spreads the first four so that the sugar has no place; the pick fails twice with `pddl_no_plan` and repeated-output detection stops the trial. Two packing samplers were tried and rejected (both lowered success elsewhere; validation logs not committed). A capacity-aware shelf placement is the open fix.
+
 ## Phase 7: diagnostics (branch `phase-7-diagnostics`)
 
 ### Changed
@@ -12,7 +57,7 @@ One entry per phase of `plan.md`: what changed, which flags, which tests.
 `diagnostics/tests/test_report.py` (11): one hand-made log per area, a multi-error trial for the first-unrecovered-error rule, success/infrastructure/trigger accuracy, and the report files.
 
 ### Runs
-- `results/diagnostics/`: 324 oracle trials (Phases 3–6 and the old-variant regression); every failed trial has exactly one primary area (none unassigned). Failures appear only in the insertion-mode ablations (area 4). Recovered motion/grasp errors (area 6 occurrences) in 11 kitchen trials: 7 `grasp_failed`, 4 `pddl_no_plan` on a pick, each fixed by a retry after the replan. Trigger accuracy: 100% in `if_rule` mode, 92.9% in `discovery` (the 10 K2 trials, where discovery replans on the ignored phone).
+- `results/diagnostics/`: 324 oracle trials (Phases 3–6 and the old-variant regression); every failed trial has exactly one primary area (none unassigned). Failures appear only in the insertion-mode ablations (area 4). Recovered motion/grasp errors (area 6 occurrences) in 10 kitchen trials: 7 `grasp_failed`, 3 `pddl_no_plan` on a pick, each fixed by a retry after the replan (corrected in Phase 7b; first reported as 11 trials, 7 + 4). Trigger accuracy: 100% in `if_rule` mode, 92.9% in `discovery` (the 10 K2 trials, where discovery replans on the ignored phone).
 - `evaluation/phase8_budget.py`: Phase 8 compute estimate from the smoke-test timings (or assumed ones) and a trimmed matrix for a time budget.
 
 ## Phase 6: WHEN, parallel planning and execution (branch `phase-6-when`)
@@ -23,7 +68,7 @@ One entry per phase of `plan.md`: what changed, which flags, which tests.
 - `pipeline._plan_in_parallel`: independent actions are listed as completed in the prompt; the planner call runs in a background thread; independent bundles execute one at a time until it returns; the merge uses the updated remaining plan (`anchor_already_executed` → front); a merged plan invalidated by what ran meanwhile is `merge_conflict` → re-query; a failed independent bundle is handled first (full replan). New triggers during the wait are evaluated after the merge.
 - `parallel` trial-log event: affected set, independent actions available/executed, planner latency, robot busy and idle time, merge result.
 - Oracle: `--planner-delay` (simulated planner latency).
-- Parking regions (Section 10, Q10) are a default until you decide: kitchen `table`, `table_staging_area`; grill `table`, `prep_area`.
+- Parking regions (Section 10, Q10): only the dedicated areas, kitchen `table_staging_area`, grill `prep_area` (`parallel.PARKING_REGIONS`; decided, see Runs below). An earlier default that also included `table` was never used in a committed run.
 
 ### Tests
 `test_parallel.py` (7): affected set and independent bundles for the kitchen phone and the grill; independent actions run during a delayed planner call and affected ones do not; urgent block runs right after the wait; executed anchor → front, logged; injected conflict → `merge_conflict` → re-query; trigger never evaluated while holding; flag-off equals Phase 5.
