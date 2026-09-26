@@ -400,7 +400,11 @@ class RLBenchKitchenEnv:
     CUPBOARD_WALL_THICKNESS = 0.011     # side/back walls and shelves of the cupboard model
     CUPBOARD_WALL_CLEARANCE = 0.02      # fingers beside the object + margin, from each side wall
     CUPBOARD_FRONT_INSET = 0.02         # an object's front face this far inside the open front
-    GRIPPER_MAX_OPENING = 0.075         # widest side a side grasp may close across
+    # Widest horizontal side for the thin-side cupboard placement. This only chooses how the hand
+    # is rolled at the cupboard; it never makes a pick possible that was not (the top-down pick is
+    # planned as before). With the fingers closing along Y the object takes the side they closed
+    # across, never more than with the previous roll (e.g. a sugar box knocked flat: 9 cm, not 18 cm).
+    CUPBOARD_MAX_THIN = 0.10
 
     def cupboard_interior(self):
         """Usable interior of the lower cupboard shelf from the cupboard model: the open front,
@@ -417,14 +421,18 @@ class RLBenchKitchenEnv:
     def cupboard_placement_spec(self, obj):
         """How a cupboard-bound object is picked and placed (None: previous behaviour).
 
-        The object is picked top-down with the fingers closing across its thinner footprint side
-        (``closing_yaw``). At the cupboard the hand is horizontal (approach +X) and rolled so the
-        fingers close horizontally along Y (``side_grasp_quat``): the object then lies with its
-        height along the cupboard's depth, its longer footprint side vertical and its thinner
-        side across the shelf, so it takes only ``thin`` of the shelf's width. Before Phase 7c
-        the hand closed vertically at the cupboard, which laid the object's longer side across
-        the shelf (sugar 9.5 cm instead of 3.5 cm). Requires an upright object whose thinner side
-        fits the gripper and whose longer side fits under the upper shelf."""
+        The object is picked top-down with the fingers closing across its thinner horizontal
+        side (``closing_yaw``). At the cupboard the hand is horizontal (approach +X) and rolled so
+        the fingers close horizontally along Y (``side_grasp_quat``): the object then lies with its
+        vertical axis (as it rested on the table) along the cupboard's depth, its longer
+        horizontal side vertical and its thinner horizontal side across the shelf, so it takes
+        only ``thin`` of the shelf's width. The resting pose may be upright or lying on a side
+        (whichever of the object's axes is nearest vertical; e.g. a sugar box that tipped over).
+        Before Phase 7c the hand closed vertically at the cupboard, which laid the object's
+        longer side across the shelf (sugar 9.5 cm instead of 3.5 cm). Requires the object to
+        rest on a face (an axis within ~14 deg of vertical), a thinner horizontal side of at most
+        ``CUPBOARD_MAX_THIN``, a longer side that fits under the upper shelf (20 cm), and a
+        non-round footprint."""
         if os.environ.get('CUPBOARD_THIN_SIDE_PLACEMENT', '1') == '0':
             return None
         try:
@@ -432,15 +440,22 @@ class RLBenchKitchenEnv:
             _, _, _, qx, qy, qz, qw = obj.get_pose()
         except Exception:
             return None
-        if 1.0 - 2.0 * (qx * qx + qy * qy) < 0.97:          # local z more than ~14 deg from vertical
-            return None
-        dx, dy, height = lx1 - lx0, ly1 - ly0, lz1 - lz0
-        yaw = float(np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
-        long_side, thin_side, thin_yaw = (dx, dy, yaw + np.pi / 2) if dx >= dy else (dy, dx, yaw)
-        if thin_side > self.GRIPPER_MAX_OPENING or long_side > 0.20 or long_side - thin_side < 0.01:
-            return None                                  # round or square: the old placement is as narrow
-        return {'long': float(long_side), 'thin': float(thin_side), 'height': float(height),
-                'closing_yaw': float(thin_yaw)}
+        R = np.array([
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy)],
+            [2 * (qx * qy + qw * qz), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qw * qx)],
+            [2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx * qx + qy * qy)],
+        ])
+        dims = [lx1 - lx0, ly1 - ly0, lz1 - lz0]
+        vertical = int(np.argmax(np.abs(R[2, :])))
+        if abs(R[2, vertical]) < 0.97:
+            return None                                  # not resting on a face
+        a, b = [i for i in range(3) if i != vertical]
+        thin, long = (a, b) if dims[a] <= dims[b] else (b, a)
+        thin_side, long_side = float(dims[thin]), float(dims[long])
+        if thin_side > self.CUPBOARD_MAX_THIN or long_side > 0.20 or long_side - thin_side < 0.01:
+            return None                                  # too wide, too tall, or round/square
+        closing_yaw = float(np.arctan2(R[1, thin], R[0, thin]))
+        return {'long': long_side, 'thin': thin_side, 'height': float(dims[vertical]), 'closing_yaw': closing_yaw}
 
     def _placement_rng(self, obj, region_name):
         """Random generator for one placement sample (Phase 7c).
@@ -474,8 +489,17 @@ class RLBenchKitchenEnv:
         the shelf is 31 cm deep), so a spot is free when its y-interval is clear. Packing
         against a neighbour or a wall leaves the free width in one piece (Phase 7c: the old
         sampler picked among the 8 best spots of a coarse grid by centre distance and could
-        target a spot overlapping a can)."""
+        target a spot overlapping a can).
+
+        Spots come from the contiguous gaps between objects (and the side walls); the list
+        interleaves the gaps (the tightest spot of each gap, then the next of each, ...), gaps in
+        order of their tightest spot, so the planner's successive samples try every gap early
+        instead of spending its sample budget in one gap whose spots are all unreachable.
+        An object that sticks out past the open front (e.g. a spam box that settled leaning
+        forward) blocks an extra ``CUPBOARD_PROTRUSION_MARGIN`` (2 cm) on each side: the hand
+        passes it on the way in."""
         margin = float(os.environ.get('CUPBOARD_FREE_MARGIN', '0.01'))
+        protrusion_margin = float(os.environ.get('CUPBOARD_PROTRUSION_MARGIN', '0.02'))
         clearance = float(os.environ.get('CUPBOARD_WALL_CLEARANCE', str(self.CUPBOARD_WALL_CLEARANCE)))
         min_y, max_y = interior['min_y'] + clearance, interior['max_y'] - clearance
         occupied = []
@@ -500,7 +524,8 @@ class RLBenchKitchenEnv:
                 continue                           # not on this shelf
             if bx1 < interior['front_x'] - 0.02 or bx0 > interior['back_x'] or by1 < min_y - 0.10 or by0 > max_y + 0.10:
                 continue
-            occupied.append((by0, by1))
+            extra = protrusion_margin if bx0 < interior['front_x'] - 0.005 else 0.0   # sticks out of the front
+            occupied.append((by0 - extra, by1 + extra))
         grid_y = max(2, int(os.environ.get('CUPBOARD_SAMPLE_GRID_Y', '41')))
         lo_y, hi_y = min_y + half_y + margin, max_y - half_y - margin
         if lo_y > hi_y:
@@ -513,9 +538,22 @@ class RLBenchKitchenEnv:
             edges_below = [b1 for b0, b1 in occupied if b1 <= y0] + [min_y]
             edges_above = [b0 for b0, b1 in occupied if b0 >= y1] + [max_y]
             gap = min(y0 - max(edges_below), min(edges_above) - y1)
-            free.append((round(max(0.0, gap), 4), float(y)))
-        free.sort()       # tightest first; ties from the low-y wall
-        return free
+            gap_id = round(max(edges_below), 4)            # the free interval this spot is in
+            free.append((round(max(0.0, gap), 4), float(y), gap_id))
+        # Tightest first within each gap; gaps ordered by their tightest spot (ties from the
+        # low-y wall); then interleaved across gaps.
+        by_gap = {}
+        for gap, y, gap_id in sorted(free):
+            by_gap.setdefault(gap_id, []).append((gap, y))
+        gaps = sorted(by_gap.values(), key=lambda spots: (spots[0][0], spots[0][1]))
+        if os.environ.get('CUPBOARD_DEBUG'):
+            print(f'[Cupboard] {obj.get_name()} half_y={half_y:.4f} walls=({min_y:.3f}, {max_y:.3f}) '
+                  f'occupied={[(round(a, 3), round(b, 3)) for a, b in sorted(occupied)]} '
+                  f'gaps={[(round(spots[0][1], 3), len(spots)) for spots in gaps]}')
+        ordered = []
+        for rank in range(max((len(spots) for spots in gaps), default=0)):
+            ordered.extend(spots[rank] for spots in gaps if rank < len(spots))
+        return ordered
 
     def sample_stable_pose(self, obj, region_name):
         """Return a stable 7D pose (x,y,z,qx,qy,qz,qw) for obj in region."""
@@ -1468,6 +1506,10 @@ class RLBenchKitchenEnv:
                     for roll in [0]:
                          q = quaternion_from_euler(roll, base_ry, 0)
                          grasp_quats.append(q)
+                    # Phase 7c: the sampled height, then higher ones (up to 8 cm) when the insertion
+                    # path collides at the sampled one.
+                    place_targets = [([pose[0], pose[1], float(pose[2]) + dz], [pose[0] - hover_dist, pose[1], float(pose[2]) + dz])
+                                     for dz in np.arange(0.0, 0.09, 0.02)]
 
             else:
                 # --- VERTICAL APPROACH (Top-Down) ---

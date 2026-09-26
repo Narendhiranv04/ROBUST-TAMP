@@ -32,7 +32,9 @@ Audit 3 (branch `audit`, `docs/AUDIT-3.md`) found one blocker and a list of shou
   - the usable region is the lower shelf's interior from the cupboard model: about 51.6 × 31 cm, 2 cm from each side wall;
   - only spots where the object's width plus 1 cm is clear of every other object are used, packed tightest first, and a full shelf gives no sample;
   - non-round groceries are picked top-down with the fingers closing exactly across their thin side, and inserted with the fingers closing horizontally at the lowest collision-free tip height and only as deep as needed. They lie with the thin side across the shelf: sugar 3.5 cm (was 9.5 cm), spam about 5 cm;
-  - cans keep the previous placement;
+  - cans keep the previous hand roll; every cupboard insertion searches upward for the lowest collision-free height;
+  - the thin side is taken in the pose the object rests in (upright, or lying on a face after being knocked over: a flat sugar box takes 9 cm, was 18 cm);
+  - free spots are tried gap by gap (the tightest spot of each gap in turn), and an object sticking out of the cupboard front blocks 2 cm more on each side;
   - K3-n3 and K1-w2 now fit without pushing each other (before, the sampler targeted occupied spots and succeeded only by shoving earlier groceries deeper).
 - **Replan-wait prompt (item 3):**
   - independent bundles are listed as "Scheduled to run before your corrective block is applied (not executed yet)", never as completed;
@@ -48,7 +50,7 @@ Audit 3 (branch `audit`, `docs/AUDIT-3.md`) found one blocker and a list of shou
   - PROMPTS §7, DIAGNOSTICS, VARIANTS §10, mujoco_port/README, server/SERVER.md.
 
 ### Tests
-328 pass (`test_phase7c.py`: 29 new, covering:
+329 pass (`test_phase7c.py`: 30 new, covering:
 - runtime errors;
 - the vLLM client;
 - refusals;

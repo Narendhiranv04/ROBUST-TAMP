@@ -472,9 +472,41 @@ def test_the_cupboard_sampler_only_returns_free_spots_packed_tightest_first() ->
         for box in placed:
             _, _, y0, y1, _, _ = box.world()
             assert y + 0.0175 + 0.01 <= y0 + 1e-9 or y - 0.0175 - 0.01 >= y1 - 1e-9
-    gaps = [gap for gap, _ in free]
-    assert gaps == sorted(gaps) and gaps[0] == pytest.approx(0.0, abs=0.006)
+    # Two cans leave three gaps (wall-can_a, can_a-can_b, can_b-wall): the first three spots
+    # come from three different gaps, each its gap's tightest.
+    def gap_of(y):
+        return 0 if y < -0.15 else (1 if y < 0.05 else 2)
+    assert sorted(gap_of(y) for _, y in free[:3]) == [0, 1, 2]
+    assert free[0][0] == pytest.approx(0.0, abs=0.006)
+    # An object sticking out past the open front blocks 2 cm more on each side.
+    leaning = _Box('spam', (0.43, 0.10, 1.26), (0.05, 0.05, 0.08))
+    env2 = _kitchen_env([leaning, sugar])
+    near = [y for _, y in env2._cupboard_free_candidates(sugar, 0.0175, env2.cupboard_interior())]
+    assert all(abs(y - 0.10) >= 0.025 + 0.02 + 0.0175 + 0.01 - 1e-9 for y in near)
     # A shelf with no room gives no spot (the place then has no plan).
     row = [_Box(f'c{i}', (0.48, -0.21 + 0.068 * i, 1.25), (0.055, 0.055, 0.10)) for i in range(7)]
     full = _kitchen_env(row + [sugar])
     assert full._cupboard_free_candidates(sugar, 0.0175, full.cupboard_interior()) == []
+
+
+def test_a_tipped_over_grocery_is_still_placed_thin_side_across() -> None:
+    """Sugar lying on its 9 x 17.5 face (tipped over on the table, K1-w2 seed 9): the axis nearest
+    vertical is its 3.5 cm side, so it is closed across its 9 cm side and ... the thin horizontal
+    side is 9 cm > gripper; lying on its 3.5 x 17.5 face it is closed across 3.5 cm."""
+    import math
+
+    class Lying(_Box):
+        def __init__(self, name, center, dims, roll):
+            super().__init__(name, center, dims)
+            self.q = [math.sin(roll / 2), 0.0, 0.0, math.cos(roll / 2)]     # rotation about world x
+
+    env = _kitchen_env([])
+    # Local (0.035, 0.09, 0.175) rolled 90 deg about x: local y becomes vertical (9 cm up),
+    # local x (3.5 cm) and local z (17.5 cm) are horizontal.
+    on_edge = Lying('sugar', (0.06, -0.40, 0.80), (0.035, 0.09, 0.175), math.pi / 2)
+    spec = env.cupboard_placement_spec(on_edge)
+    assert spec['thin'] == pytest.approx(0.035) and spec['long'] == pytest.approx(0.175)
+    assert spec['height'] == pytest.approx(0.09)
+    assert math.isclose(abs(math.cos(spec['closing_yaw'])), 1.0, abs_tol=1e-6)     # thin side along world x
+    # Half-way tilted (45 deg): not resting on a face, previous behaviour.
+    assert env.cupboard_placement_spec(Lying('sugar', (0.06, -0.40, 0.80), (0.035, 0.09, 0.175), math.pi / 4)) is None
