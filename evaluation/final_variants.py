@@ -173,7 +173,7 @@ KITCHEN_VARIANTS = [
              {f: 'urgent' for f in (_CAN, f'{_CAN}_2', f'{_CAN}_3')}),
 ]
 
-_W_POSITIONS = [(-0.10, -0.36), (0.42, -0.30)]
+_W_POSITIONS = [(0.17, -0.46), (0.30, -0.46)]    # on the table, in view of the cameras
 
 
 def _k1_w(w):

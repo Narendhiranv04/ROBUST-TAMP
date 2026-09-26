@@ -48,6 +48,14 @@ SOFT_KINEMATIC_CONTACTS = os.environ.get('MUJOCO_SHIM_SOFT_KINEMATIC', '1') == '
 SOFT_FOLLOWERS = os.environ.get('MUJOCO_SHIM_SOFT_FOLLOWERS', '0') == '1'
 SOFT_RELEASE = os.environ.get('MUJOCO_SHIM_SOFT_RELEASE', '0') == '1'
 SOFT_TELEPORT_ROBOT = os.environ.get('MUJOCO_SHIM_SOFT_TELEPORT_ROBOT', '1') == '1'
+# Resting bodies sleep, as in CoppeliaSim's engines: MuJoCo's soft contacts let
+# multi-hull meshes (the mugs) creep across flat supports by several cm per minute
+# of arm motion. A free body that stays below SLEEP_LIN / SLEEP_ANG for SLEEP_SUBSTEPS
+# substeps keeps its pose until it touches a moving body (robot, carried object, lid),
+# moves faster than WAKE_LIN / WAKE_ANG, or is moved from outside (set_pose, followers).
+SLEEP_RESTING = os.environ.get('MUJOCO_SHIM_SLEEP', '1') == '1'
+SLEEP_LIN, SLEEP_ANG, SLEEP_SUBSTEPS = 0.004, 0.05, 20
+WAKE_LIN, WAKE_ANG, SLEEP_POSE_TOL = 0.01, 0.1, 1e-4
 
 
 def _T(pos, quat_xyzw):
@@ -850,6 +858,48 @@ class World:
             o.jstate.kp = inertia * omega ** 2
             o.jstate.kvd = 2.0 * inertia * omega
 
+    def _sleep_resting(self):
+        """Hold resting free bodies in place (see SLEEP_RESTING)."""
+        m, d = self.m, self.d
+        free = getattr(self, '_free_joints', None)
+        if free is None:
+            free = [(int(m.jnt_qposadr[j]), int(m.jnt_dofadr[j]), int(m.jnt_bodyid[j]))
+                    for j in range(m.njnt) if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE]
+            self._free_joints = free
+            self._sleep_state = {}
+            self._prev_xpos = d.xpos.copy()
+        # Bodies that moved this substep (robot links, carried objects, lids, followers,
+        # teleports): anything in contact with one of them wakes up.
+        speed = np.linalg.norm(d.xpos - self._prev_xpos, axis=1) / m.opt.timestep
+        self._prev_xpos = d.xpos.copy()
+        moving = speed > SLEEP_LIN
+        moving[0] = False
+        touched = set()
+        if d.ncon:
+            b1 = m.geom_bodyid[d.contact.geom1[:d.ncon]]
+            b2 = m.geom_bodyid[d.contact.geom2[:d.ncon]]
+            touched.update(b2[moving[b1]].tolist())
+            touched.update(b1[moving[b2]].tolist())
+        state = self._sleep_state
+        for qadr, dadr, body in free:
+            lin = float(np.linalg.norm(d.qvel[dadr:dadr + 3]))
+            ang = float(np.linalg.norm(d.qvel[dadr + 3:dadr + 6]))
+            entry = state.get(qadr)
+            if entry is not None and entry[1] is not None:            # asleep
+                pose = entry[1]
+                moved = float(np.max(np.abs(d.qpos[qadr:qadr + 7] - pose)))   # set_pose, followers
+                if body in touched or lin > WAKE_LIN or ang > WAKE_ANG or moved > SLEEP_POSE_TOL:
+                    state[qadr] = [0, None]
+                    continue
+                d.qpos[qadr:qadr + 7] = pose
+                d.qvel[dadr:dadr + 6] = 0.0
+                continue
+            if body in touched or lin > SLEEP_LIN or ang > SLEEP_ANG:
+                state[qadr] = [0, None]
+                continue
+            count = (entry[0] if entry else 0) + 1
+            state[qadr] = [count, d.qpos[qadr:qadr + 7].copy() if count >= SLEEP_SUBSTEPS else None]
+
     def _robot_geoms(self):
         g = getattr(self, '_robot_geom_ids', None)
         if g is None:
@@ -1033,6 +1083,8 @@ class World:
             self._apply_followers()
             self._joint_controls()
             mujoco.mj_step(m, d)
+            if SLEEP_RESTING:
+                self._sleep_resting()
             self._dirty = True
         if pin_arm:
             self._arm_kinematics()

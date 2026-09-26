@@ -121,6 +121,9 @@ def regions_match_for_target(observed_region: str | None, target_region: str | N
         return True
     if target == "table_staging_area" and observed in {"table", "pantry_area"}:
         return True
+    # The table's named sub-areas are part of the table.
+    if target == "table" and observed in {"table_staging_area", "pantry_area", "placement_boundary"}:
+        return True
     return False
 
 

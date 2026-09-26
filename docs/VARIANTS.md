@@ -64,7 +64,7 @@ A *placement area* is the part of a region that the remaining plan's `place` act
 | Region | Proposed placement area | Rest of the region | Why |
 |---|---|---|---|
 | `inside_box` | robot-side half of the interior: x ∈ [−0.054, 0.111], y ∈ [0.187, 0.473] (16.5 × 28.6 cm, room for 4 mugs at their footprint) | far half x ∈ [0.111, 0.276]: used for *non-overlapping* hidden objects | K2/K4 need a place inside the box where a hidden object does not block mug placements |
-| `inside_grill` | the single grill slot nearest the robot: x ∈ [0.287, 0.352], y ∈ [−0.189, −0.112]; the executor places every meat at (0.3195, −0.150) | y ∈ [−0.343, −0.189]: the far slots, where hidden meats are placed (2 meats at y = −0.300, −0.237; 3 at −0.316, −0.264, −0.212) | plan.md: meat revealed in the grill is always non-overlapping (Q12) |
+| `inside_grill` | the single grill slot nearest the robot: x ∈ [0.287, 0.352], y ∈ [−0.189, −0.112]; the executor places every meat at (0.3195, −0.150) | y ∈ [−0.343, −0.189]: the far slots, where hidden meats are placed (x = 0.328; y = −0.295 and −0.237) | plan.md: meat revealed in the grill is always non-overlapping (Q12) |
 | `plate_top`, `cupboard_shelf`, `table_staging_area` | whole region | — | no hidden objects there |
 
 The kitchen executor's box sampler is restricted to the placement area (`env.placement_areas`, `rlbench_kitchen_env.sample_stable_pose`), and the grill executor places into the fixed placement pose (`env.placement_poses`, `_region_slot_pose`). An automated check (`python -m evaluation.check_final_variants`) tests each hidden object's overlap status against its spec, footprint against placement area.
@@ -165,7 +165,7 @@ Each sweep changes exactly one count, and everything else equals the core varian
 | K3-n3 | soup and two more cans, all overlapping | 3 |
 | G1-n1 | 1 cooked_meat in the grill | 1 |
 | G1 | 2 cooked_meat | 2 |
-| G1-n3 | 3 cooked_meat | 3 |
+| ~~G1-n3~~ | dropped: 3 meats do not fit outside the grill placement area (Q12 fallback) | — |
 
 - **Measured:** corrective sub-plan correctness, urgency accuracy per object, sub-plan length and planner-call latency against n.
 - **Constraints:** HC-box for the kitchen members; HC-grill and HC-raw for the grill members.
@@ -211,13 +211,12 @@ All kitchen variants start from `task1_variation3` with the soup removed from th
 | K3 / K4 | soup moved to (0.07, 0.33) / (0.20, 0.33) | + soup → can_of_beans |
 | K3-n2 | soup at (0.02, 0.26), copy soup2 at (0.02, 0.40) | + can_of_beans, can_of_beans_2 |
 | K3-n3 | as K3-n2, plus soup3 at (0.075, 0.33) | + can_of_beans_3 |
-| K1-w1 / K1-w2 | K1, plus soup on the table at (−0.10, −0.36) / plus soup2 at (0.42, −0.30) | + can_of_beans (, can_of_beans_2) |
+| K1-w1 / K1-w2 | K1, plus soup on the table at (0.17, −0.46) / plus soup2 at (0.30, −0.46) | + can_of_beans (, can_of_beans_2) |
 | G0 | — | chicken → raw_meat_1, plate |
-| G1 | steak moved and steak2 copied into the far slots | + cooked_meat_1, cooked_meat_2 |
-| G2 | steak and steak1 into the far slots | + cooked_meat_1, raw_meat_2 |
-| G3 | steak and steak2 into the far slots | + raw_meat_2, raw_meat_3 |
-| G1-n1 | steak into the far slot | + cooked_meat_1 |
-| G1-n3 | steak, steak2, steak3 into the three far slots | + cooked_meat_1–3 |
+| G1 | steak1 (far slot) and steak (near slot) moved into the grill | steak1 → cooked_meat_1, steak → cooked_meat_2 |
+| G2 | steak1 (far) and steak (near) | steak1 → raw_meat_2, steak → cooked_meat_1 |
+| G3 | steak1 (far) and steak (near) | steak1 → raw_meat_2, steak → raw_meat_3 |
+| G1-n1 | steak1 into the far slot | steak1 → cooked_meat_1 |
 
 Scene objects keep the names the executor knows. The planner, the trial log and the evaluator use the labels (`llm_pipeline/object_aliases.set_variant_labels`). Old variants K1–K3 and G1–G3 stay in the repository for regression only and are not reported (Q5).
 
@@ -230,11 +229,30 @@ Scene objects keep the names the executor knows. The planner, the trial log and 
 5. **Q6:** no goal-attained variant.
 6. **Q12:** grill placement area = the single slot nearest the robot for every grill variant; exactly one raw meat outside the grill in the base layout, so G1-n3's three hidden meats fit in the far slots (if not, cut the sweep to n = 1, 2). C2 is w = 0, 1, 2.
 
-## 8. Build plan after approval
+## 8. Build status
 
-- **B1:** a scene composition tool, `mujoco_port/tools/compose_variant.py`. It builds a new scene from a base scene by removing, adding or moving objects. Added objects come from any extracted scene, with new unique handles for segmentation. It writes `mujoco_port/scenes/<variant>/`, and the source `.ttt` files are untouched.
-- **B2:** variant registry entries (`evaluation/canonical_variants.py`) for the 15 variants, the goal texts (unchanged), and `LABELED_RULE_VARIANTS`.
-- **B3:** placement-area config, and the executor's box sampler restricted to the placement area.
-- **B4:** meat labels (`raw_meat_*`, `cooked_meat_*`) in the executor symbol lists, grill semantic facts and executor meat detection.
-- **B5:** GT action sequences and oracle support for every new variant.
-- **B6:** automated tests. All 15 variants load, every hidden object's overlap status matches its spec, and the feasibility check passes. Then an executor-ceiling oracle run on all 15, and baseline-system runs saved under `results/phase3/`.
+- **B1 (composition):** `mujoco_port/tools/compose_variant.py` builds `mujoco_port/scenes/final_<name>/` from the extracted scenes; the `.ttt` sources are untouched. The kitchen phone is copied from `grill_variation1`, where it is a static prop, and made a rigid body (0.15 kg) so it can be picked.
+- **B2 (registry):** `evaluation/final_variants.py` (14 variants, `FINAL.<name>`), `get_variant_spec('FINAL.K1')`, `LABELED_RULE_VARIANTS` = the 14 ids.
+- **B3 (placement areas):** box sampler limited to the box placement area; grill meat placed at the placement pose (0.3195, −0.150).
+- **B4 (labels):** `raw_meat_<n>` / `cooked_meat_<n>`, `can_of_beans_<n>` through `set_variant_labels`; the executor, grill semantics and pose checks map labels to scene objects.
+- **B5 (GT and oracle):** GT action lists in the registry; the oracle uses them.
+- **B6 (checks):** `python -m evaluation.check_final_variants` (results in `results/phase3/checks/`).
+
+Changes made while building (for your review):
+- **G1-n3 dropped:** the grill C1 sweep is n = 1, 2 (Q12 fallback). Three steaks need 15.9 cm of the 15.4 cm of the grill outside its placement area. A steak placed beyond the far slot rides up on the grill wall and shows under the lid.
+- **Hidden-meat positions:** x = 0.328 (not 0.3195) and y = −0.295 / −0.237. Closer to the hinge the meats show through the gap at the back of the lid; farther forward they tilt against the front wall. The far slot uses the base scene's `steak1` mesh; the `steak` mesh rose 1.7 cm there.
+- **K1-w table cans:** at (0.17, −0.46) and (0.30, −0.46) instead of (−0.10, −0.36) and (0.42, −0.30). At the first old spot, next to the robot base, the can left the cameras' view after pose jitter, so it was never observed. The second moved away from the mug staging area.
+- **Mug creep (simulator):** MuJoCo's soft contacts let the mugs' multi-hull meshes creep across the table (up to about 30 cm over a trial of arm motion), which occasionally pushed a staged mug out of reach. The shim now puts resting bodies to sleep, as CoppeliaSim's engines do (`MUJOCO_SHIM_SLEEP`, default on; wake on contact with a moving body, fast motion, or an external pose change). This applies to every scene. Tests: `mujoco_port/tests/test_sleep.py`; the old variants are rerun for regression.
+- **Kitchen GT order:** mug3 is staged first, then mug2, as in the old K3 ground truth.
+
+Results: section 9.
+
+## 9. Results
+
+**Build checks** (`results/phase3/checks/`): all 14 variants pass. They load; every hidden object starts unseen, in its region, with the specified overlap; added or moved objects settle.
+
+**Oracle ceiling** (`results/phase3/oracle_ceiling/`): ground-truth oracle planner, `replan.trigger_mode=discovery`, pose jitter seeds 0–9. **140/140 trials successful** (100% task success, 100% partial goal completion on every variant).
+
+**K2/K4 mug fit (Q4):** the three mugs are placed in the box placement area without moving the hidden object in all 20 trials; the phone (K2) and the can (K4) stay in the far half.
+
+**Regression and later phases:** results/executor_ceiling_regression/ (old K1–K3, G1–G3) and results/phase4–6/, reported with Phases 4–6.
