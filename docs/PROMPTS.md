@@ -280,3 +280,48 @@ Regions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rac
 
    **Applied** (approved 2026-09-25) in prompt v2 only: v2 prompts and the `valid_regions` sent to the server use the neutral names; the parser maps them back (`region_aliases.PLANNER_REGION_NAMES`), and logs, evaluator and executor keep the canonical names. Legacy prompts are unchanged.
 4. **Reasoning before `FINAL ACTIONS:`** is allowed. For `prompt.version=v2` the client parses only the text after the last `FINAL ACTIONS:` line; an answer without that line is a plan-check failure (`planner_output_not_parseable`). The text before it is logged as `planning_event.reasoning` in `trial_log.jsonl`, and the full raw output as `raw_output`.
+
+## 6. Corrective replan prompt (Phase 5, `replan.output_mode = corrective`)
+
+Used only for a replan after an IF-rule trigger (`replan.trigger_mode = if_rule`). Replans after execution failures keep the full-replan prompt above.
+
+What changes compared with the v2 replan prompt:
+- **System prompt:** the output format asks for blocks after a `FINAL BLOCKS:` line (objects, urgency `urgent`/`deferred`, insert `front` / `after <id>` / `end`, one-sentence reason, actions). Everything else is unchanged.
+- **Why a new plan is requested:** one plain fact per trigger object with the labels plan.md 4.2 asks for: relevant or not, in its goal state or not, and whether it lies where the remaining plan places objects (computed by the system from geometry; no coordinates).
+- **What to plan** (new section): plan only for the listed objects; keep the remaining plan; do not move goal-attained or unlisted irrelevant objects; "Decide each block's urgency and where it goes in the remaining plan by considering what would go wrong if its actions were delayed."
+- A re-query after a rejected proposal adds one fact: "Your previous blocks were rejected (failure code …): <reason>".
+- No in-context examples. Nothing in the prompt names a variant or its expected answer.
+
+**Decision (approved):** the urgency sentence is neutral. The plan.md 5.2 examples ("an object lying where other objects will be placed", "food that would be cooked again") give away the K1/K3 and G1/G2 answers and are removed. They are kept behind `prompt.corrective_hints=on` (default `off`) for a possible hinted-vs-neutral comparison; every real-model run uses the neutral version. Snapshots: `llm_pipeline/tests/snapshots/prompt_v2_kitchen_corrective_{system,user}.txt`.
+
+Rendered example (the kitchen test scene of `llm_pipeline/tests/test_if_where_pipeline.py`: the box opens and reveals a phone in its placement area):
+
+```
+## Remaining plan (not executed yet)
+- a4: pick(mug2)
+- a5: place(mug2, inside_box)
+
+## Why a new plan is requested
+- After open(box_lid), these observed objects are not handled by the remaining plan:
+  - phone (in inside_box): not relevant to the goal; lies where the remaining plan places objects into inside_box
+
+## What to plan
+- Plan actions only for the objects listed under "Why a new plan is requested". The remaining plan stays as it is: do not repeat, reorder or remove its actions.
+- Do not move objects that are already in their goal state, and do not move objects that are not relevant to the goal unless they are listed.
+- Decide each block's urgency and where it goes in the remaining plan by considering what would go wrong if its actions were delayed.
+```
+
+Expected answer form (not shown to the planner):
+
+```
+FINAL BLOCKS:
+BLOCK
+objects: phone
+urgency: urgent
+insert: front
+reason: it lies where the mug will be placed
+actions:
+pick(phone)
+place(phone, table)
+END BLOCK
+```

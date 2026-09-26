@@ -178,3 +178,17 @@ def test_prompt_v2_remembered_objects_snapshot() -> None:
         path.write_text(text + '\n', encoding='utf-8')
     assert text + '\n' == path.read_text(encoding='utf-8')
     assert '- chicken: inside_grill, 3 steps ago' in text and '- steak: grill_side_area, 1 step ago' in text
+
+
+def test_prompt_v2_corrective_snapshot(tmp_path) -> None:
+    """Phase 5 corrective replan prompt (neutral, prompt.corrective_hints = off)."""
+    from llm_pipeline.tests.test_if_where_pipeline import INITIAL, _blocks, _run
+
+    _, planner, _, _ = _run(tmp_path, [INITIAL, _blocks('urgent', 'front')],
+                            **{'replan.trigger_mode': 'if_rule', 'replan.output_mode': 'corrective'})
+    bundle = planner.bundles[1]
+    for part, text in (('system', bundle.system_prompt), ('user', bundle.user_prompt)):
+        path = SNAPSHOT_DIR / f'prompt_v2_kitchen_corrective_{part}.txt'
+        if os.environ.get('UPDATE_PROMPT_SNAPSHOTS') == '1':
+            path.write_text(text + '\n')
+        assert text + '\n' == path.read_text(), f'{path.name} changed; review and regenerate'
