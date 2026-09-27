@@ -71,6 +71,20 @@ PINNED_MODELS: Dict[str, Dict[str, Any]] = {
             'text': {'temperature': 1.0, 'top_p': 1.0, 'top_k': 40, 'repetition_penalty': 1.0, 'presence_penalty': 2.0},
         },
     },
+    # The text-only LLM of the same size and family (the project's LLM, Qwen/Qwen3-8B). A hybrid
+    # model: its chat template thinks unless enable_thinking=false is passed, which this client
+    # never sends. Sampling: the model card's thinking-mode setting (Temperature 0.6, TopP 0.95,
+    # TopK 20, MinP 0; the generation_config.json defaults); the card leaves presence_penalty at
+    # its default and only suggests raising it (0-2) against endless repetition.
+    'qwen3-8b': {
+        'repo': 'Qwen/Qwen3-8B',
+        'revision': 'b968826d9c46dd6066d109eabc6255188de91218',
+        'model_type': 'llm',
+        'thinking': 'on',
+        'sampling': {
+            'text': {'temperature': 0.6, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 0.0},
+        },
+    },
 }
 
 SNAPSHOT_REVISION = re.compile(r'/snapshots/([0-9a-f]{40})/?$')
@@ -114,6 +128,7 @@ class VLLMChatPlanner:
         self.expected_revision = expected_revision or pinned.get('revision')
         self.sampling_presets = dict(pinned.get('sampling') or {})
         self.thinking_mode = pinned.get('thinking')     # 'on' / 'off': a property of the model
+        self.model_type = pinned.get('model_type', 'vlm')
         self.request_timeout_s = float(request_timeout_s if request_timeout_s is not None
                                        else os.environ.get('LLM_REQUEST_TIMEOUT_S', '900'))
         self.http_timeout_s = float(os.environ.get('LLM_HTTP_TIMEOUT_S', '30'))
@@ -219,6 +234,8 @@ class VLLMChatPlanner:
     def chat(self, system_prompt: str, user_prompt: str, max_new_tokens: int, image: Any = None) -> Dict[str, Any]:
         """One chat completion. Raises PlannerServerError for anything that is not a model output."""
         settings = self._check_settings()
+        if self.model_type == 'llm':
+            image = None             # a text-only model never receives the image
         image_b64 = encode_image_png_base64(image) if image is not None else None
         preset = 'vl' if image_b64 else 'text'
         sampling = dict(self.sampling_presets.get(preset) or {})
@@ -266,6 +283,8 @@ class VLLMChatPlanner:
         max_new_tokens = int(metadata.get('max_new_tokens', 4096) or 4096)
         images = list(getattr(bundle, 'images', None) or [])
         image = images[0] if (images and metadata.get('use_vision', True)) else None
+        if self.model_type == 'llm':
+            image = None
         started_at = time.time()
         self.last_request_summary = {
             'valid_objects': self.parser.planner_visible_objects() if hasattr(self.parser, 'planner_visible_objects')
@@ -337,6 +356,6 @@ class VLLMChatPlanner:
                                reason=text.partition(':')[2].strip())
 
     def get_debug_info(self) -> Dict[str, Any]:
-        return {'model_alias': self.model_alias, 'model_name': self.model_name, 'model_type': 'vlm',
+        return {'model_alias': self.model_alias, 'model_name': self.model_name, 'model_type': self.model_type,
                 'quantization': 'none', 'loaded': self.loaded, 'server_url': self.server_url,
                 'settings': dict(self.server_settings), 'last_request': dict(self.last_request_summary)}

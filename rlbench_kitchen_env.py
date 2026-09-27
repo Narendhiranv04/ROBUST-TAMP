@@ -991,7 +991,12 @@ class RLBenchKitchenEnv:
             p_lift = [p1[0], p1[1], p1[2] + 0.25] # Increased from 0.15 for safety
             
             # Plan q1 -> q_lift
-            path_lift = self.robot.get_linear_path(position=p_lift, quaternion=quat1, steps=30, ignore_collisions=False) # Increased to 30
+            # get_linear_path raises when there is no path; that used to end the whole motion
+            # plan (the except below) before any of the fallbacks were tried.
+            try:
+                path_lift = self.robot.get_linear_path(position=p_lift, quaternion=quat1, steps=30, ignore_collisions=False) # Increased to 30
+            except Exception:
+                path_lift = None
             
             if path_lift:
                 q_lift = path_lift._path_points[-7:].tolist()
@@ -1009,9 +1014,11 @@ class RLBenchKitchenEnv:
                 
                 # If RRT fails, try interpolate as final fallback
                 traj_rest_interp = self._interpolate_joint_path(q_lift, q2, steps=100, check_collisions=True)
-                
-                if traj_rest:
-                    return traj_lift + traj_rest
+
+                # (was `if traj_rest:`, a name never assigned on this path: the NameError ended the
+                # whole motion plan as None and skipped the via-home fallbacks below)
+                if traj_rest_interp:
+                    return traj_lift + traj_rest_interp
                 
                 # If interpolation fails, try via Home (High -> Home -> Target)
                 if not np.allclose(q_lift, self.home_conf, atol=1e-3):
@@ -1030,6 +1037,14 @@ class RLBenchKitchenEnv:
                     traj_from_home = self._interpolate_joint_path(self.home_conf, q2, steps=100, check_collisions=True) # Increased to 100
                     if traj_from_home:
                         return traj_to_home + traj_from_home
+            else:
+                # Already at home (after a pick, holding the object): the via-home path is just
+                # home -> q2. Without this, a move planned while holding had no path at all: the
+                # holding case skips the direct interpolation above, and the lift above never
+                # succeeds (robot.get_position() is the robot base, not the tip).
+                traj_from_home = self._interpolate_joint_path(self.home_conf, q2, steps=100, check_collisions=True)
+                if traj_from_home:
+                    return [list(q1)] + traj_from_home
 
             # 4. If that fails, return None (Planner will retry or fail)
             # print(f"DEBUG: Motion plan failed for q1->q2 (Collision)")
@@ -1435,6 +1450,19 @@ class RLBenchKitchenEnv:
         """Return grasp, q_start, q_end, and trajectory for placing obj at pose (LOWER & RELEASE)."""
         original_conf = self.get_robot_conf()
         place_targets = None   # Phase 7c: several (place, hover) targets for the cupboard thin-side place
+        # A place planned while the object is already in the hand (picked in an earlier step)
+        # would count the object as part of the arm: the targets below put the tip where the
+        # object ends up, so the held object always "collides" with the surface. The usual
+        # pick-and-place solve plans the place before the pick, with the object at its start;
+        # leaving the held object out of the collision check plans the same place.
+        held_uncollidable = []
+        try:
+            grasped = self.gripper.get_grasped_objects() if getattr(self, 'gripper', None) is not None else []
+            if any(g.get_handle() == obj.get_handle() for g in grasped) and obj.is_collidable():
+                obj.set_collidable(False)
+                held_uncollidable.append(obj)
+        except Exception:
+            pass
         try:
             # 1. Determine Strategy based on Region
             region_name = normalize_region_name(region_name)
@@ -1624,6 +1652,8 @@ class RLBenchKitchenEnv:
 
             raise RuntimeError(f"Could not find valid place configuration for region {region_name}")
         finally:
+            for held in held_uncollidable:
+                held.set_collidable(True)
             self.set_robot_conf(original_conf)
 
     def compute_hover_config(self, obj, pose, hover_offset=0.12):

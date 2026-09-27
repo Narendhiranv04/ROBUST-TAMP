@@ -4936,6 +4936,19 @@ class GrillPrimitiveTransferExecutor(GrillPrimitiveExecutorBase):
                     settle_steps=int(os.environ.get("GRILL_OBJECT_POST_RETREAT_SETTLE_STEPS", "14")),
                 )
             _attach_to_plate_after_place(self.env, self.pr, self.target_obj, self.target_region)
+        else:
+            # Any other region (prep_area, dish_rack, ...; no ground-truth sequence places there):
+            # the object is released ~5 cm above its support and frozen, so without a settle it
+            # stays in the air (and cannot be picked again). Let it down onto the support.
+            settle_on_region_without_snap(
+                self.env,
+                self.pr,
+                self.target_obj,
+                target_region=self.target_region,
+                max_drop_steps=int(os.environ.get("GRILL_TABLE_POST_RETREAT_DROP_STEPS", "120")),
+                settle_steps=int(os.environ.get("GRILL_TABLE_POST_RETREAT_SETTLE_STEPS", "18")),
+                support_tol=float(os.environ.get("GRILL_TABLE_SUPPORT_TOL", "0.010")),
+            )
         step(self.pr, 10)
         self._move_back_home("place->home")
         return self._validate_transfer_complete()

@@ -305,6 +305,25 @@ class GrillBundlingHandler(AbstractBundlingHandler):
         print(f"[GRILL-BUNDLE] ✓ Transfer Complete.")
         return True, ""
 
+    def execute_held_place(self, pl_action: DirectAction) -> Tuple[bool, str]:
+        """Place an object picked in an earlier call (its place was blocked then): the GT
+        transfer's move-to-place and place stages, which do not use the pick stage's state."""
+        obj_name = pl_action.args[0]
+        gt_executor, target_region, _, err = self.create_transfer_executor(DirectAction('pick', (obj_name,)), pl_action)
+        if gt_executor is None:
+            return False, err
+        ok, msg = gt_executor.prepare()
+        if ok:
+            for stage_index in (2, 3):
+                ok, msg = gt_executor._run_stage(stage_index)
+                if not ok:
+                    break
+        self.executor.go_home()
+        if not ok:
+            return False, f"Transfer failed for {obj_name} -> {target_region}: {msg}"
+        print(f"[GRILL-BUNDLE] ✓ Held place complete.")
+        return True, ""
+
     def execute_open(self, o_action: DirectAction) -> Tuple[bool, str]:
         return self._execute_lid_motion("open", "Open")
 
@@ -1449,9 +1468,19 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
         if action.action_name == 'place':
             object_name, target_region = action.args
             target_region = normalize_region_name(target_region)
-            # Cupboard: scripted insert from hover → release → home
+            handler = getattr(getattr(self, 'bundler', None), 'handler', None)
+            if isinstance(handler, GrillBundlingHandler):
+                return handler.execute_held_place(action)
+            # Cupboard: scripted insert from hover → release → home, when a move token has
+            # carried the object to the place hover. Without it (the object was picked in an
+            # earlier call, e.g. before a blocked place), the scripted insert lowered from
+            # wherever the arm was and never released; the PDDL place (the same cupboard
+            # placement the pick-and-place bundle uses) plans the whole place instead.
             if target_region in CUPBOARD_TARGET_REGIONS:
-                return self._execute_cupboard_place_from_hover(object_name, target_region)
+                cached = getattr(self, '_pending_cupboard_place', None)
+                if cached is not None and cached.get('object_name') == object_name:
+                    return self._execute_cupboard_place_from_hover(object_name, target_region)
+                return self._execute_place_pddl(object_name, target_region)
             return self._execute_place_pddl(object_name, target_region)
         if action.action_name == 'open':
             return self._execute_open_lid()

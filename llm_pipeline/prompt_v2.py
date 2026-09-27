@@ -133,10 +133,15 @@ def state_section(
 ) -> List[str]:
     """The current state: visible objects with regions, remembered objects, lids, gripper, regions."""
     object_region_map = dict(getattr(state, 'object_region_map', {}) or {})
+    holding = (getattr(state, 'gripper_state', {}) or {}).get('holding')
     lines = ['## Current state', 'Visible objects and the region each one is in:']
     objects = [name for name in state.visible_objects if name not in LID_OBJECTS]
     if objects:
         for name in objects:
+            # A held object is in no region (the region resolver would report the table).
+            if holding and name == holding:
+                lines.append(f'- {name}: in the gripper')
+                continue
             region = object_region_map.get(name)
             lines.append(f'- {name}: {planner_region_name(region) if region else "unknown"}')
     else:
@@ -158,7 +163,6 @@ def state_section(
             lines.append(f'- {lid}: {"open" if is_open else "closed"} (closes off {closes_off}{top})')
     else:
         lines.append('- (none)')
-    holding = (getattr(state, 'gripper_state', {}) or {}).get('holding')
     lines.append(f'Gripper: {"holding " + holding if holding else "empty"}')
     lines.append('Regions: ' + (', '.join(regions) if regions else '(none)'))
     return lines

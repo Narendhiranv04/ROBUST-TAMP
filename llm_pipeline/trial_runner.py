@@ -434,6 +434,14 @@ def run_trial(
         requested = model_alias if (remote and remote_api == 'openai') else None
         problems = real_model_refusals(git_info, pre_run_settings, requested_model=requested,
                                        expected_revision=expected_model_revision(model_alias) if requested else None)
+        if requested:
+            from llm_pipeline.vllm_client import PINNED_MODELS
+
+            pinned_type = (PINNED_MODELS.get(requested) or {}).get('model_type')
+            if pinned_type == 'llm' and vision:
+                problems.append(f'{requested} is a text-only model; run it without --vision')
+            elif pinned_type == 'vlm' and not vision:
+                problems.append(f'{requested} is a vision-language model; run it with --vision')
         if problems:
             raise RefusedRun('refusing to run a real-model trial: ' + '; '.join(problems))
     seed = int(trial_index if seed is None else seed)

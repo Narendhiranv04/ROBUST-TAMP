@@ -443,12 +443,16 @@ class SegmentationFirstFailureChecker:
         else:
             failure_id = FailureCode.EXECUTOR_FAILURE
             source = FailureSource.EXECUTOR
+        evidence = {'runtime_message': message}
+        if source in (FailureSource.PDDL, FailureSource.GEOMETRY):
+            # The planner sees this sentence after the failure code (a fact, no advice).
+            evidence['fact'] = 'The motion planner found no feasible motion for this action in the current scene.'
         return FailureEvent(
             failure_id=failure_id,
             stage=stage,
             source=source,
             action=str(action),
-            evidence={'runtime_message': message},
+            evidence=evidence,
             failure_layer=layer,
             message=message,
         )
