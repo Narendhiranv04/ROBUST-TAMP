@@ -25,8 +25,16 @@ def test_every_profile_is_pinned_and_sampled_not_greedy(alias) -> None:
     assert p['system_prompt_mode'] in ('system', 'user', 'system_with_card_prompt') and p['source']
 
 
-def test_the_run_order_covers_every_profile_once() -> None:
-    assert sorted(mp.RUN_ORDER) == sorted(mp.PROFILES)
+def test_the_run_orders_cover_every_profile_once() -> None:
+    assert sorted(mp.RUN_ORDER + mp.SCALE_RUN_ORDER) == sorted(mp.PROFILES)
+
+
+def test_the_fp8_scale_profiles_keep_their_bf16_counterparts_settings() -> None:
+    for alias in mp.SCALE_RUN_ORDER:
+        p, base = mp.profile(alias), mp.profile(alias.replace('-fp8', '').replace('32b', '8b'))
+        assert p['repo'].endswith('-FP8') and p['served_name'] == alias
+        for key in ('model_type', 'reasoning', 'thinking', 'sampling', 'system_prompt_mode', 'serve'):
+            assert p[key] == base[key], (alias, key)
 
 
 def test_packaging_modes() -> None:

@@ -12,17 +12,19 @@
 #      model is not kept (KEEP_REPOS).
 # Results (predictions, thinking, action sequences, prompts, images, metrics) are never deleted.
 #
-#   run_model_queue.sh [alias ...]      (default: model_profiles.RUN_ORDER)
+#   run_model_queue.sh [alias ...]      (default: model_profiles.RUN_ORDER; QUEUE_ORDER=scale: SCALE_RUN_ORDER)
+# Per-server settings (defaults: the lab server): QUEUE_INFER, QUEUE_REPO, QUEUE_OUT, QUEUE_ARCHIVE,
+# HF_HOME, KEEP_REPOS, QUEUE_JOBS.
 set -uo pipefail
-. ~/robust_tamp_infer/sim_env.sh >/dev/null           # simulator env; cd ~/robust_tamp_run
-REPO=~/robust_tamp_run
-INFER=~/robust_tamp_infer
+INFER=${QUEUE_INFER:-$HOME/robust_tamp_infer}
+. "$INFER/sim_env.sh" >/dev/null                       # simulator env; cd into the run clone
+REPO=${QUEUE_REPO:-$HOME/robust_tamp_run}
 OUT=${QUEUE_OUT:-$INFER/real_trials/table2}
-ARCHIVE=$INFER/archive/table2
-export HF_HOME=/home/projects/long-horizon/.cache/huggingface
+ARCHIVE=${QUEUE_ARCHIVE:-$INFER/archive/table2}
+export HF_HOME=${HF_HOME:-/home/projects/long-horizon/.cache/huggingface}
 HUB=$HF_HOME/hub
 DL_LOG=$INFER/logs/downloaded_models.tsv
-KEEP_REPOS="Qwen/Qwen3-VL-8B-Thinking"                # the selected model, used in all later experiments
+KEEP_REPOS=${KEEP_REPOS-"Qwen/Qwen3-VL-8B-Thinking"}   # the selected model, used in all later experiments
 VARIANTS="FINAL.K0 FINAL.G0 FINAL.K1 FINAL.K2 FINAL.K3 FINAL.K4 FINAL.G1 FINAL.G2 FINAL.G3 FINAL.K3-n2 FINAL.K3-n3 FINAL.G1-n1 FINAL.K1-w1 FINAL.K1-w2"
 SEEDS=0-9
 JOBS=${QUEUE_JOBS:-6}
@@ -33,8 +35,9 @@ PROFILES_PY="python3 $REPO/llm_pipeline/model_profiles.py"
 mkdir -p "$OUT" "$ARCHIVE" "$INFER/logs"
 log() { echo "[queue $(date -Is)] $*"; }
 
+ORDER_NAME=RUN_ORDER; [ "${QUEUE_ORDER:-}" = scale ] && ORDER_NAME=SCALE_RUN_ORDER
 if [ $# -gt 0 ]; then ALIASES=("$@"); else
-  mapfile -t ALIASES < <(python3 -c "import sys; sys.path.insert(0, '$REPO'); from llm_pipeline.model_profiles import RUN_ORDER; print('\n'.join(RUN_ORDER))")
+  mapfile -t ALIASES < <(python3 -c "import sys; sys.path.insert(0, '$REPO'); from llm_pipeline import model_profiles as mp; print('\n'.join(getattr(mp, '$ORDER_NAME')))")
 fi
 git -C "$REPO" log --oneline -1; git -C "$REPO" status --short -uno
 log "queue: ${ALIASES[*]}"
@@ -68,7 +71,7 @@ download() {      # $1 alias: hf download of the pinned snapshot (idempotent: co
   done
   flock -u 9; return 1
 }
-disk_free_gb() { df -BG --output=avail /home | tail -1 | tr -dc 0-9; }
+disk_free_gb() { mkdir -p "$HF_HOME"; df -BG --output=avail "$HF_HOME" | tail -1 | tr -dc 0-9; }
 prefetch_next() { # download the next two aliases while this one runs, when there is room (~20 GB each + 30 GB margin)
   local after=$1 seen=0 n=0 a
   for a in "${ALIASES[@]}"; do
@@ -103,9 +106,9 @@ for alias in "${ALIASES[@]}"; do
     echo "vllm start failed" > "$run/SKIPPED"; continue
   fi
   # Run manifest: the profile, what the server reports, the serve command, GPU, code.
-  python3 - "$alias" "$run" <<'PY'
+  python3 - "$alias" "$run" "$REPO" "$INFER" <<'PY'
 import json, subprocess, sys, socket, datetime, urllib.request
-alias, run = sys.argv[1], sys.argv[2]
+alias, run, repo, infer = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 def sh(cmd):
     try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60).stdout.strip()
     except Exception as e: return f'error: {e}'
@@ -113,12 +116,11 @@ def get(path):
     try:
         with urllib.request.urlopen('http://127.0.0.1:8000' + path, timeout=30) as f: return json.load(f)
     except Exception as e: return {'error': str(e)}
-repo = '/home/projects/long-horizon/robust_tamp_run'
 manifest = {
     'alias': alias, 'started': datetime.datetime.now().astimezone().isoformat(), 'host': socket.gethostname(),
     'profile': json.loads(sh(f'python3 {repo}/llm_pipeline/model_profiles.py json {alias}')),
     'v1_models': get('/v1/models'), 'version': get('/version'),
-    'serve_command': sh('cat ~/robust_tamp_infer/logs/serve_command.txt'),
+    'serve_command': sh(f'cat {infer}/logs/serve_command.txt'),
     'gpu': sh('nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader'),
     'git_commit': sh(f'git -C {repo} rev-parse HEAD'), 'git_status': sh(f'git -C {repo} status --short -uno'),
     'run_settings': {'variants': 14, 'seeds': '0-9', 'jobs': None, 'max_new_tokens': 24576, 'icl': 'zero_shot',

@@ -169,6 +169,22 @@ PROFILES = {
     },
 }
 
+# Table 2 (a), scale: the Qwen3 family at 4B, 8B and 32B, all in the official FP8 releases (a 32B
+# model is ~65 GB in bf16 and does not fit the 48 GB GPU of the second server; one precision for
+# every scale keeps the comparison even). Each has its bf16 counterpart's model-card sampling,
+# packaging and vLLM arguments; only the snapshot differs.
+_FP8 = {
+    'qwen3-vl-4b-thinking-fp8': ('qwen3-vl-4b-thinking', 'Qwen/Qwen3-VL-4B-Thinking-FP8', '219b8e195ea30e383c55c954278767990974bba9'),
+    'qwen3-4b-fp8': ('qwen3-4b', 'Qwen/Qwen3-4B-FP8', '96b30dc13593a244a5e59e84687309f53c375cfa'),
+    'qwen3-vl-8b-thinking-fp8': ('qwen3-vl-8b-thinking', 'Qwen/Qwen3-VL-8B-Thinking-FP8', 'a6638e84662f85a17bb8688224541e153d4f6c71'),
+    'qwen3-8b-fp8': ('qwen3-8b', 'Qwen/Qwen3-8B-FP8', '220b46e3b2180893580a4454f21f22d3ebb187d3'),
+    'qwen3-vl-32b-thinking-fp8': ('qwen3-vl-8b-thinking', 'Qwen/Qwen3-VL-32B-Thinking-FP8', '3eee143c9b355ba456390568e5970e2e60f5582b'),
+    'qwen3-32b-fp8': ('qwen3-8b', 'Qwen/Qwen3-32B-FP8', 'aa55da1ecc13d006e8b8e4f54579b1ea8c3db2df'),
+}
+for _alias, (_base, _repo, _rev) in _FP8.items():
+    PROFILES[_alias] = dict(PROFILES[_base], repo=_repo, revision=_rev, served_name=_alias,
+                            source=PROFILES[_base]['source'] + f'; FP8 release of the same model ({_repo})')
+
 # Old server profile names (start_vllm.sh VLLM_MODEL=thinking|instruct|llm).
 LEGACY_NAMES = {'thinking': 'qwen3-vl-8b-thinking', 'instruct': 'qwen3-vl-8b-instruct', 'llm': 'qwen3-8b'}
 
@@ -179,6 +195,9 @@ RUN_ORDER = [
     'r1-distill-qwen-7b', 'r1-distill-llama-8b', 'ministral-3-8b-instruct', 'ministral-3-8b-reasoning',
     'llama-3.1-8b-instruct',
 ]
+# Scale study on the second server (Table 2 (a), zero-shot): VLM, LLM, VLM, LLM ... from 4B up.
+SCALE_RUN_ORDER = ['qwen3-vl-4b-thinking-fp8', 'qwen3-4b-fp8', 'qwen3-vl-8b-thinking-fp8', 'qwen3-8b-fp8',
+                   'qwen3-vl-32b-thinking-fp8', 'qwen3-32b-fp8']
 
 
 def profile(alias: str) -> dict:
