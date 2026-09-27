@@ -141,7 +141,7 @@ def test_the_vllm_client_reports_settings_and_uses_the_recommended_sampling() ->
     assert settings['model_revision'] == REVISION and settings['vllm_version'] == '0.30.0'
     assert settings['thinking_mode'] == 'on' and settings['format_repair'] is False and settings['fingerprint']
     body = fake.posts[0][1]
-    assert body['chat_template_kwargs'] == {'enable_thinking': True} and body['model'] == 'qwen3-vl-8b-thinking'
+    assert 'chat_template_kwargs' not in body and body['model'] == 'qwen3-vl-8b-thinking'
     # Text-only request: the model card's text preset.
     assert (body['temperature'], body['top_p'], body['top_k'], body['presence_penalty']) == (1.0, 0.95, 20, 1.5)
     assert result.success is True and result.reasoning == 'thinking...'

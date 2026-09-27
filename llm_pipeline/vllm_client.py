@@ -4,9 +4,11 @@ The lab server (``server/SERVER.md``) serves the pinned Qwen3-VL-8B-Thinking sna
 127.0.0.1:8000, reached through an SSH tunnel. One planner call is one
 ``POST /v1/chat/completions``:
 
-* thinking is on (``chat_template_kwargs = {"enable_thinking": true}``); vLLM's ``qwen3``
-  reasoning parser returns the thinking in ``reasoning_content`` and the answer in
-  ``content``. Only ``content`` is parsed; the thinking is logged separately;
+* whether the model thinks is a property of the served model, not a request option
+  (``PINNED_MODELS[...]['thinking']``): Qwen3-VL-8B-Thinking always thinks (its chat template
+  opens every answer with ``<think>`` and has no switch), Qwen3-VL-8B-Instruct never does. For a
+  thinking model vLLM's ``qwen3`` reasoning parser returns the thinking in ``reasoning_content``
+  and the answer in ``content``. Only ``content`` is parsed; the thinking is logged separately;
 * sampling is the model card's recommended thinking-mode setting (``PINNED_MODELS``):
   the VL preset for a request with an image, the text preset otherwise;
 * there is no hidden second call (no format repair) and model outputs are never retried.
@@ -51,6 +53,7 @@ PINNED_MODELS: Dict[str, Dict[str, Any]] = {
         'repo': 'Qwen/Qwen3-VL-8B-Thinking',
         'revision': '92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b',
         'model_type': 'vlm',
+        'thinking': 'on',          # the chat template always opens the answer with <think>
         'sampling': {
             'vl': {'temperature': 1.0, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 0.0},
             'text': {'temperature': 1.0, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 1.5},
@@ -87,8 +90,7 @@ class VLLMChatPlanner:
     api = 'openai_chat'
 
     def __init__(self, server_url: Optional[str] = None, model: str = 'qwen3-vl-8b-thinking',
-                 expected_revision: Optional[str] = None, request_timeout_s: Optional[float] = None,
-                 enable_thinking: bool = True):
+                 expected_revision: Optional[str] = None, request_timeout_s: Optional[float] = None):
         if requests is None:
             raise ImportError('requests library required for the vLLM planner')
         url = server_url or os.environ.get('VLLM_SERVER_URL') or os.environ.get('LLM_SERVER_URL') or 'http://127.0.0.1:8000'
@@ -99,7 +101,7 @@ class VLLMChatPlanner:
         pinned = PINNED_MODELS.get(model, {})
         self.expected_revision = expected_revision or pinned.get('revision')
         self.sampling_presets = dict(pinned.get('sampling') or {})
-        self.enable_thinking = bool(enable_thinking)
+        self.thinking_mode = pinned.get('thinking')     # 'on' / 'off': a property of the model
         self.request_timeout_s = float(request_timeout_s if request_timeout_s is not None
                                        else os.environ.get('LLM_REQUEST_TIMEOUT_S', '900'))
         self.http_timeout_s = float(os.environ.get('LLM_HTTP_TIMEOUT_S', '30'))
@@ -148,8 +150,8 @@ class VLLMChatPlanner:
             'model_revision': match.group(1) if match else None,
             'max_model_len': (entry or {}).get('max_model_len'),
             'vllm_version': vllm_version,
-            # Client-controlled: thinking is requested on every call; vLLM has no repair call.
-            'thinking_mode': 'on' if self.enable_thinking else 'off',
+            # The served model's own behaviour (pinned); vLLM has no repair call.
+            'thinking_mode': self.thinking_mode,
             'format_repair': False,
             'sampling': dict(self.sampling_presets),
             'request_timeout_s': self.request_timeout_s,
@@ -212,7 +214,6 @@ class VLLMChatPlanner:
             'model': self.served_model,
             'messages': self._messages(system_prompt, user_prompt, image_b64),
             'max_tokens': int(max_new_tokens),
-            'chat_template_kwargs': {'enable_thinking': self.enable_thinking},
             **sampling,
         }
         started = time.monotonic()

@@ -217,8 +217,10 @@ def real_model_refusals(git_info: Dict[str, Any], planner_settings: Dict[str, An
         problems.append('the planner does not report its settings (vLLM: GET /v1/models and /version; '
                         'legacy server: GET /settings)')
         return problems
-    if planner_settings.get('thinking_mode') != 'on':
-        problems.append(f"thinking mode is {planner_settings.get('thinking_mode')!r}; it must be 'on'")
+    expected_thinking = expected_thinking_mode(requested_model) if requested_model else 'on'
+    if planner_settings.get('thinking_mode') != expected_thinking:
+        problems.append(f"thinking mode is {planner_settings.get('thinking_mode')!r}; it must be {expected_thinking!r} "
+                        f"for {requested_model or 'the legacy planner server'}")
     if planner_settings.get('format_repair') is not False:
         problems.append(f"format repair is {planner_settings.get('format_repair')!r}; it must be reported as off (False)")
     served = {planner_settings.get('model_name'), planner_settings.get('model_alias')} - {None, ''}
@@ -258,6 +260,13 @@ def _pre_run_planner_settings(remote: bool, remote_url: str, remote_api: str = '
     from llm_pipeline.planner import thinking_mode_setting
 
     return {'planner': 'local', 'thinking_mode': thinking_mode_setting(), 'format_repair': False}
+
+
+def expected_thinking_mode(model: str) -> str:
+    """'on' / 'off' for a pinned vLLM model (a property of its chat template); 'on' otherwise."""
+    from llm_pipeline.vllm_client import PINNED_MODELS
+
+    return (PINNED_MODELS.get(model) or {}).get('thinking') or 'on'
 
 
 def expected_model_revision(model: str) -> Optional[str]:
