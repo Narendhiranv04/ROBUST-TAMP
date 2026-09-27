@@ -591,6 +591,13 @@ class RLBenchKitchenEnv:
 
         own_radius = _footprint_radius(obj)
 
+        def _footprint_rect(o, ox, oy, default=0.045):
+            try:
+                x0, x1, y0, y1, _, _ = self._get_world_bounding_box(o)
+                return (x0, x1, y0, y1)
+            except Exception:
+                return (ox - default, ox + default, oy - default, oy + default)
+
         def sample_clear_xy(min_x, max_x, min_y, max_y, grid_n, occ_pad_xy, occ_pad_z, mode="best", exclude=(),
                             keep=None, strict_exclude=False):
             xs = np.linspace(min_x, max_x, grid_n).tolist()
@@ -655,18 +662,25 @@ class RLBenchKitchenEnv:
                     and (w_min_z - occ_pad_z) <= oz <= (w_max_z + occ_pad_z)
                 ):
                     occupied_xy.append(np.array([ox, oy], dtype=float))
-                    occupied_r.append(_footprint_radius(other))
+                    occupied_r.append(_footprint_rect(other, ox, oy))
 
             if occupied_xy or exclude:
                 if not occupied_xy:
-                    occupied_xy, occupied_r = [np.array([1e3, 1e3])], [0.0]
-                # Clearance = the gap between the object's footprint and the nearest neighbour's
-                # footprint (radius: half the larger horizontal extent). Centre distances ignored
-                # object size, so neighbours ended up touching and later picks and places pushed
-                # them (off the table, in crowded kitchen variants).
+                    occupied_xy, occupied_r = [np.array([1e3, 1e3])], [(1e3, 1e3, 1e3, 1e3)]
+                # Clearance = the gap between the object's footprint (radius: half its larger
+                # horizontal extent) and the nearest neighbour's footprint rectangle (world
+                # bounding box). Centre distances ignored object size, so neighbours ended up
+                # touching and later picks and places pushed them (off the table, in crowded
+                # kitchen variants). Rectangles, not circles: a large flat neighbour (the open
+                # box lid beside the box) must not claim the space around it.
                 def _clearance_score(xy):
-                    p = np.array([xy[0], xy[1]], dtype=float)
-                    return min(float(np.linalg.norm(p - q)) - r for q, r in zip(occupied_xy, occupied_r)) - own_radius
+                    px, py = float(xy[0]), float(xy[1])
+                    gaps = []
+                    for x0, x1, y0, y1 in occupied_r:
+                        dx = max(x0 - px, 0.0, px - x1)
+                        dy = max(y0 - py, 0.0, py - y1)
+                        gaps.append(float(np.hypot(dx, dy)))
+                    return min(gaps) - own_radius
 
                 # Shuffle to avoid deterministic tie bias in symmetric scenes.
                 rng.shuffle(candidates)
