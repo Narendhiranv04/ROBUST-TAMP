@@ -29,7 +29,8 @@ pass() {
          "$HOST:$SRC" "$DEST/"; then
       echo "[backup $(date -Is)] synced: $(find "$DEST" -name record.json | wc -l) trials, $(du -sh "$DEST" | cut -f1)"
       (cd "$REPO" && python3 -m evaluation.table2 --results "$DEST" --out "$TABLES" > "$TABLES/build.log" 2>&1) \
-        && echo "[backup $(date -Is)] Table 2 and figures rebuilt in $TABLES" \
+        && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$DEST" --out "$TABLES/failures" > /dev/null 2>&1) \
+        && echo "[backup $(date -Is)] Table 2, figures and failure breakdown rebuilt in $TABLES" \
         || echo "[backup $(date -Is)] table build failed (see $TABLES/build.log)"
       return
     fi
