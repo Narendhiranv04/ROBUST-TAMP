@@ -582,6 +582,15 @@ class RLBenchKitchenEnv:
         except Exception:
             is_mug = False
 
+        def _footprint_radius(o, default=0.045):
+            try:
+                x0, x1, y0, y1, _, _ = self._get_world_bounding_box(o)
+                return 0.5 * max(x1 - x0, y1 - y0)
+            except Exception:
+                return default
+
+        own_radius = _footprint_radius(obj)
+
         def sample_clear_xy(min_x, max_x, min_y, max_y, grid_n, occ_pad_xy, occ_pad_z, mode="best", exclude=(),
                             keep=None, strict_exclude=False):
             xs = np.linspace(min_x, max_x, grid_n).tolist()
@@ -634,6 +643,7 @@ class RLBenchKitchenEnv:
                         continue
                     occupancy_sources.append(other)
 
+            occupied_r = []
             for other in occupancy_sources:
                 try:
                     ox, oy, oz = other.get_position()
@@ -645,13 +655,18 @@ class RLBenchKitchenEnv:
                     and (w_min_z - occ_pad_z) <= oz <= (w_max_z + occ_pad_z)
                 ):
                     occupied_xy.append(np.array([ox, oy], dtype=float))
+                    occupied_r.append(_footprint_radius(other))
 
             if occupied_xy or exclude:
-                occupied_xy = occupied_xy or [np.array([1e3, 1e3])]
-                # Pick the candidate with maximum clearance to occupied objects.
+                if not occupied_xy:
+                    occupied_xy, occupied_r = [np.array([1e3, 1e3])], [0.0]
+                # Clearance = the gap between the object's footprint and the nearest neighbour's
+                # footprint (radius: half the larger horizontal extent). Centre distances ignored
+                # object size, so neighbours ended up touching and later picks and places pushed
+                # them (off the table, in crowded kitchen variants).
                 def _clearance_score(xy):
                     p = np.array([xy[0], xy[1]], dtype=float)
-                    return min(float(np.linalg.norm(p - q)) for q in occupied_xy)
+                    return min(float(np.linalg.norm(p - q)) - r for q, r in zip(occupied_xy, occupied_r)) - own_radius
 
                 # Shuffle to avoid deterministic tie bias in symmetric scenes.
                 rng.shuffle(candidates)
@@ -659,8 +674,8 @@ class RLBenchKitchenEnv:
                     # Any candidate with enough clearance, uniformly: the planner's repeated
                     # samples then cover the whole free area instead of the same few
                     # maximum-clearance spots (which can all be unreachable).
-                    min_clear = float(os.environ.get("CLEAR_XY_MIN_CLEARANCE", "0.07"))
-                    clear = [c for c in candidates if _clearance_score(c) >= min_clear]
+                    min_gap = float(os.environ.get("CLEAR_XY_MIN_GAP", "0.02"))
+                    clear = [c for c in candidates if _clearance_score(c) >= min_gap]
                     if clear:
                         return clear[int(rng.integers(0, len(clear)))]
                     mode = "top_random"
@@ -841,6 +856,23 @@ class RLBenchKitchenEnv:
                 mode="clear_random", exclude=exclude, keep=reach, strict_exclude=True,
             )
             sample_z = w_max_z + 0.005
+        elif region_name == 'pantry_area':
+            # The pantry area had no branch: placements there were uniform random, with no
+            # clearance to the groceries and mugs already in it (and up to its edge, which is
+            # the table edge). Free spots only, the whole footprint inside the area.
+            edge = own_radius + float(os.environ.get("PANTRY_EDGE_MARGIN", "0.01"))
+            if (w_max_x - w_min_x) < 2 * edge or (w_max_y - w_min_y) < 2 * edge:
+                edge = 0.0
+            sample_x, sample_y = sample_clear_xy(
+                w_min_x + edge, w_max_x - edge, w_min_y + edge, w_max_y - edge,
+                max(3, int(os.environ.get("PANTRY_SAMPLE_GRID", "12"))),
+                float(os.environ.get("PANTRY_OCCUPANCY_PAD_XY", "0.04")),
+                float(os.environ.get("PANTRY_OCCUPANCY_PAD_Z", "0.12")),
+                mode="clear_random",
+            )
+            sample_z = w_max_z + 0.005
+            if is_mug:
+                sample_z = max(sample_z, MUG_PLACEMENT_MIN_SAMPLE_Z)
         else:
             sample_x = rng.uniform(w_min_x + padding, w_max_x - padding)
             sample_y = rng.uniform(w_min_y + padding, w_max_y - padding)
