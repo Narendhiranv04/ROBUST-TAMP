@@ -59,6 +59,18 @@ PINNED_MODELS: Dict[str, Dict[str, Any]] = {
             'text': {'temperature': 1.0, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 1.5},
         },
     },
+    # The non-thinking sibling (same size and family): no thinking in its chat template. Sampling
+    # from its model card ("Generation Hyperparameters"); recommended output length 16384 (VL).
+    'qwen3-vl-8b-instruct': {
+        'repo': 'Qwen/Qwen3-VL-8B-Instruct',
+        'revision': '0c351dd01ed87e9c1b53cbc748cba10e6187ff3b',
+        'model_type': 'vlm',
+        'thinking': 'off',
+        'sampling': {
+            'vl': {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 1.5},
+            'text': {'temperature': 1.0, 'top_p': 1.0, 'top_k': 40, 'repetition_penalty': 1.0, 'presence_penalty': 2.0},
+        },
+    },
 }
 
 SNAPSHOT_REVISION = re.compile(r'/snapshots/([0-9a-f]{40})/?$')

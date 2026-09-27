@@ -13,9 +13,20 @@ SESSION="vllm"
 WINDOW="serve"
 HOST="127.0.0.1"
 PORT="${VLLM_PORT:-8000}"
-MODEL_REPO="Qwen/Qwen3-VL-8B-Thinking"
-MODEL_REVISION="92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b"   # pinned snapshot (Hub main on 2026-09-26)
-SERVED_NAME="qwen3-vl-8b-thinking"
+# Model profile: VLLM_MODEL=thinking (default) or instruct. One model fits on the GPU at a time.
+case "${VLLM_MODEL:-thinking}" in
+    thinking)
+        MODEL_REPO="Qwen/Qwen3-VL-8B-Thinking"
+        MODEL_REVISION="92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b"   # pinned snapshot (Hub main on 2026-09-26)
+        SERVED_NAME="qwen3-vl-8b-thinking"
+        REASONING_ARGS=(--reasoning-parser qwen3) ;;
+    instruct)
+        MODEL_REPO="Qwen/Qwen3-VL-8B-Instruct"
+        MODEL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"   # pinned snapshot (Hub main on 2026-09-27)
+        SERVED_NAME="qwen3-vl-8b-instruct"
+        REASONING_ARGS=() ;;                                        # no thinking to separate
+    *) echo "unknown VLLM_MODEL=${VLLM_MODEL}" >&2; exit 1 ;;
+esac
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
 GPU_UTIL="${VLLM_GPU_UTIL:-0.90}"
 # One GPU on this server (RTX 5090); use every visible GPU if more are added and free.
@@ -52,7 +63,7 @@ CMD=("$VENV/bin/vllm" serve "$SNAPSHOT"
      --tensor-parallel-size "$TP_SIZE"
      --max-model-len "$MAX_MODEL_LEN"
      --gpu-memory-utilization "$GPU_UTIL"
-     --reasoning-parser qwen3
+     "${REASONING_ARGS[@]}"
      --limit-mm-per-prompt "{\"image\": 2, \"video\": 0}"
      --generation-config auto)
 printf "%q " "${CMD[@]}" > "$LOG_DIR/serve_command.txt"; echo >> "$LOG_DIR/serve_command.txt"
