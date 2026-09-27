@@ -411,7 +411,7 @@ def run_trial(
     vision: bool = False,
     model_type: str = '',
     quantization: str = '',
-    planner_max_new_tokens: int = 4096,
+    planner_max_new_tokens: int = 24576,
     goal_check_max_new_tokens: int = 128,
     flags: Optional[PipelineFlags] = None,
     seed: Optional[int] = None,
@@ -767,7 +767,7 @@ def main() -> None:
     parser.add_argument('--icl-mode', default='zero_shot', choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode (ICL is off by default; few_shot_shared_1 needs --flag prompt.version=legacy)')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
     parser.add_argument('--attempt', type=int, default=1, help='Attempt number (infrastructure reruns)')
-    parser.add_argument('--planner-max-new-tokens', type=int, default=4096, help='Maximum generation tokens for each planner call')
+    parser.add_argument('--planner-max-new-tokens', type=int, default=24576, help='Maximum generation tokens for each planner call')
     parser.add_argument('--goal-check-max-new-tokens', type=int, default=128, help='Maximum generation tokens for each goal-check call')
     parser.add_argument('--goal', default='', help='Optional goal override')
     display_group = parser.add_mutually_exclusive_group()

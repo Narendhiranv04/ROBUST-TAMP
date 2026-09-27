@@ -74,7 +74,7 @@ Source: the model card, section "Generation Hyperparameters", and `generation_co
 `generation_config.json` has `do_sample=true, temperature=1.0, top_p=0.95, top_k=20, repetition_penalty=1.0`. The server runs with `--generation-config auto`, so these are also vLLM's per-request defaults. Clients should still send every value explicitly.
 
 Two limits to be aware of:
-- The recommended output lengths are longer than the served context (32768 tokens, prompt included). A client must cap `max_tokens` so that the prompt plus the output fits. ROBUST TAMP's planner requests use `max_new_tokens=4096`.
+- The recommended output lengths are longer than the served context (32768 tokens, prompt included). A client must cap `max_tokens` so that the prompt plus the output fits. ROBUST TAMP's planner requests use `max_new_tokens=24576` (the trial runner default). A sweep on K0, K1 and K3 with 2 seeds each found 8192 cut 3 of 26 answers off mid-thought (5/6 success), while 16384 and 24576 cut none off (6/6); the longest answer seen was 10193 tokens. The non-thinking Qwen3-VL-8B-Instruct went 0/18 on the same trials at every limit.
 - Thinking is on by default in the chat template. Send `chat_template_kwargs: {"enable_thinking": true}` explicitly anyway.
 
 ## Serving

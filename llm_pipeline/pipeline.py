@@ -84,7 +84,7 @@ class LLMPipelineConfig:
     pre_action_checks_enabled: bool = True
     post_action_checks_enabled: bool = True
     return_home_after_each_action: bool = False
-    planner_max_new_tokens: int = 4096
+    planner_max_new_tokens: int = 24576
     planner_temperature: float = 0.0
     live_segmentation_view: bool = True
     visible_objects_only: bool = True

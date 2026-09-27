@@ -2,6 +2,18 @@
 
 One entry per phase of `plan.md`: what changed, which flags, which tests.
 
+## Planner model and output limit (branch `all-mock-ups-are-done`)
+
+- **Output limit 24576 tokens** (`--planner-max-new-tokens`, the `trial_runner` and `LLMPipelineConfig` default; was 4096). At 4096, Qwen3-VL-8B-Thinking was cut off mid-thought on K0 and used all 11 calls. A sweep on K0, K1 and K3 with seeds 0 and 1 (`--remote --remote-api openai`, full system) gave:
+
+  | limit | success | planner calls | cut off | longest answer |
+  |---|---|---|---|---|
+  | 8192 | 5/6 | 26 | 3 | 8192 |
+  | 16384 | 6/6 | 16 | 0 | 10193 |
+  | 24576 | 6/6 | 14 | 0 | 8317 |
+
+- **Thinking vs non-thinking.** Qwen3-VL-8B-Instruct (pinned as `qwen3-vl-8b-instruct`, served with `VLLM_MODEL=instruct`) went 0/18 on the same trials at 8192, 16384 and 24576. Its answers are short (median about 160-190 tokens), but it opens the box lid without first moving mug2, which is on the lid, and then drops the `FINAL ACTIONS:` line or opens while holding. It repeats itself until `replan_loop` or the budget runs out. The Thinking model stays the planner.
+
 ## Phase 7c: fixes from audit 3, real-model planner on vLLM (branch `phase-7c-fixes`)
 
 Audit 3 (branch `audit`, `docs/AUDIT-3.md`) found one blocker and a list of should-fix items; all are addressed here, and the real-model planner now talks to the lab's vLLM server directly (`server/SERVER.md`).
