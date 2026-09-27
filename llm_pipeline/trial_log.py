@@ -136,6 +136,25 @@ class TrialLogger:
             return str(path)
 
 
+    def save_exchange(self, prompt_path: Optional[str], exchange: Optional[dict], image_png: Optional[bytes]) -> dict:
+        """Write a planner call's exact request/response (``<prompt>.exchange.json``) and the image it
+        sent (``<prompt>.png``) next to its prompt file; return their paths relative to the log."""
+        out = {}
+        if self.prompts_dir is None or not prompt_path:
+            return out
+        base = self.path.parent if self.path is not None else self.prompts_dir.parent
+        stem = Path(prompt_path).name.rsplit('.', 1)[0]
+        if exchange is not None:
+            path = self.prompts_dir / f'{stem}.exchange.json'
+            path.write_text(json.dumps(exchange, indent=1, sort_keys=True, default=str), encoding='utf-8')
+            out['exchange_path'] = str(path.relative_to(base))
+        if image_png:
+            path = self.prompts_dir / f'{stem}.png'
+            path.write_bytes(image_png)
+            out['image_path'] = str(path.relative_to(base))
+        return out
+
+
 class NullTrialLogger(TrialLogger):
     """Logger used when no trial log is requested; keeps events in memory only."""
 

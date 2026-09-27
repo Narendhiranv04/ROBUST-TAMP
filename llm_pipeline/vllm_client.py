@@ -45,47 +45,10 @@ from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSourc
 from llm_pipeline.region_aliases import planner_region_name
 from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
 
-# Served models: the Hugging Face repo, the pinned snapshot revision and the model card's
-# recommended thinking-mode sampling ("Generation Hyperparameters"). min_p is not specified by
-# the card (vLLM default 0.0).
-PINNED_MODELS: Dict[str, Dict[str, Any]] = {
-    'qwen3-vl-8b-thinking': {
-        'repo': 'Qwen/Qwen3-VL-8B-Thinking',
-        'revision': '92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b',
-        'model_type': 'vlm',
-        'thinking': 'on',          # the chat template always opens the answer with <think>
-        'sampling': {
-            'vl': {'temperature': 1.0, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 0.0},
-            'text': {'temperature': 1.0, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 1.5},
-        },
-    },
-    # The non-thinking sibling (same size and family): no thinking in its chat template. Sampling
-    # from its model card ("Generation Hyperparameters"); recommended output length 16384 (VL).
-    'qwen3-vl-8b-instruct': {
-        'repo': 'Qwen/Qwen3-VL-8B-Instruct',
-        'revision': '0c351dd01ed87e9c1b53cbc748cba10e6187ff3b',
-        'model_type': 'vlm',
-        'thinking': 'off',
-        'sampling': {
-            'vl': {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 1.5},
-            'text': {'temperature': 1.0, 'top_p': 1.0, 'top_k': 40, 'repetition_penalty': 1.0, 'presence_penalty': 2.0},
-        },
-    },
-    # The text-only LLM of the same size and family (the project's LLM, Qwen/Qwen3-8B). A hybrid
-    # model: its chat template thinks unless enable_thinking=false is passed, which this client
-    # never sends. Sampling: the model card's thinking-mode setting (Temperature 0.6, TopP 0.95,
-    # TopK 20, MinP 0; the generation_config.json defaults); the card leaves presence_penalty at
-    # its default and only suggests raising it (0-2) against endless repetition.
-    'qwen3-8b': {
-        'repo': 'Qwen/Qwen3-8B',
-        'revision': 'b968826d9c46dd6066d109eabc6255188de91218',
-        'model_type': 'llm',
-        'thinking': 'on',
-        'sampling': {
-            'text': {'temperature': 0.6, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0, 'presence_penalty': 0.0},
-        },
-    },
-}
+# Served models and how each is called: llm_pipeline/model_profiles.py (pinned snapshot, model
+# card sampling, thinking on/off, system-prompt packaging, vLLM arguments). Keyed by profile alias.
+from llm_pipeline.model_profiles import PROFILES as PINNED_MODELS  # noqa: E402
+from llm_pipeline.model_profiles import build_messages  # noqa: E402
 
 SNAPSHOT_REVISION = re.compile(r'/snapshots/([0-9a-f]{40})/?$')
 FINGERPRINT_KEYS = ('model_name', 'model_root', 'model_revision', 'max_model_len', 'vllm_version')
@@ -123,8 +86,11 @@ class VLLMChatPlanner:
         if not url.startswith(('http://', 'https://')):
             url = f'http://{url}'
         self.server_url = url.rstrip('/')
-        self.served_model = model
-        pinned = PINNED_MODELS.get(model, {})
+        pinned = dict(PINNED_MODELS.get(model, {}))
+        self.profile = dict(pinned, alias=model) if pinned else {}
+        # The profile alias (e.g. qwen3-8b-nothink) and the model vLLM serves (qwen3-8b).
+        self.served_model = pinned.get('served_name', model)
+        self.chat_template_kwargs = dict(pinned.get('chat_template_kwargs') or {})
         self.expected_revision = expected_revision or pinned.get('revision')
         self.sampling_presets = dict(pinned.get('sampling') or {})
         self.thinking_mode = pinned.get('thinking')     # 'on' / 'off': a property of the model
@@ -182,6 +148,15 @@ class VLLMChatPlanner:
             'format_repair': False,
             'sampling': dict(self.sampling_presets),
             'request_timeout_s': self.request_timeout_s,
+            # How this profile calls the served model (logged with every trial).
+            'profile_alias': self.profile.get('alias'),
+            'model_type': self.model_type,
+            'reasoning': self.profile.get('reasoning'),
+            'system_prompt_mode': self.profile.get('system_prompt_mode', 'system'),
+            'chat_template_kwargs': dict(self.chat_template_kwargs),
+            'card_system_prompt': self.profile.get('card_system_prompt'),
+            'card_system_prompt_sha256': self.profile.get('card_system_prompt_sha256'),
+            'sampling_source': self.profile.get('source'),
         }
         settings['fingerprint'] = settings_fingerprint(settings)
         return settings
@@ -221,15 +196,19 @@ class VLLMChatPlanner:
         return PlanResult(False, [], '', time.time() - started_at, event.message, event, timing=timing or error.timing)
 
     def _messages(self, system_prompt: str, user_prompt: str, image_b64: Optional[str]) -> List[Dict[str, Any]]:
-        user: Any = user_prompt
-        if image_b64:
-            user = [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + image_b64}},
-                    {'type': 'text', 'text': user_prompt}]
-        messages = []
-        if system_prompt:
-            messages.append({'role': 'system', 'content': system_prompt})
-        messages.append({'role': 'user', 'content': user})
-        return messages
+        return build_messages(self.profile or {'system_prompt_mode': 'system'}, system_prompt, user_prompt, image_b64)
+
+    @staticmethod
+    def _loggable_request(body: Dict[str, Any], image_sha256: Optional[str]) -> Dict[str, Any]:
+        """The request body as sent, with the image's base64 replaced by its sha256 (the PNG is saved)."""
+        logged = json.loads(json.dumps(body))
+        for message in logged.get('messages', []):
+            content = message.get('content')
+            if isinstance(content, list):
+                for part in content:
+                    if part.get('type') == 'image_url':
+                        part['image_url'] = {'url': f'<png sha256={image_sha256}>'}
+        return logged
 
     def chat(self, system_prompt: str, user_prompt: str, max_new_tokens: int, image: Any = None) -> Dict[str, Any]:
         """One chat completion. Raises PlannerServerError for anything that is not a model output."""
@@ -237,6 +216,8 @@ class VLLMChatPlanner:
         if self.model_type == 'llm':
             image = None             # a text-only model never receives the image
         image_b64 = encode_image_png_base64(image) if image is not None else None
+        image_png = base64.b64decode(image_b64) if image_b64 else None
+        image_sha256 = hashlib.sha256(image_png).hexdigest() if image_png else None
         preset = 'vl' if image_b64 else 'text'
         sampling = dict(self.sampling_presets.get(preset) or {})
         body = {
@@ -245,6 +226,8 @@ class VLLMChatPlanner:
             'max_tokens': int(max_new_tokens),
             **sampling,
         }
+        if self.chat_template_kwargs:
+            body['chat_template_kwargs'] = dict(self.chat_template_kwargs)
         started = time.monotonic()
         try:
             response = requests.post(f'{self.server_url}/v1/chat/completions', json=body,
@@ -266,7 +249,19 @@ class VLLMChatPlanner:
         if data.get('model') not in (None, self.served_model):
             raise PlannerServerError('settings_changed', f'response from model {data.get("model")!r}')
         usage = data.get('usage') or {}
+        exchange = {
+            'profile_alias': self.profile.get('alias'),
+            'served_model': self.served_model,
+            'server_url': self.server_url,
+            'request': self._loggable_request(body, image_sha256),
+            'response': data,
+            'http_elapsed_s': round(elapsed, 4),
+            'image_sha256': image_sha256,
+            'settings_fingerprint': settings['fingerprint'],
+        }
         return {
+            'exchange': exchange,
+            'image_png': image_png,
             'content': message.get('content') or '',
             'reasoning': message.get('reasoning_content') or message.get('reasoning') or '',
             'finish_reason': choice.get('finish_reason'),
@@ -310,10 +305,12 @@ class VLLMChatPlanner:
             return PlanResult(success=bool(raw_output.strip()), actions=[], raw_output=raw_output,
                               inference_time=inference_time,
                               error_message=None if raw_output.strip() else self._empty_reason(out),
-                              timing=timing, reasoning=out['reasoning'])
+                              timing=timing, reasoning=out['reasoning'],
+                              exchange=out['exchange'], image_png=out['image_png'])
         try:
             actions = self.parser.parse(raw_output, held_object=held_object)
-            return PlanResult(True, actions, raw_output, inference_time, timing=timing, reasoning=out['reasoning'])
+            return PlanResult(True, actions, raw_output, inference_time, timing=timing, reasoning=out['reasoning'],
+                              exchange=out['exchange'], image_png=out['image_png'])
         except StrictParseError as exc:
             fact = exc.fact
             if out['finish_reason'] == 'length':
@@ -325,7 +322,7 @@ class VLLMChatPlanner:
                 failure_layer=FailureLayer.LAYER_1, should_replan=True, message=str(exc),
             )
             return PlanResult(False, [], raw_output, inference_time, event.message, event, timing=timing,
-                              reasoning=out['reasoning'])
+                              reasoning=out['reasoning'], exchange=out['exchange'], image_png=out['image_png'])
 
     @staticmethod
     def _empty_reason(out: Dict[str, Any]) -> str:

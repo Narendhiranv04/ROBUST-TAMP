@@ -57,6 +57,31 @@ Also installed: requests, pydantic, matplotlib, pyyaml, networkx, imageio, tqdm.
 
 The pinned download is resumable and was verified complete: `hf download Qwen/Qwen3-VL-8B-Thinking --revision 92f3c4b4…`, log in `logs/download.log`. Serving runs with `HF_HUB_OFFLINE=1`, so start-up never needs the network.
 
+### Planner model profiles (`llm_pipeline/model_profiles.py`)
+
+Every compared model has one profile, which is the single source for the client, `start_vllm.sh` (`VLLM_MODEL=<alias>`) and downloads. A profile holds:
+- the pinned snapshot;
+- the served name;
+- VLM or LLM, and reasoning (the Table 2 "Reas." column);
+- the model card's sampling (never greedy);
+- thinking on or off, and how the planner prompt is packaged:
+  - `system`: a system message;
+  - `user`: the system text is prepended to the user message (DeepSeek-R1-Distill);
+  - `system_with_card_prompt`: the card's `SYSTEM_PROMPT.txt` is appended to ours (Ministral 3 Reasoning).
+- the vLLM arguments.
+
+The prompt content, output limit (24576), context (32768), flags and seeds are the same for every model. `python3 llm_pipeline/model_profiles.py list` prints them.
+
+`server/run_model_queue.sh` runs them one after another. For each model it:
+1. downloads the model (and prefetches the next ones);
+2. serves it, runs a smoke call and writes `manifest.json`;
+3. runs 14 variants × seeds 0-9;
+4. saves the vLLM log and `/metrics`;
+5. writes `run_report.{json,md}` (the Table 2 row and per-variant metrics) and archives the run;
+6. deletes the weights only if the run is complete and this project downloaded them (`logs/downloaded_models.tsv`). Qwen3-VL-8B-Thinking is kept.
+
+Every planner call saves its prompt, its exact request (sampling and packaging; the image replaced by its sha256), the full response (answer, thinking, token usage) and the image it sent, under `prompts/` in the trial directory.
+
 ### Recommended thinking-mode sampling
 Source: the model card, section "Generation Hyperparameters", and `generation_config.json`. Use exactly these values.
 

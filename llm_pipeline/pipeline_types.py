@@ -60,6 +60,8 @@ class PlanResult:
     # Thinking returned separately by the server (vLLM reasoning parser); None when the
     # reasoning is part of raw_output (text before FINAL ACTIONS:).
     reasoning: Optional[str] = None
+    exchange: Optional[Dict[str, Any]] = None   # the exact request and response (real-model planner)
+    image_png: Optional[bytes] = None            # the image sent with the request
 
 
 @dataclass

@@ -2,6 +2,35 @@
 
 One entry per phase of `plan.md`: what changed, which flags, which tests.
 
+## Held-object places, VLM vs LLM planner runs (branch `all-mock-ups-are-done`)
+
+Found in the thinking vs non-thinking traces: after a place was refused by a pre-action check (for example `place(mug2, inside_box)` with the lid closed), the robot keeps holding the object, and **no place planned in a later call ever worked**. The ground-truth sequences never take this path, because every pick is planned together with its place. The Thinking model rarely hit it; the Instruct model hit it in every trial.
+
+### Fixed
+- **Kitchen place while holding** (`compute_place_trajectory`): the held object is attached to the gripper, so the place's collision check counted it as part of the arm. The place targets put the tip where the object ends up, so the held object always "collided" with the surface. The held object is now left out of that check, which gives the same place the pick-and-place pre-solve computes (there the object is still at its start).
+- **Motion to the place hover while holding** (`compute_motion_plan`), three bugs on the fallback path:
+  - the "lift first" call raised `ConfigurationPathError`, and the outer `except` ended the whole motion plan before any fallback was tried (the lift also uses `robot.get_position()`, the robot base rather than the tip, so it never succeeds);
+  - "via home" was skipped when the arm starts at home, as it does after a pick;
+  - `if traj_rest:` referenced a name never assigned on the lift-then-interpolate path.
+- **Cupboard place while holding:** without the cached hover from a move token, the scripted insert lowered from wherever the arm was, never released the object, and reported success. It now uses the PDDL place (the cupboard placement of the pick-and-place bundle).
+- **Grill place while holding:** the executor used the kitchen PDDL place (`GrillTaskEnv` has no `set_target_region`). It now runs the ground-truth transfer's move-to-place and place stages.
+- **Grill regions other than table, grill and plate** (for example `grill_side_area`): the object was released about 5 cm above its support and frozen in the air, so it could not be picked again. It now settles onto the support, as on the table.
+
+### Changed
+- **Prompt:** a held object is listed as `- mug2: in the gripper`. It used to show the region resolver's fallback `table`, next to `Gripper: holding mug2`.
+- **Motion-planning failures** (`pddl_no_plan`, `no_ik_solution`, `no_motion_plan`, ...) carry the fact "The motion planner found no feasible motion for this action in the current scene."
+- **Qwen3-8B** (`qwen3-8b`, `Qwen/Qwen3-8B` at `b968826d…`) is pinned as the text-only LLM planner:
+  - thinking is on (its template's default);
+  - sampling is the model card's thinking-mode setting;
+  - the client never sends it an image;
+  - it is served with `VLLM_MODEL=llm start_vllm.sh`.
+
+  A run is refused when `--vision` does not match the pinned model type.
+- **`llm_pipeline/scripted_trial_runner.py`:** a full pipeline trial with a scripted planner (one output per call). Scenarios are in `evaluation/held_place_scenarios/`.
+
+### Tests
+`test_held_place.py` (4 new): the held object in the prompt, the motion-failure fact, and the text-only client (no image, card sampling). 333 pass.
+
 ## Planner model and output limit (branch `all-mock-ups-are-done`)
 
 - **Output limit 24576 tokens** (`--planner-max-new-tokens`, the `trial_runner` and `LLMPipelineConfig` default; was 4096). At 4096, Qwen3-VL-8B-Thinking was cut off mid-thought on K0 and used all 11 calls. A sweep on K0, K1 and K3 with seeds 0 and 1 (`--remote --remote-api openai`, full system) gave:

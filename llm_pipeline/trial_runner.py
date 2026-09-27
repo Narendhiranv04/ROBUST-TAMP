@@ -224,8 +224,12 @@ def real_model_refusals(git_info: Dict[str, Any], planner_settings: Dict[str, An
     if planner_settings.get('format_repair') is not False:
         problems.append(f"format repair is {planner_settings.get('format_repair')!r}; it must be reported as off (False)")
     served = {planner_settings.get('model_name'), planner_settings.get('model_alias')} - {None, ''}
-    if requested_model and requested_model not in served:
-        problems.append(f'the server serves {sorted(served) or "no model"}, not the requested {requested_model!r}')
+    from llm_pipeline.vllm_client import PINNED_MODELS
+
+    served_name = (PINNED_MODELS.get(requested_model) or {}).get('served_name', requested_model) if requested_model else None
+    if requested_model and served_name not in served:
+        problems.append(f'the server serves {sorted(served) or "no model"}, not the requested {served_name!r} '
+                        f'(profile {requested_model!r})')
     revision = planner_settings.get('model_revision')
     if not revision:
         problems.append('the server does not report the model revision')

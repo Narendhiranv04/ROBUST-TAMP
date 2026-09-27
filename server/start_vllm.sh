@@ -13,29 +13,13 @@ SESSION="vllm"
 WINDOW="serve"
 HOST="127.0.0.1"
 PORT="${VLLM_PORT:-8000}"
-# Model profile: VLLM_MODEL=thinking (default), instruct or llm. One model fits on the GPU at a time.
-case "${VLLM_MODEL:-thinking}" in
-    thinking)
-        MODEL_REPO="Qwen/Qwen3-VL-8B-Thinking"
-        MODEL_REVISION="92f3c4b4feadd3a016ef468d103bb5f58b2a2c6b"   # pinned snapshot (Hub main on 2026-09-26)
-        SERVED_NAME="qwen3-vl-8b-thinking"
-        REASONING_ARGS=(--reasoning-parser qwen3) ;;
-    instruct)
-        MODEL_REPO="Qwen/Qwen3-VL-8B-Instruct"
-        MODEL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"   # pinned snapshot (Hub main on 2026-09-27)
-        SERVED_NAME="qwen3-vl-8b-instruct"
-        REASONING_ARGS=() ;;                                        # no thinking to separate
-    llm)
-        MODEL_REPO="Qwen/Qwen3-8B"                                  # text-only, hybrid thinking (on by default)
-        MODEL_REVISION="b968826d9c46dd6066d109eabc6255188de91218"   # pinned snapshot (Hub main on 2026-09-27)
-        SERVED_NAME="qwen3-8b"
-        REASONING_ARGS=(--reasoning-parser qwen3) ;;
-    *) echo "unknown VLLM_MODEL=${VLLM_MODEL}" >&2; exit 1 ;;
-esac
+# Model profile: VLLM_MODEL=<alias> from llm_pipeline/model_profiles.py (default qwen3-vl-8b-thinking;
+# the old names thinking/instruct/llm still work). The profile gives the repo, the pinned revision,
+# the served name and the vLLM arguments (reasoning parser, remote code, Mistral formats, image
+# limits). One model fits on the GPU at a time.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+eval "$(python3 "$REPO_ROOT/llm_pipeline/model_profiles.py" shell "${VLLM_MODEL:-qwen3-vl-8b-thinking}")"
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
-# Image inputs for the vision-language models only.
-MM_ARGS=(--limit-mm-per-prompt "{\"image\": 2, \"video\": 0}")
-[ "${VLLM_MODEL:-thinking}" = llm ] && MM_ARGS=()
 GPU_UTIL="${VLLM_GPU_UTIL:-0.90}"
 # One GPU on this server (RTX 5090); use every visible GPU if more are added and free.
 TP_SIZE="${VLLM_TP_SIZE:-$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)}"
@@ -71,8 +55,7 @@ CMD=("$VENV/bin/vllm" serve "$SNAPSHOT"
      --tensor-parallel-size "$TP_SIZE"
      --max-model-len "$MAX_MODEL_LEN"
      --gpu-memory-utilization "$GPU_UTIL"
-     "${REASONING_ARGS[@]}"
-     "${MM_ARGS[@]}"
+     "${SERVE_ARGS[@]}"
      --generation-config auto)
 printf "%q " "${CMD[@]}" > "$LOG_DIR/serve_command.txt"; echo >> "$LOG_DIR/serve_command.txt"
 RUN="$(printf "%q " "${CMD[@]}") 2>&1 | tee -a $(printf "%q" "$LOG")"

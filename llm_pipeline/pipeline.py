@@ -1250,6 +1250,9 @@ class LLMOnlyReplanningPipeline:
         prompt_path = self.trial_logger.save_prompt(
             prompt_step, bundle.system_prompt, bundle.user_prompt, kind='replan' if is_replan else 'initial',
         )
+        exchange = getattr(result, 'exchange', None)
+        saved = self.trial_logger.save_exchange(prompt_path, exchange, getattr(result, 'image_png', None))
+        request = (exchange or {}).get('request') or {}
         parsed = [str(action) for action in (result.actions or [])]
         timing = dict(getattr(result, 'timing', None) or {})
         self._log_event(
@@ -1281,6 +1284,13 @@ class LLMOnlyReplanningPipeline:
             sampling_preset=timing.get('sampling_preset'),
             settings_fingerprint=timing.get('settings_fingerprint'),
             error_message=result.error_message,
+            # The exact request (sampling, max_tokens, packaging) and response of a real-model call.
+            profile_alias=(exchange or {}).get('profile_alias'),
+            request_params={key: value for key, value in request.items() if key != 'messages'} or None,
+            exchange_path=saved.get('exchange_path'),
+            image_path=saved.get('image_path'),
+            image_sha256=(exchange or {}).get('image_sha256'),
+            response_id=((exchange or {}).get('response') or {}).get('id'),
         )
         if result.failure_event is not None:
             check = failure_check_for(result.failure_event.failure_id)
