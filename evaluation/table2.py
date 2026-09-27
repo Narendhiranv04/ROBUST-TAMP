@@ -36,14 +36,14 @@ from pathlib import Path
 
 from evaluation.model_run_report import FINAL_VARIANTS, build_report
 
-# (a) Qwen3 family: scale x modality x prompting -> profile alias (ICL runs: <alias>-icl; 32B: other server).
+# (a) Qwen3 family: scale x modality x prompting -> profile alias; all FP8, on the second server (ICL runs: <alias>-icl).
 TABLE2A = [
-    ('4B', 'LLM', 'ZS', 'qwen3-4b'), ('4B', 'LLM', 'ICL', 'qwen3-4b-icl'),
-    ('4B', 'VLM', 'ZS', 'qwen3-vl-4b-thinking'), ('4B', 'VLM', 'ICL', 'qwen3-vl-4b-thinking-icl'),
-    ('8B', 'LLM', 'ZS', 'qwen3-8b'), ('8B', 'LLM', 'ICL', 'qwen3-8b-icl'),
-    ('8B', 'VLM', 'ZS', 'qwen3-vl-8b-thinking'), ('8B', 'VLM', 'ICL', 'qwen3-vl-8b-thinking-icl'),
-    ('32B', 'LLM', 'ZS', 'qwen3-32b'), ('32B', 'LLM', 'ICL', 'qwen3-32b-icl'),
-    ('32B', 'VLM', 'ZS', 'qwen3-vl-32b-thinking'), ('32B', 'VLM', 'ICL', 'qwen3-vl-32b-thinking-icl'),
+    ('4B', 'LLM', 'ZS', 'qwen3-4b-fp8'), ('4B', 'LLM', 'ICL', 'qwen3-4b-fp8-icl'),
+    ('4B', 'VLM', 'ZS', 'qwen3-vl-4b-thinking-fp8'), ('4B', 'VLM', 'ICL', 'qwen3-vl-4b-thinking-fp8-icl'),
+    ('8B', 'LLM', 'ZS', 'qwen3-8b-fp8'), ('8B', 'LLM', 'ICL', 'qwen3-8b-fp8-icl'),
+    ('8B', 'VLM', 'ZS', 'qwen3-vl-8b-thinking-fp8'), ('8B', 'VLM', 'ICL', 'qwen3-vl-8b-thinking-fp8-icl'),
+    ('32B', 'LLM', 'ZS', 'qwen3-32b-fp8'), ('32B', 'LLM', 'ICL', 'qwen3-32b-fp8-icl'),
+    ('32B', 'VLM', 'ZS', 'qwen3-vl-32b-thinking-fp8'), ('32B', 'VLM', 'ICL', 'qwen3-vl-32b-thinking-fp8-icl'),
 ]
 # (b) 8B-class models, in the paper's order: (modality, reasoning, label, alias).
 TABLE2B = [

@@ -28,8 +28,21 @@ pass() {
     if rsync -a --partial --exclude='*.png' -e "ssh -i $HOME/keyfile -o ConnectTimeout=20 -o BatchMode=yes" \
          "$HOST:$SRC" "$DEST/"; then
       echo "[backup $(date -Is)] synced: $(find "$DEST" -name record.json | wc -l) trials, $(du -sh "$DEST" | cut -f1)"
-      (cd "$REPO" && python3 -m evaluation.table2 --results "$DEST" --out "$TABLES" > "$TABLES/build.log" 2>&1) \
-        && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$DEST" --out "$TABLES/failures" > /dev/null 2>&1) \
+      # Placement-fix runs (server1, v2) and the scale study (server2): the tables are built from these.
+      rsync -a --partial --exclude='*.png' -e "ssh -i $HOME/keyfile -o ConnectTimeout=20 -o BatchMode=yes" \
+        "$HOST:robust_tamp_infer/real_trials/v2/" "$REPO/results/v2_runs/" 2>/dev/null
+      rsync -a --partial --exclude='*.png' -e "ssh -o ConnectTimeout=20 -o BatchMode=yes" \
+        "user1@10.4.25.63:robust_tamp_infer/real_trials/scale/" "$REPO/results/scale_runs/" 2>/dev/null
+      mkdir -p "$REPO/results/v2_runs/table2" "$REPO/results/scale_runs" "$REPO/results/v1_kept"
+      # From the pre-fix runs only the two non-thinking 8B rows are kept (their failures are reasoning, not
+      # knocked objects); every other row comes from a fixed-code run or is shown as missing.
+      for kept in qwen3-8b-nothink qwen3-vl-8b-instruct; do ln -sfn "../table2_runs/$kept" "$REPO/results/v1_kept/$kept"; done
+      # Table 2: (b) from the fixed-code runs (+ the kept earlier non-thinking runs), (a) from the scale study.
+      (cd "$REPO" && python3 -m evaluation.table2 --results "$REPO/results/v2_runs/table2" --extra "$REPO/results/scale_runs" "$REPO/results/v1_kept" \
+          --out "$TABLES" > "$TABLES/build.log" 2>&1) \
+        && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$REPO/results/v2_runs/table2" --out "$TABLES/failures" > /dev/null 2>&1) \
+        && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$REPO/results/v2_runs/ablations" --out "$TABLES/failures_ablations" > /dev/null 2>&1) \
+        && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$REPO/results/scale_runs" --out "$TABLES/failures_scale" > /dev/null 2>&1) \
         && echo "[backup $(date -Is)] Table 2, figures and failure breakdown rebuilt in $TABLES" \
         || echo "[backup $(date -Is)] table build failed (see $TABLES/build.log)"
       return
