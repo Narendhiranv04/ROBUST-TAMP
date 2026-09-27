@@ -64,6 +64,45 @@ Audit 3 (branch `audit`, `docs/AUDIT-3.md`) found one blocker and a list of shou
 
 Updated: `test_parallel` (an anchor on a scheduled action is re-queried), `test_phase7b` (repeats per key), `test_trial_runner` (refusals)).
 
+### Runs
+All oracle suites were rerun on the lab server (`server/SERVER.md`; 10 simulations at a time) at one clean commit, `42b8d206`.
+- **Logs:** 432 trial logs under `results/phase7c/` (292) and `results/phase7c_repeat/` (140). Every log records `dirty: false` and passes the schema check.
+- **Infrastructure:** 0 infrastructure trials.
+- **Placements:** 0 place-region mismatches in 3,037 placements.
+
+| Suite | Phase 7b | Phase 7c |
+|---|---|---|
+| Phase 3 ceiling (14 × seeds 0–9) | 140/140 | **140/140** |
+| Ceiling, second run (same commit) | — | **140/140** |
+| Phase 4 IF rule (14 × 2) | 28/28 | 28/28 |
+| Phase 5 planner insertion (14 × 2) | 28/28 | 28/28 |
+| Phase 5 always_front (6) | 4/6 | 4/6 (G2, G3 by design) |
+| Phase 5 always_end (6) | 2/6 | 2/6 (K1, K3, G1, G2 by design) |
+| Phase 6 parallel off (14 × 2, 20 s delay) | 28/28 | 28/28 |
+| Phase 6 parallel on (14 × 2, 20 s delay) | 27/28 | **28/28** |
+| Ablation: IF (14 × 1) | 13/14 | **14/14** |
+| Full system with memory (14 × 1) | 13/14 | **14/14** |
+
+- **Executor noise between the two ceiling runs** (same commit, seeds and flags; `compare_runs`):
+  - 0 of 140 trials differ in outcome;
+  - 0 differ in the executed action sequence;
+  - 0 differ in any object's final position by more than 5 mm;
+  - all 140 end with every object within 1 mm;
+  - trial times differ by 5.5 s on average (wall-clock time limits and machine load).
+
+  Before Phase 7c, K3-n3 seed 0 passed or failed from run to run (audit 3).
+- **K3-n3 and K1-w2:** 10/10 seeds each in both ceiling runs, and 1/1 or 2/2 in every other suite. Both fit without pushing earlier groceries (0 failed actions in the validation runs).
+- **A first run at `ef9454e8`** (kept on the server, not committed) had 139/140 in both ceiling runs: K1-w2 seed 9, identically in both. A sugar box knocked flat before its pick was laid 18 cm across the shelf, and the last can then had only a gap next to a leaning spam box. Fixed in `42b8d206` (thin side in the resting pose, gap-by-gap spot order, protrusion margin, insertion height search).
+- **Robot idle time per replan** (parallel on, 20 s simulated latency):
+
+  | Variant | Idle time | Independent bundles available / executed |
+  |---|---|---|
+  | K1, K1-w1, K1-w2 | 0 s | 2/2, 3/2, 4/2 |
+  | K4 | 0 s | 3/2 |
+  | K3, K3-n2, K3-n3 | 20 s (no independent bundle) | 0/0 |
+  | Grill | 3.5–5.1 s | 2/2 |
+- **Diagnostics** (`results/phase7c/diagnostics/`): every failure is a designed ablation failure (area 4). Trigger accuracy is 100% with the IF rule and 92.9% with discovery (K2).
+
 ## Phase 7b: fixes from the audit (branch `phase-7b-fixes`)
 
 The independent audit (branch `audit`, `docs/AUDIT.md`) found six blockers for real-model Phase 8 runs plus two more items the user added (B7, B8). All are fixed here; every oracle suite was rerun at one clean commit.
