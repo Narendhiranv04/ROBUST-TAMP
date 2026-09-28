@@ -43,6 +43,7 @@ pass() {
         && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$REPO/results/v2_runs/table2" --out "$TABLES/failures" > /dev/null 2>&1) \
         && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$REPO/results/v2_runs/ablations" --out "$TABLES/failures_ablations" > /dev/null 2>&1) \
         && (cd "$REPO" && python3 -m evaluation.failure_breakdown --results "$REPO/results/scale_runs" --out "$TABLES/failures_scale" > /dev/null 2>&1) \
+        && (cd "$REPO" && python3 -m evaluation.paper_tables --out "$TABLES" > /dev/null 2>&1) \
         && echo "[backup $(date -Is)] Table 2, figures and failure breakdown rebuilt in $TABLES" \
         || echo "[backup $(date -Is)] table build failed (see $TABLES/build.log)"
       return
