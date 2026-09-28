@@ -111,6 +111,7 @@ def summarize(run_dir: Path) -> dict | None:
         return None
     replans, categories = run_events(run_dir)
     return dict(row, calls=report['overall']['mean_planner_calls'], failure_replans=replans,
+                insertion_error_trials=row.get('insertion_error_trials'),
                 failure_replans_per_trial=round(replans / row['trials'], 3), complete=report['complete'],
                 categories=dict(categories))
 
@@ -138,7 +139,7 @@ def main() -> int:
 
     cache = {}
     summary = lambda alias: cache.setdefault(alias, find(alias))  # noqa: E731
-    cols = ['SR_K', 'SR_G', 'SR', 'PGC', 'Plan_s', 'trials', 'calls', 'failure_replans_per_trial', 'complete']
+    cols = ['SR_K', 'SR_G', 'SR', 'PGC', 'Plan_s', 'trials', 'calls', 'failure_replans_per_trial', 'insertion_error_trials', 'complete']
     md = ['# Table 2', '', '(a) Scale, modality, and prompting', '',
           '| Scale | Mod. | Prompt | SR_K | SR_G | SR | PGC | Plan. (s) | trials | calls | fail. replans/trial |',
           '|---|---|---|---|---|---|---|---|---|---|---|']
@@ -169,8 +170,10 @@ def main() -> int:
                       f"{s.get('calls') or '--'} | {s.get('failure_replans_per_trial', '--')} |")
             tex.append(f"% {label} ({alias})\n{_fmt(s.get('SR_K'))} & {_fmt(s.get('SR_G'))} & {_fmt(s.get('SR'))} & "
                        f"{_fmt(s.get('PGC'))} & {_fmt(s.get('Plan_s'), False)}")
-    md += ['', 'SR_K / SR_G: success over the 9 kitchen / 5 grill variants; SR, PGC over all 14 (10 trials each); '
-           'Plan.: mean planner time per trial. `trials` < 140: run in progress or incomplete.']
+    md += ['', 'SR_K / SR_G: success over the 9 kitchen / 5 grill variants; SR, PGC over all 14 (10 trials each), with the '
+           "paper's R and P conditions (evaluation/model_run_report.paper_outcome); insertion errors (ordering hard constraints "
+           'violated) are counted separately in table2a/b.csv and do not change SR or PGC. Plan.: mean planner time per trial. '
+           '`trials` < 140: run in progress or incomplete.']
     (out / 'table2.md').write_text('\n'.join(md) + '\n')
     (out / 'table2_rows.tex').write_text('\n'.join(tex) + '\n')
 

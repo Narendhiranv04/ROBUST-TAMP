@@ -72,7 +72,7 @@ def area_of(code: str) -> str:
 def insertion_or_task(missing) -> str:
     """Evaluator: procedure / ordering violations are insertion errors, the rest task-plan errors."""
     text = ' '.join(missing or [])
-    if any(k in text for k in ('HC-', 'overcooked', 'before completing a cooking cycle', 'before', 'cleared')):
+    if any(k in text for k in ('overcooked', 'before completing a cooking cycle')):
         return 'Insertion'
     return 'Task plan'
 
@@ -82,7 +82,14 @@ def analyse_trial(path: Path):
     end = next((e for e in events if e.get('event') == 'trial_end'), None)
     if end is None or end.get('termination_reason') == 'infrastructure':
         return None
+    from evaluation.model_run_report import paper_outcome
+    variant = path.parent.parent.name
+    outcome = paper_outcome(end, variant)
     counts, codes = Counter(), Counter()
+    # Ordering hard constraints the evaluator found violated: insertion errors (not R or P).
+    if outcome['hc_violations']:
+        counts['Insertion'] += outcome['hc_violations']
+        codes['hc_violation'] += outcome['hc_violations']
     for e in events:
         kind = e.get('event')
         if kind == 'plan_check' and e.get('result') == 'fail':
@@ -93,18 +100,18 @@ def analyse_trial(path: Path):
             counts[area_of(e['failure_code'])] += 1
             codes[e['failure_code']] += 1
     decisive = None
-    if not end.get('success'):
+    if not outcome['success']:
         term = end.get('termination_reason')
         if term in ('replan_budget_exhausted', 'replan_loop'):
             model_codes = Counter({c: n for c, n in codes.items() if area_of(c) not in ('Replan budget',)})
             top = model_codes.most_common(1)
             decisive = f"{'loop' if term == 'replan_loop' else 'budget'} <- {area_of(top[0][0]) + ': ' + top[0][0] if top else 'none'}"
         elif term in ('plan_completed', 'planner_returned_no_actions', 'goal_check_satisfied'):
-            decisive = insertion_or_task(end.get('missing'))
+            decisive = insertion_or_task(outcome['unmet'])
         else:
             decisive = f'Other ({term})'
-    return {'success': bool(end.get('success')), 'termination': end.get('termination_reason'), 'counts': counts,
-            'codes': codes, 'decisive': decisive, 'missing': end.get('missing') or [], 'calls': end.get('planner_calls')}
+    return {'success': outcome['success'], 'termination': end.get('termination_reason'), 'counts': counts,
+            'codes': codes, 'decisive': decisive, 'missing': outcome['unmet'] + outcome['hc_violated'], 'calls': end.get('planner_calls')}
 
 
 def main() -> int:

@@ -5,8 +5,9 @@
 Reads every ``<run_dir>/<variant>/seed_<NN>/{trial_log.jsonl, record.json}`` and writes
 ``run_report.json`` and ``run_report.md``:
 
-* the Table 2 row: SR_K (kitchen variants), SR_G (grill variants), SR and PGC over all trials,
-  Plan. (mean planner time per trial, s);
+* the Table 2 row: SR_K (kitchen variants), SR_G (grill variants), SR and PGC over all trials
+  (the paper's definition: ``paper_outcome``), Plan. (mean planner time per trial, s), and the
+  trials with an insertion error (an ordering hard constraint violated; not part of SR or PGC);
 * per variant: success, PGC, planner calls, replans, planner and trial time, output tokens,
   answers cut off at the token limit, plan-check rejections by code, termination reasons, and
   implicit non-target handling (G1, G3) where the record has it;
@@ -51,6 +52,29 @@ def _mean(values):
     return round(statistics.mean(values), 4) if values else None
 
 
+def paper_outcome(end: dict, variant: str) -> dict:
+    """Success and PGC as the paper defines them, from a trial's ``trial_end``.
+
+    R: every final object-region relation (each mug in the box, each grocery in the cupboard, the
+    phone in no placement area; the plate in the serving area, each meat on the plate). P: each
+    meat correctly cooked (grill only). The evaluator also checks ordering hard constraints
+    (``HC-...``: no mug into the box before an overlapping object is cleared; no cooked meat in
+    the grill at a close). They are not R or P conditions: a violation is an insertion error,
+    reported separately, and does not change success or PGC.
+    """
+    relations, procedures = int(end.get('goal_relations_total') or 0), int(end.get('procedure_checks_total') or 0)
+    missing = list(end.get('missing') or [])
+    hc = [m for m in missing if m.startswith('HC-')]
+    unmet = [m for m in missing if not m.startswith('HC-')]
+    # Kitchen: every procedure check is an HC check. Grill: one cooking condition per meat
+    # (meats = relations - 1, the plate relation), the rest are HC checks.
+    cooking = 0 if variant.startswith('FINAL.K') else max(0, relations - 1)
+    total = relations + cooking
+    return {'success': not unmet, 'pgc': (total - len(unmet)) / total if total else 0.0,
+            'conditions': total, 'unmet': unmet, 'hc_checks': procedures - cooking, 'hc_violations': len(hc),
+            'hc_violated': hc}
+
+
 def read_trial(trial_dir: Path) -> dict:
     events = []
     log = trial_dir / 'trial_log.jsonl'
@@ -87,8 +111,11 @@ def build_report(run_dir: Path, variants, seeds) -> dict:
             if end.get('termination_reason') == 'infrastructure':
                 problems.append(f'{variant} seed {seed}: infrastructure')
             tokens = [c.get('completion_tokens') for c in trial['calls'] if c.get('completion_tokens') is not None]
+            outcome = paper_outcome(end, variant)
             rows.append({
-                'seed': seed, 'success': bool(end.get('success')), 'pgc': float(end.get('partial_goal_completion') or 0.0),
+                'seed': seed, 'success': outcome['success'], 'pgc': outcome['pgc'],
+                'hc_violations': outcome['hc_violations'], 'unmet': outcome['unmet'], 'hc_violated': outcome['hc_violated'],
+                'evaluator_success_with_hc': bool(end.get('success')),
                 'calls': int(end.get('planner_calls') or 0), 'planner_time_s': float(end.get('planner_time_s') or 0.0),
                 'trial_time_s': float(end.get('trial_time_s') or 0.0), 'termination': end.get('termination_reason'),
                 'tokens': tokens, 'cut_off': sum(1 for c in trial['calls'] if c.get('finish_reason') == 'length'),
@@ -102,6 +129,8 @@ def build_report(run_dir: Path, variants, seeds) -> dict:
             'trials': len(rows), 'scored_trials': len(scored),
             'success_rate': _mean([float(r['success']) for r in scored]),
             'pgc': _mean([r['pgc'] for r in scored]),
+            'insertion_errors': sum(r['hc_violations'] for r in scored),
+            'trials_with_insertion_errors': sum(1 for r in scored if r['hc_violations']),
             'mean_planner_calls': _mean([r['calls'] for r in scored]),
             'mean_replans': _mean([max(0, r['calls'] - 1) for r in scored]),
             'mean_planner_time_s': _mean([r['planner_time_s'] for r in scored]),
@@ -131,6 +160,7 @@ def build_report(run_dir: Path, variants, seeds) -> dict:
             'SR_K': sr_k, 'SR_G': sr_g, 'SR': _mean([float(r['success']) for r in all_trials]),
             'PGC': _mean([r['pgc'] for r in all_trials]),
             'Plan_s': _mean([r['planner_time_s'] for r in all_trials]),
+            'insertion_error_trials': sum(1 for r in all_trials if r['hc_violations']),
             'kitchen_trials': n_k, 'grill_trials': n_g, 'trials': len(all_trials),
         },
         'overall': {
@@ -154,10 +184,10 @@ def to_markdown(report: dict) -> str:
              f"Complete: **{report['complete']}**" + ('' if report['complete'] else ' - ' + '; '.join(report['problems'][:20])), '',
              '| SR_K | SR_G | SR | PGC | Plan. (s) | trials |', '|---|---|---|---|---|---|',
              f"| {f(row['SR_K'])} | {f(row['SR_G'])} | {f(row['SR'])} | {f(row['PGC'])} | {f(row['Plan_s'], False)} | {row['trials']} |", '',
-             '| Variant | Trials | SR | PGC | Calls | Planner s | Trial s | Tokens/trial | Cut off | Rejections | INH | Terminations |',
-             '|---|---|---|---|---|---|---|---|---|---|---|---|']
+             '| Variant | Trials | SR | PGC | Insertion errors (trials) | Calls | Planner s | Trial s | Tokens/trial | Cut off | Rejections | INH | Terminations |',
+             '|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for variant, v in report['per_variant'].items():
-        lines.append(f"| {variant} | {v['scored_trials']}/{v['trials']} | {f(v['success_rate'])} | {f(v['pgc'])} | "
+        lines.append(f"| {variant} | {v['scored_trials']}/{v['trials']} | {f(v['success_rate'])} | {f(v['pgc'])} | {v['trials_with_insertion_errors']} | "
                      f"{f(v['mean_planner_calls'], False)} | {f(v['mean_planner_time_s'], False)} | {f(v['mean_trial_time_s'], False)} | "
                      f"{f(v['mean_output_tokens_per_trial'], False)} | {v['answers_cut_off']} | "
                      f"{', '.join(f'{k}: {n}' for k, n in v['plan_check_rejections'].items()) or '-'} | {f(v['inh_rate'])} | "
