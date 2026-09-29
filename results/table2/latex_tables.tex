@@ -1,0 +1,135 @@
+% ---------------------------------------------------------------------------------------------
+% Tables 2, 4 and 5 with the results (drop-in replacements for experiments.tex).
+% All runs: fixed code (b60771c / a4ef86f), full system, zero-shot, 10 trials per variant,
+% 24,576 output tokens, each model's card sampling. SR / PGC by the paper's R and P conditions.
+% Still \PH / \PT (pending): 32B rows (running on server2), ICL rows (not run), both Ministral
+% rows (running on server1).
+% ---------------------------------------------------------------------------------------------
+
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Planner selection. (a) Qwen3 family across scale, modality, and prompting
+(ZS: zero-shot); LLM: Qwen3-\{4,8,32\}B, VLM: Qwen3-VL-\{4,8,32\}B-Thinking, all FP8.
+(b) 8B-class models under the setting selected in (a), regular (\xmark) and reasoning
+(\cmark); R1-Distill: DeepSeek-R1-Distill. SR$_K$, SR$_G$: kitchen and grill success;
+SR, PGC: overall success and partial goal completion (all \%); Plan.: planner time per
+trial (s). The selected model (bold) is used in all later experiments.}
+\label{tab:planner-selection}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lll ccccc @{\hspace{10pt}} lcl ccccc@{}}
+\toprule
+\multicolumn{8}{c}{(a) Scale, modality, and prompting} &
+\multicolumn{8}{c}{(b) 8B-class models} \\
+\cmidrule(r){1-8}\cmidrule(l){9-16}
+Scale & Mod. & Prompt & SR$_K$ & SR$_G$ & SR & PGC & Plan. &
+Mod. & Reas. & Model & SR$_K$ & SR$_G$ & SR & PGC & Plan. \\
+\midrule
+\multirow{4}{*}{4B} & \multirow{2}{*}{LLM} & ZS  & 14.4 & 0.0 & 9.3 & 26.4 & 242 &
+\multirow{6}{*}{VLM} & \multirow{3}{*}{\xmark} & Qwen3-VL-8B-Instruct & 1.1 & 2.0 & 1.4 & 10.6 & 168 \\
+ &  & ICL & \PH & \PH & \PH & \PH & \PT &
+ &  & Ministral-3-8B-Instruct  & \PH & \PH & \PH & \PH & \PT \\
+ & \multirow{2}{*}{VLM} & ZS  & 58.9 & 12.0 & 42.1 & 58.1 & 743 &
+ &  & InternVL3.5-8B           & 15.6 & 0.0 & 10.0 & 21.8 & 76 \\
+\cmidrule(l){10-16}
+ &  & ICL & \PH & \PH & \PH & \PH & \PT &
+ & \multirow{3}{*}{\cmark} & \textbf{Qwen3-VL-8B-Thinking} & \textbf{94.4} & \textbf{22.0} & \textbf{68.6} & \textbf{86.5} & \textbf{540} \\
+\cmidrule(r){1-8}
+\multirow{4}{*}{8B} & \multirow{2}{*}{LLM} & ZS  & 82.2 & 6.0 & 55.0 & 70.5 & 297 &
+ &  & Ministral-3-8B-Reasoning & \PH & \PH & \PH & \PH & \PT \\
+ &  & ICL & \PH & \PH & \PH & \PH & \PT &
+ &  & Holo2-8B                 & 31.1 & 2.0 & 20.7 & 40.2 & 135 \\
+\cmidrule(l){9-16}
+ & \multirow{2}{*}{VLM} & ZS  & 93.3 & 14.0 & 65.0 & 82.1 & 518 &
+\multirow{6}{*}{LLM} & \multirow{3}{*}{\xmark} & Qwen3-8B (think off) & 1.1 & 6.0 & 2.9 & 13.1 & 25 \\
+ &  & ICL & \PH & \PH & \PH & \PH & \PT &
+ &  & Llama-3.1-8B-Instruct    & 6.7 & 0.0 & 4.3 & 14.5 & 124 \\
+\cmidrule(r){1-8}
+\multirow{4}{*}{32B} & \multirow{2}{*}{LLM} & ZS  & \PH & \PH & \PH & \PH & \PT &
+ &  & Qwen2.5-7B-Instruct      & 0.0 & 0.0 & 0.0 & 6.2 & 7 \\
+\cmidrule(l){10-16}
+ &  & ICL & \PH & \PH & \PH & \PH & \PT &
+ & \multirow{3}{*}{\cmark} & Qwen3-8B (think on) & 81.1 & 4.0 & 53.6 & 68.3 & 327 \\
+ & \multirow{2}{*}{VLM} & ZS  & \PH & \PH & \PH & \PH & \PT &
+ &  & R1-Distill-Llama-8B      & 0.0 & 0.0 & 0.0 & 5.7 & 500 \\
+ &  & ICL & \PH & \PH & \PH & \PH & \PT &
+ &  & R1-Distill-Qwen-7B       & 0.0 & 0.0 & 0.0 & 8.8 & 597 \\
+\bottomrule
+\end{tabular*}
+\end{table*}
+
+
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Variants and main results (10 trials per cell). Hidden: revealed when the box
+(K) or grill (G) is opened; ``+$w$ on table'': extra independent groceries. Rel.:
+goal-relevant; Ovl.: overlaps the placement area; Exp.: expected urgency of the
+corrective block (U urgent, D deferred, -- no replan). Ceil.: success with an oracle
+planner (executor upper bound). SR, PGC: task success and partial goal completion (\%);
+Calls: planner calls per trial; Plan.: planner time per trial (s); Idle: robot idle
+time per replan (s); Time: mean trial time (s); Urg.: first-proposal urgency accuracy (\%).}
+\label{tab:main}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}ll ccc c ccccccc@{}}
+\toprule
+ID & Hidden & Rel. & Ovl. & Exp. & Ceil. & SR & PGC & Calls & Plan. & Idle & Time & Urg. \\
+\midrule
+\multicolumn{13}{@{}l}{\textit{A. Basic}} \\
+K0    & empty              & --     & --     & --    & 100.0 & 100.0 & 100.0 & 2.2 & 229  & --  & 298  & -- \\
+G0    & empty              & --     & --     & --    & 100.0 & 30.0  & 63.3  & 3.2 & 352  & --  & 487  & -- \\
+\midrule
+\multicolumn{13}{@{}l}{\textit{B. Core}} \\
+K1    & phone              & \xmark & \cmark & U     & 100.0 & 90.0  & 93.3  & 5.7 & 481  & 189 & 561  & 10.0 \\
+K2    & phone              & \xmark & \xmark & --    & 100.0 & 90.0  & 95.0  & 4.0 & 328  & --  & 397  & -- \\
+K3    & grocery            & \cmark & \cmark & U     & 100.0 & 100.0 & 100.0 & 3.8 & 385  & 122 & 480  & 70.0 \\
+K4    & grocery            & \cmark & \xmark & D     & 100.0 & 100.0 & 100.0 & 3.1 & 316  & 96  & 390  & 10.0 \\
+G1    & 2 cooked meat      & \cmark & \xmark & U     & 100.0 & 40.0  & 84.3  & 5.4 & 684  & 143 & 774  & 50.0 \\
+G2    & cooked + raw       & \cmark & \xmark & U / D & 100.0 & 10.0  & 62.9  & 6.2 & 916  & 223 & 1017 & 15.0 \\
+G3    & 2 raw meat         & \cmark & \xmark & D     & 100.0 & 10.0  & 47.1  & 9.6 & 1223 & 180 & 1354 & 20.0 \\
+\midrule
+\multicolumn{13}{@{}l}{\textit{C. Cardinality}} \\
+K3-n2 & 2 groceries        & \cmark & \cmark & U     & 100.0 & 90.0  & 98.6  & 3.9 & 413  & 143 & 522  & 70.0 \\
+K3-n3 & 3 groceries        & \cmark & \cmark & U     & 100.0 & 100.0 & 100.0 & 4.0 & 442  & 128 & 580  & 86.7 \\
+G1-n1 & 1 cooked meat      & \cmark & \xmark & U     & 100.0 & 20.0  & 74.0  & 5.8 & 626  & 117 & 714  & 80.0 \\
+K1-w1 & phone; +1 on table & \xmark & \cmark & U     & 100.0 & 90.0  & 98.6  & 7.7 & 655  & 266 & 774  & 0.0 \\
+K1-w2 & phone; +2 on table & \xmark & \cmark & U     & 100.0 & 90.0  & 93.8  & 6.4 & 515  & 143 & 648  & 0.0 \\
+\midrule
+\multicolumn{5}{@{}l}{Mean (kitchen)}      & 100.0 & 94.4 & 97.7 & 4.5 & 418 & 144 & 517 & 49.0 \\
+\multicolumn{5}{@{}l}{Mean (grill)}        & 100.0 & 22.0 & 66.3 & 6.0 & 760 & 163 & 869 & 35.7 \\
+\multicolumn{5}{@{}l}{\textbf{Mean (all)}} & \textbf{100.0} & \textbf{68.6} & \textbf{86.5} & \textbf{5.1} & \textbf{540} & \textbf{155} & \textbf{643} & \textbf{43.5} \\
+\bottomrule
+\end{tabular*}
+\end{table*}
+
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{0.95}
+\caption{Ablations (core variants, 10 trials each); each row removes one component.
+$-$Memory: visible state only; $-$IF: replan on every newly visible object;
+$-$WHERE: wait and regenerate the full plan; Fixed front/end: blocks always inserted
+at the front/end; $-$WHEN: wait during every replan; LLM: text-only planner, same
+state. Unn.: unnecessary replans per trial; Ins.: insertion errors (\% of trials);
+Idle: robot idle time per replan (s).}
+\label{tab:ablations}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}l cccccc@{}}
+\toprule
+Condition & SR (\%) & Calls & Unn. & Ins. & Idle & Time (s) \\
+\midrule
+\textbf{Full system} & \textbf{62.9} & 5.4 & 0.00 & 44.3 & 162 & 710 \\
+\midrule
+$-$Memory            & 58.6 & 5.2 & 0.00 & 41.4 & 162 & 641 \\
+$-$IF                & 62.9 & 5.4 & 0.14 & 34.3 & 237 & 627 \\
+$-$WHERE             & 58.6 & 4.3 & 0.00 & --   & 105 & 550 \\
+Fixed front          & 60.0 & 5.7 & 0.00 & 41.4 & 184 & 787 \\
+Fixed end            & 35.7 & 7.0 & 0.00 & 62.9 & 264 & 825 \\
+$-$WHEN              & 60.0 & 5.7 & 0.00 & 37.1 & 192 & 730 \\
+LLM planner          & 51.4 & 7.4 & 0.00 & 25.7 & 176 & 419 \\
+\bottomrule
+\end{tabular*}
+\end{table}

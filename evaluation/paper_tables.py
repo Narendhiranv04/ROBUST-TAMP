@@ -18,7 +18,9 @@ Definitions (every one computed per trial, then averaged over the scored trials 
 * Urg.: first-proposal urgency accuracy (%): per trigger object, whether the first corrective
   proposal gives the urgency the variant expects (a rejected or missing proposal counts wrong);
 * Unn.: unnecessary replans per trial: trigger replans none of whose trigger objects needs an
-  action (the variant spec marks them ``ignore``);
+  action (every one is marked ``ignore`` in the variant spec, e.g. the phone outside the placement
+  area in K2). A trigger on a visible object the model's plan left out (mug2 in K2, the visible raw
+  meat in the grill) is necessary: that object still needs an action;
 * Ins.: insertion errors (% of trials): a corrective block rejected as inserted too late, a
   violated ordering constraint (a mug into the box before an overlapping object is cleared, a
   cooked meat in the grill at a close), meat overcooked, or meat served before it was cooked.
@@ -81,7 +83,7 @@ def trial_metrics(path: Path, variant: str) -> dict | None:
         idle.append(float(first) + sum(float(r.get('wall_latency_s') or 0.0) for r in g['requeries']))
     unnecessary = sum(1 for g in groups
                       if g['first'].get('trigger_objects')
-                      and all(expected_if.get(o, 'ignore') == 'ignore' for o in g['first']['trigger_objects']))
+                      and all(expected_if.get(o) == 'ignore' for o in g['first']['trigger_objects']))
     # first-proposal urgency, per expected trigger object
     firsts = [e for e in events if e.get('event') == 'insertion' and e.get('first_proposal')]
     urg_hits = urg_total = 0
