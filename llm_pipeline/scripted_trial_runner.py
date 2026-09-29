@@ -42,7 +42,7 @@ class ScriptedPlanner(oracle_trial_runner.OraclePlanner):
         return PlanResult(True, actions, raw, 0.0)
 
 
-def run_scripted_trial(variant_id: str, scenario, output_dir: Path, seed: int = 0) -> dict:
+def run_scripted_trial(variant_id: str, scenario, output_dir: Path, seed: int = 0, icl_mode: str = 'zero_shot') -> dict:
     outputs = load_outputs(scenario)
 
     class ScriptedPipeline(LLMOnlyReplanningPipeline):
@@ -52,7 +52,7 @@ def run_scripted_trial(variant_id: str, scenario, output_dir: Path, seed: int = 
     original = trial_runner.LLMOnlyReplanningPipeline
     trial_runner.LLMOnlyReplanningPipeline = ScriptedPipeline
     try:
-        return trial_runner.run_trial(variant_id=variant_id, model_alias='gt_oracle', icl_mode='zero_shot',
+        return trial_runner.run_trial(variant_id=variant_id, model_alias='gt_oracle', icl_mode=icl_mode,
                                       headless=True, output_dir=output_dir, live_masks=False, seed=seed,
                                       trial_index=seed + 1, real_model=False)
     finally:
@@ -65,8 +65,9 @@ def main() -> None:
     parser.add_argument('--scenario', required=True)
     parser.add_argument('--output-dir', required=True)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--icl-mode', default='zero_shot')
     args = parser.parse_args()
-    record = run_scripted_trial(args.variant, args.scenario, Path(args.output_dir), seed=args.seed)
+    record = run_scripted_trial(args.variant, args.scenario, Path(args.output_dir), seed=args.seed, icl_mode=args.icl_mode)
     print(json.dumps({key: record.get(key) for key in ('success', 'termination_reason')}, default=str))
 
 

@@ -776,7 +776,9 @@ def main() -> None:
     parser.add_argument('--model-type', choices=['', 'llm', 'vlm'], default='', help='Optional explicit model type')
     parser.add_argument('--quantization', choices=['', 'none', 'bnb8', 'bnb4'], default='', help='Expected/local quantization mode. Remote runs read the real mode from server health when available.')
     parser.add_argument('--vision', action='store_true', help='Use the maintained multimodal VLM backend')
-    parser.add_argument('--icl-mode', default='zero_shot', choices=['zero_shot', 'few_shot_shared_1'], help='Prompt mode (ICL is off by default; few_shot_shared_1 needs --flag prompt.version=legacy)')
+    parser.add_argument('--icl-mode', default='zero_shot', choices=['zero_shot', 'few_shot_shared_1', 'examples_v2'],
+                        help='Prompt mode (ICL is off by default; few_shot_shared_1 needs --flag prompt.version=legacy; '
+                             'examples_v2: the prompt-v2 in-context examples, grill scene only)')
     parser.add_argument('--trial-index', type=int, default=1, help='1-based trial index')
     parser.add_argument('--attempt', type=int, default=1, help='Attempt number (infrastructure reruns)')
     parser.add_argument('--planner-max-new-tokens', type=int, default=24576, help='Maximum generation tokens for each planner call')

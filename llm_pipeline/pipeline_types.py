@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 class ICLMode(str, Enum):
     ZERO_SHOT = "zero_shot"
     FEW_SHOT_SHARED_1 = "few_shot_shared_1"
+    EXAMPLES_V2 = "examples_v2"          # prompt v2: in-context examples (llm_pipeline/icl_examples.py)
 
 
 class FailureStage(str, Enum):

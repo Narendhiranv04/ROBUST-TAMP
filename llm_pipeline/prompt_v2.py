@@ -325,11 +325,19 @@ class PromptV2Builder(BaseContextBuilder):
         previous_actions: List[str] = None,
         icl_mode: str = ICLMode.ZERO_SHOT.value,
     ) -> PromptBundle:
-        if icl_mode != ICLMode.ZERO_SHOT.value:
-            raise ValueError(f'prompt.version=v2 has no in-context examples; icl_mode must be zero_shot, got {icl_mode}')
+        if icl_mode not in (ICLMode.ZERO_SHOT.value, ICLMode.EXAMPLES_V2.value):
+            raise ValueError(f'prompt.version=v2 supports icl_mode zero_shot or examples_v2, got {icl_mode}')
+        system = self.system_prompt()
+        if icl_mode == ICLMode.EXAMPLES_V2.value:
+            # In-context examples after the unchanged zero-shot system prompt (scenes that have them).
+            from llm_pipeline.icl_examples import examples_for
+
+            examples = examples_for(getattr(self.symbol_registry, 'objects', ()) or ())
+            if examples:
+                system = system + '\n\n' + examples
         return PromptBundle(
             goal_text=goal_text,
-            system_prompt=self.system_prompt(),
+            system_prompt=system,
             user_prompt=self.user_prompt(state, goal_text, failure_event),
             visible_objects=list(state.visible_objects),
             valid_regions=list(state.valid_regions),
