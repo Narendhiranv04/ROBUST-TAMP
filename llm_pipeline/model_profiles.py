@@ -265,8 +265,8 @@ def _main(argv) -> int:
         return 0
     if command == 'download':
         out = ['download', p['repo'], '--revision', p['revision']]
-        if p['serve'].get('include'):
-            out += ['--include'] + list(p['serve']['include'])
+        for pattern in p['serve'].get('include') or []:     # the CLI takes one pattern per --include
+            out += ['--include', pattern]
         print(' '.join(shlex.quote(a) for a in out))
         return 0
     if command == 'json':
