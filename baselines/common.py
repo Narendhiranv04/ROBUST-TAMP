@@ -139,8 +139,9 @@ class SymbolicDomain:
         name, args = action[0], action[1:]
         if name == 'pick':
             (o,) = args
-            return state.holding is None and o in self.objects and self._reachable(state, state.region_of(o)) \
-                and state.region_of(o) is not None
+            # An observed object whose region the observation could not resolve (e.g. set down between
+            # two named regions) is still pickable; objects in a region behind a closed lid are not observed.
+            return state.holding is None and o in self.objects and self._reachable(state, state.region_of(o))
         if name == 'place':
             o, r = args
             return state.holding == o and r in self.regions and self._reachable(state, r)

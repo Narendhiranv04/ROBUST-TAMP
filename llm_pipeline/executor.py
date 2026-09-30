@@ -324,6 +324,31 @@ class GrillBundlingHandler(AbstractBundlingHandler):
         print(f"[GRILL-BUNDLE] ✓ Held place complete.")
         return True, ""
 
+    def execute_held_pick(self, p_action: DirectAction) -> Tuple[bool, str]:
+        """Pick an object on its own, its place coming in a later call (execute_held_place): the GT
+        transfer's move-to-pick and pick stages. The transfer is set up with a provisional target
+        (the serving area for the plate, the grill otherwise) that only the place stages use; the
+        slot counter it advances is restored, so the later place gets the slot it would have got."""
+        obj_name = p_action.args[0]
+        provisional = 'serving_area' if 'plate' in obj_name.lower() else 'inside_grill'
+        counts = dict(self.placed_counts)
+        gt_executor, target_region, _, err = self.create_transfer_executor(
+            p_action, DirectAction('place', (obj_name, provisional)))
+        self.placed_counts = counts
+        if gt_executor is None:
+            return False, err
+        ok, msg = gt_executor.prepare()
+        if ok:
+            for stage_index in (0, 1):
+                ok, msg = gt_executor._run_stage(stage_index)
+                if not ok:
+                    break
+        self.executor.go_home()
+        if not ok:
+            return False, f"Pick failed for {obj_name}: {msg}"
+        print(f"[GRILL-BUNDLE] ✓ Held pick complete.")
+        return True, ""
+
     def execute_open(self, o_action: DirectAction) -> Tuple[bool, str]:
         return self._execute_lid_motion("open", "Open")
 
@@ -1462,6 +1487,10 @@ class DirectPrimitiveExecutor(VLMExecutorV2):
             return self._execute_move_token(next_action=next_action)
         if action.action_name == 'pick':
             object_name = action.args[0]
+            handler = getattr(getattr(self, 'bundler', None), 'handler', None)
+            if isinstance(handler, GrillBundlingHandler):
+                # A grill pick without its place in the same call (pick + place pairs run as a transfer bundle).
+                return handler.execute_held_pick(action)
             if object_name == 'mug3':
                 return self._execute_cupboard_pick(object_name)
             return self._execute_pick_pddl(object_name)

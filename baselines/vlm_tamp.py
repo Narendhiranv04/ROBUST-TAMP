@@ -296,6 +296,72 @@ class VLMTAMPPipeline(BaselinePipeline):
         domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
         return domain.search(obs.symbolic(), test, max_depth=8)
 
+    def execute_subgoals(self, subgoals, round_trace: dict, succeeded: List[str]) -> Optional[str]:
+        """Achieve the subgoals in order (refine, execute, check); the failed subgoal, or None."""
+        failed = None
+        index = 0
+        while index < len(subgoals):
+            subgoal = subgoals[index]
+            obs = observe(self)
+            test = subgoal_test(subgoal)
+            if test is None:
+                failed = subgoal_text(subgoal)
+                round_trace['subgoal_results'].append({'subgoal': failed, 'result': 'not achievable in this scene'})
+                break
+            if test(obs.symbolic()):
+                succeeded.append(subgoal_text(subgoal))
+                round_trace['subgoal_results'].append({'subgoal': subgoal_text(subgoal), 'result': 'already true'})
+                index += 1
+                continue
+            actions = self.refine(obs, test)
+            if actions is None:
+                failed = subgoal_text(subgoal)
+                round_trace['subgoal_results'].append({'subgoal': failed, 'result': 'no plan'})
+                break
+            # picked(x) followed by the subgoal that places x: both refinements run as one executor
+            # call (our executor plans a pick together with its place; a pick and a place sent as
+            # separate calls take its weaker held-object paths). Each subgoal keeps its own result.
+            pair = None
+            nxt = subgoals[index + 1] if index + 1 < len(subgoals) else None
+            if subgoal[0] == 'picked' and nxt is not None and nxt[0] in ('in', 'on') and nxt[1] == subgoal[1] \
+                    and actions == [('pick', subgoal[1])]:
+                state = obs.symbolic()
+                for a in actions:
+                    state = SymbolicDomain.apply(state, a)
+                domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
+                more = domain.search(state, subgoal_test(nxt), max_depth=8)
+                if more:
+                    pair = (nxt, more)
+            done_before = len(getattr(self.executor, 'completed_primitive_actions', []) or [])
+            outcome = self.execute(actions + (pair[1] if pair else []))
+            done = len(getattr(self.executor, 'completed_primitive_actions', []) or []) - done_before
+            after = observe(self)
+            steps = [(subgoal, actions, test)] + ([(pair[0], pair[1], subgoal_test(pair[0]))] if pair else [])
+            end = 0
+            for k, (goal_k, actions_k, test_k) in enumerate(steps):
+                end += len(actions_k)
+                executed_k = done >= end
+                last = k == len(steps) - 1
+                if last:
+                    holds = test_k(after.symbolic())
+                    invisible = goal_k[0] in ('in', 'on') and goal_k[1] not in after.objects
+                    ok = bool(outcome.success) and executed_k and (holds or invisible)
+                else:
+                    holds = executed_k        # the pick completed (the place that follows then released it)
+                    ok = executed_k
+                round_trace['subgoal_results'].append({
+                    'subgoal': subgoal_text(goal_k), 'refined': [action_text(a) for a in actions_k],
+                    'executed': executed_k, 'holds_after': holds, 'joint_execution': pair is not None,
+                    'failure': None if ok else outcome.error_message, 'result': 'ok' if ok else 'failed'})
+                if not ok:
+                    failed = subgoal_text(goal_k)
+                    break
+                succeeded.append(subgoal_text(goal_k))
+            if failed is not None:
+                break
+            index += len(steps)
+        return failed
+
     def run_baseline(self, goal_text: str) -> Optional[str]:
         trace = self._baseline_trace
         trace.update({'rounds': [], 'max_reprompts': MAX_REPROMPTS, 'query_camera': QUERY_CAMERA})
@@ -306,37 +372,7 @@ class VLMTAMPPipeline(BaselinePipeline):
             subgoals, round_trace = self.query_subgoals(goal_text, obs, history)
             round_trace['subgoal_results'] = []
             trace['rounds'].append(round_trace)
-            failed = None
-            for subgoal in subgoals:
-                obs = observe(self)
-                test = subgoal_test(subgoal)
-                if test is None:
-                    failed = subgoal_text(subgoal)
-                    round_trace['subgoal_results'].append({'subgoal': failed, 'result': 'not achievable in this scene'})
-                    break
-                if test(obs.symbolic()):
-                    succeeded.append(subgoal_text(subgoal))
-                    round_trace['subgoal_results'].append({'subgoal': subgoal_text(subgoal), 'result': 'already true'})
-                    continue
-                actions = self.refine(obs, test)
-                if actions is None:
-                    failed = subgoal_text(subgoal)
-                    round_trace['subgoal_results'].append({'subgoal': failed, 'result': 'no plan'})
-                    break
-                outcome = self.execute(actions)
-                after = observe(self)
-                holds = test(after.symbolic())
-                # An object inside closed storage is not observed; the executor's success stands for it.
-                invisible = subgoal[0] in ('in', 'on') and subgoal[1] not in after.objects
-                ok = bool(outcome.success) and (holds or invisible)
-                round_trace['subgoal_results'].append({
-                    'subgoal': subgoal_text(subgoal), 'refined': [action_text(a) for a in actions],
-                    'executed': bool(outcome.success), 'holds_after': holds,
-                    'failure': outcome.error_message, 'result': 'ok' if ok else 'failed'})
-                if not ok:
-                    failed = subgoal_text(subgoal)
-                    break
-                succeeded.append(subgoal_text(subgoal))
+            failed = self.execute_subgoals(subgoals, round_trace, succeeded)
             self.record_cycle(round_index > 0, [a for r in round_trace['subgoal_results'] for a in r.get('refined', [])],
                               round_trace['formal'], 0.0, failed is None,
                               error=None if failed is None else f'subgoal {failed} failed')

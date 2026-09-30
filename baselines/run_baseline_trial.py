@@ -33,12 +33,19 @@ from llm_pipeline.flags import PipelineFlags  # noqa: E402
 BASELINE_FLAGS = ('memory.enabled=false', 'parallel.enabled=false', 'prompt.version=v2')
 
 
-def pipeline_class(baseline: str, mock: bool):
+def pipeline_class(baseline: str, mock: bool, gt_exec: bool = False):
+    from baselines.gt_exec import GT_EXEC
     from baselines.mock import RESPONDERS, MockPlanner
     from baselines.owl_tamp import OWLTAMPPipeline
     from baselines.vlm_tamp import VLMTAMPPipeline
 
     base = {'vlm_tamp': VLMTAMPPipeline, 'owl_tamp': OWLTAMPPipeline}[baseline]
+    if gt_exec:
+        class GTExecPipeline(GT_EXEC[baseline]):
+            def __init__(self, config):
+                super().__init__(config=config, planner=MockPlanner())
+
+        return GTExecPipeline
     if not mock:
         return base
 
@@ -52,10 +59,11 @@ def pipeline_class(baseline: str, mock: bool):
 
 
 def run(baseline: str, variant: str, output_dir: Path, seed: int, mock: bool, model: str, remote_url: str,
-        max_new_tokens: int, headless: bool = True, attempt: int = 1) -> dict:
+        max_new_tokens: int, headless: bool = True, attempt: int = 1, gt_exec: bool = False) -> dict:
     flags = PipelineFlags.from_assignments(list(BASELINE_FLAGS))
+    mock = mock or gt_exec
     original = trial_runner.LLMOnlyReplanningPipeline
-    trial_runner.LLMOnlyReplanningPipeline = pipeline_class(baseline, mock)
+    trial_runner.LLMOnlyReplanningPipeline = pipeline_class(baseline, mock, gt_exec)
     try:
         return trial_runner.run_trial(
             variant_id=variant, model_alias='mock_gt' if mock else model, icl_mode='zero_shot',
@@ -74,6 +82,8 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--output-dir', required=True)
     parser.add_argument('--mock', action='store_true', help='ground-truth answers, no model server')
+    parser.add_argument('--gt-exec', action='store_true',
+                        help="execute the variant's full GT plan through the baseline's execution code (no model)")
     parser.add_argument('--model', default='qwen3-vl-8b-thinking')
     parser.add_argument('--remote-url', default='http://127.0.0.1:8000')
     parser.add_argument('--planner-max-new-tokens', type=int, default=24576)
@@ -81,7 +91,8 @@ def main() -> None:
     parser.add_argument('--gui', action='store_true')
     args = parser.parse_args()
     record = run(args.baseline, args.variant, Path(args.output_dir), args.seed, args.mock, args.model,
-                 args.remote_url, args.planner_max_new_tokens, headless=not args.gui, attempt=args.attempt)
+                 args.remote_url, args.planner_max_new_tokens, headless=not args.gui, attempt=args.attempt,
+                 gt_exec=args.gt_exec)
     print(json.dumps({key: record.get(key) for key in (
         'variant_id', 'episode_success', 'partial_goal_completion', 'planner_invocations', 'completed_actions',
         'failure_reason')}, indent=2))
