@@ -41,3 +41,14 @@ def test_actions_with_a_trailing_empty_marker():
 
 def test_empty_answer_is_still_empty():
     assert split_reasoning('reasoning\nFINAL ACTIONS:\n') == ('reasoning', '')
+
+
+def test_icl_examples_v3_adds_the_deferred_example_for_the_grill_only():
+    from llm_pipeline.icl_examples import examples_for
+
+    v2, v3 = examples_for({'grill_lid', 'plate'}, 'examples_v2'), examples_for({'grill_lid', 'plate'}, 'examples_v3')
+    assert 'Example 3' not in v2 and 'Example 3' in v3 and 'urgency: deferred' in v3
+    assert v3.count('Good answer:') == 3 and v3.count('Bad answer:') == 3
+    assert examples_for({'box_lid', 'mug1'}, 'examples_v3') == ''
+    for word in ('grill', 'meat', 'plate', 'cook', 'towel_3'):
+        assert word not in v3.split('Example 3', 1)[1].lower() or word == 'towel_3'

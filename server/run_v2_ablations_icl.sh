@@ -10,12 +10,12 @@ INFER=${QUEUE_INFER:-$HOME/robust_tamp_infer}
 . "$INFER/sim_env.sh" >/dev/null
 REPO=${QUEUE_REPO:-$HOME/robust_tamp_run}
 V2=$INFER/real_trials/v2
-OUTD=$V2/ablations_icl
+OUTD=${ABL_OUT:-$V2/ablations_icl}
 ARCHIVE=$INFER/archive/v2
 mkdir -p "$OUTD" "$ARCHIVE"
 export LLM_REQUEST_TIMEOUT_S=1800
 MODEL=qwen3-vl-8b-thinking
-ICL=examples_v2
+ICL=${ABL_ICL:-examples_v2}            # examples_v3: with the deferred example
 GRILL="FINAL.G1 FINAL.G2 FINAL.G3"
 COMMON="--model $MODEL --model-type vlm --vision --remote --remote-api openai --remote-url http://127.0.0.1:8000 --planner-max-new-tokens 24576 --icl-mode $ICL"
 log() { echo "[abl_icl $(date -Is)] $*"; }
@@ -38,9 +38,9 @@ for entry in "${CONDITIONS[@]}"; do
   run="$OUTD/$name"
   if [ -f "$run/COMPLETE" ]; then log "$name: already complete"; continue; fi
   mkdir -p "$run"
-  python3 - "$run" "$REPO" "$INFER" "$name" "$GRILL" "$flags" <<'PY'
+  python3 - "$run" "$REPO" "$INFER" "$name" "$GRILL" "$flags" "$ICL" <<'PY'
 import json, subprocess, sys, socket, datetime, urllib.request
-run, repo, infer, name, variants, flags = sys.argv[1:7]
+run, repo, infer, name, variants, flags, icl = sys.argv[1:8]
 sh = lambda c: subprocess.run(c, shell=True, capture_output=True, text=True).stdout.strip()
 def get(p):
     try:
@@ -52,7 +52,7 @@ json.dump({'condition': name, 'variants': variants.split(), 'seeds': '0-9', 'fla
            'gpu': sh('nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader'),
            'git_commit': sh(f'git -C {repo} rev-parse HEAD'), 'git_status': sh(f'git -C {repo} status --short -uno'),
            'host': socket.gethostname(), 'started': datetime.datetime.now().astimezone().isoformat(),
-           'max_new_tokens': 24576, 'icl': 'examples_v2', 'jobs': 6}, open(f'{run}/manifest.json', 'w'), indent=1)
+           'max_new_tokens': 24576, 'icl': icl, 'jobs': 6}, open(f'{run}/manifest.json', 'w'), indent=1)
 PY
   log "$name: running ($GRILL)"
   nice -n 5 python -m llm_pipeline.run_trial_matrix --planner model --jobs 6 --timeout 14400 --variants $GRILL \
@@ -63,10 +63,10 @@ PY
   else
     log "$name: INCOMPLETE: $(tail -1 "$run/run_report.out")"
   fi
-  tar -czf "$ARCHIVE/ablations_icl__$name.tar.gz" -C "$V2" "ablations_icl/$name"
+  tar -czf "$ARCHIVE/$(basename "$OUTD")__$name.tar.gz" -C "$OUTD" "$name"
 done
 cp -L "$INFER/logs/vllm_latest.log" "$OUTD/vllm_server_$MODEL.log" 2>/dev/null
 log "ablations done; LLM planner row next"
-HF_HOME=${ABL_LLM_HF_HOME:-/var/tmp/lh_robust_tamp_hf} QUEUE_OUT="$OUTD" QUEUE_ARCHIVE="$ARCHIVE/ablations_icl" QUEUE_ICL=$ICL QUEUE_SUFFIX=-icl QUEUE_VARIANTS="$GRILL" \
+HF_HOME=${ABL_LLM_HF_HOME:-/var/tmp/lh_robust_tamp_hf} QUEUE_OUT="$OUTD" QUEUE_ARCHIVE="$ARCHIVE/$(basename "$OUTD")" QUEUE_ICL=$ICL QUEUE_SUFFIX=-icl QUEUE_VARIANTS="$GRILL" \
   "$REPO/server/run_model_queue.sh" qwen3-8b
 log "ABLATIONS_ICL_DONE"

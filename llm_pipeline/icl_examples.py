@@ -1,4 +1,4 @@
-"""In-context examples for prompt v2 (``icl_mode = examples_v2``), grill scene only.
+"""In-context examples for prompt v2 (``icl_mode = examples_v2`` / ``examples_v3``), grill scene only.
 
 The examples come from a different scene (a laundry dryer) with the same kind of mechanism as the
 grill: a wet towel is dried only by being inside the dryer while its door is closed and opened
@@ -98,16 +98,72 @@ place(dry_towel_2, basket_top)
 END BLOCK
 Outcome: dry_towel_2 was still inside during a6 and a7 and came out scorched. Goal not met."""
 
-EXAMPLES_TEXT = (
-    'Examples (from a different scene; its objects, lids and regions are not in your scene):\n\n'
-    + _EXAMPLE_FULL + '\n\n' + _EXAMPLE_CORRECTIVE
-)
+# examples_v3 adds a deferred corrective example from another unrelated scene (a germination chamber
+# in a plant nursery): an item found inside while a cycle is scheduled is left in for the cycle and
+# moved after it, the counterpart of Example 2 (an item already done is taken out first).
+_EXAMPLE_DEFERRED = """Example 3 (a corrective request)
+## Goal
+GERMINATE all seed trays using the germination chamber and PUT all sprouted trays on the NURSERY BENCH.
+## Current state
+Visible objects and the region each one is in:
+- seed_tray_1: potting_table
+- seed_tray_2: inside_chamber
+Lids:
+- chamber_door: open (closes off inside_chamber)
+Gripper: empty
+Regions: potting_table, inside_chamber, nursery_bench
+## Completed actions
+- a1: open(chamber_door)
+## Scheduled to run before your corrective block is applied (not executed yet)
+- a2: pick(seed_tray_1)
+- a3: place(seed_tray_1, inside_chamber)
+- These actions run while you plan. Do not repeat them, and do not use their ids as an insertion point; the Current state does not include their effects yet.
+## Remaining plan (not executed yet)
+- a4: close(chamber_door)
+- a5: open(chamber_door)
+- a6: pick(seed_tray_1)
+- a7: place(seed_tray_1, nursery_bench)
+## Why a new plan is requested
+- After open(chamber_door), these observed objects are not handled by the remaining plan:
+  - seed_tray_2 (in inside_chamber): relevant to the goal, not in its goal state; does not lie where the remaining plan places objects
+
+Good answer:
+FINAL BLOCKS:
+BLOCK
+objects: seed_tray_2
+urgency: deferred
+insert: after a5
+reason: seed_tray_2 has not germinated yet.
+actions:
+pick(seed_tray_2)
+place(seed_tray_2, nursery_bench)
+END BLOCK
+Outcome: both trays sprouted during a4 and a5 and are on the nursery bench. Goal met.
+
+Bad answer:
+FINAL BLOCKS:
+BLOCK
+objects: seed_tray_2
+urgency: urgent
+insert: front
+reason: seed_tray_2 must be moved before the door closes.
+actions:
+pick(seed_tray_2)
+place(seed_tray_2, nursery_bench)
+END BLOCK
+Outcome: seed_tray_2 was taken out before a4 and a5 and never sprouted. Goal not met."""
+
+_HEADER = 'Examples (from a different scene; its objects, lids and regions are not in your scene):\n\n'
+EXAMPLES_TEXT = _HEADER + _EXAMPLE_FULL + '\n\n' + _EXAMPLE_CORRECTIVE
+EXAMPLES_TEXT_V3 = ('Examples (from different scenes; their objects, lids and regions are not in your scene):\n\n'
+                    + _EXAMPLE_FULL + '\n\n' + _EXAMPLE_CORRECTIVE + '\n\n' + _EXAMPLE_DEFERRED)
+EXAMPLES_BY_MODE = {'examples_v2': EXAMPLES_TEXT, 'examples_v3': EXAMPLES_TEXT_V3}
 
 # Scenes that get the examples: identified by a lid of the scene.
 EXAMPLE_SCENE_LIDS = ('grill_lid',)
 
 
-def examples_for(objects) -> str:
-    """The examples text for a scene with these planner objects ('' when the scene has none)."""
+def examples_for(objects, mode: str = ICL_MODE) -> str:
+    """The examples text of ``mode`` for a scene with these planner objects ('' when the scene has none)."""
     objects = set(objects or ())
-    return EXAMPLES_TEXT if any(lid in objects for lid in EXAMPLE_SCENE_LIDS) else ''
+    return EXAMPLES_BY_MODE[mode] if any(lid in objects for lid in EXAMPLE_SCENE_LIDS) else ''
