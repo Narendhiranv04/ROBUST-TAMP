@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT="$HOME/robust_tamp_infer"
-VENV="$ROOT/.venv"
+VENV="${VLLM_VENV:-$ROOT/.venv}"   # another venv only when a model needs other library versions
 LOG_DIR="$ROOT/logs"
 SESSION="vllm"
 WINDOW="serve"
