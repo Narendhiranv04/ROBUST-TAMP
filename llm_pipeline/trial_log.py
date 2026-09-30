@@ -41,6 +41,7 @@ EVENT_FIELDS: Dict[str, tuple] = {
         'step', 'action', 'bundle_id', 'adapter', 'local_retries_used', 'outcome', 'failure_code', 'duration_s',
     ),
     'parallel': ('affected_set', 'independent_actions_executed', 'robot_idle_time_s', 'merge_result'),  # Phase 6
+    'baseline_trace': ('baseline',),  # external baselines (baselines/): the baseline's own decisions
     'trial_end': (
         'success', 'goal_relations_satisfied', 'goal_relations_total', 'procedure_checks_satisfied',
         'procedure_checks_total', 'planner_calls', 'planner_time_s', 'trial_time_s', 'termination_reason',

@@ -1,0 +1,527 @@
+"""OWL-TAMP (Kumar et al., "Open-World Task and Motion Planning via Vision-Language Model
+Generated Constraints", arXiv:2411.08253v4) in our scenes. No author code has been released;
+this follows the paper: Sec. 5, Algorithms 1-2, Appendix A.1 (search-then-sample, backtracking),
+A.6 (helper codebook) and A.7 (prompts, verbatim where the paper gives them).
+
+Protocol:
+
+1. Relaxed grounding of the observed scene: every pick / place / open / close over the observed
+   objects, regions and lids (ground operators), and the initial ground atoms.
+2. Discrete constraints (one call, image + A.7 prompt, 1-shot, chain of thought): a plan sketch,
+   each operator with a natural-language description, ending in ``achieve_goal(...)``.
+3. Continuous constraints: first the goal (``achieve_goal``) constraints with the helper codebook
+   and the three few-shot examples, then, for each sketch operator with a VLM pose constraint
+   (every ``place``), constraints conditioned on its description and the goal constraints.
+4. Search-then-sample: A* for a plan that contains the sketch as a subsequence (Executed(i));
+   then up to 500 samples per operator from the scene's own placement sampler, each accepted
+   only if the operator's constraints (and at the end the goal constraints) hold on the
+   predicted state. When an operator's budget is exhausted, backtrack with the paper's
+   plan-modification strategy (a failed place onto an occupied region: move one of the
+   objects on it elsewhere first), at most five skeletons.
+5. Execute the plan open-loop with our executor; the sampled placement pose of each place is the
+   one the executor uses (kitchen). The VLM is never re-queried (single-shot protocol, Sec. 6.1).
+
+Recorded deviations: the planning-time checks of a sample are the VLM constraints on the
+predicted poses and the sampler's own collision-free footprint; IK and motion feasibility are
+checked when the executor runs the action (a sample infeasible for motion is an execution
+failure, which open-loop OWL-TAMP cannot recover from). In the grill scene the executor places at
+the scene's fixed slot poses, so the sampled pose is checked but not imposed. Card sampling of
+each model (the paper used GPT-4o).
+"""
+
+from __future__ import annotations
+
+import contextlib
+import heapq
+import itertools
+import random
+import re
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_definitions_text, action_text,
+                              observe, parse_action_text, strip_reasoning)
+from baselines.owl_constraints import (GOAL_FEW_SHOT, HELPER_DOCS, Geometry, RavenPose, evaluate, extract_functions,
+                                       raven_pose)
+from llm_pipeline.failures import TerminationReason
+
+SAMPLES_PER_OPERATOR = 500            # Sec. 6
+MAX_SKELETONS = 5                     # Sec. 6
+MAX_EXPANSIONS = 20000
+
+DISCRETE_PROMPT = """You are an expert-level robot task planning system whose job is to help a robot
+accomplish the following task: ''{task_str}''.
+Here is the initial predicate state (i.e., the set of all ground atoms that are true
+) of this task. Note that an image corresponding to the environment in this
+state
+is attached below:
+{initial_preds}
+Your job is to output a sequence of ground operators (i.e., a plan) that ideally
+achieve the goal from this initial state.
+Your plan need not be perfect, but it should capture the critical objects and
+actions necessary to accomplish this task (e.g.
+if the task requires 4 objects being in a specific location, then you should take
+care to make sure the plan contains
+an action to manipulate each of the 4 objects in turn).
+Here are the unground operators with their descriptions.
+{nsrts_description}
+Here are all the ground operators available to you; each operator you use in your
+plan must be one of these.
+{ground_operators}
+Along with each operator in your plan, you should also output a natural language
+description of what that operator should
+do. This description can be as detailed as you like, and should explain any details
+relevant to completing the particular
+ground operator successfully.
+As an example, consider the example task ''serve the banana inside the blue thing''.
+Here, the bowl happens to be blue, and
+the initial state is:
+OnTable(banana)
+OnTable(bowl)
+And the available ground operators are:
+pick(banana)
+pick(bowl)
+pick(table)
+place_ontop(banana, bowl)
+place_inside(banana, bowl)
+place_ontop(bowl, banana)
+place_inside(bowl, banana)
+place_ontop(banana, table)
+place_inside(banana, table)
+place_ontop(bowl, table)
+place_inside(bowl, table)
+place_ontop(table, bowl)
+place_inside(table, bowl)
+Given this, the output should be something like:
+\"\"\"
+In the initial state, there is a blue bowl on the table, and a banana atop the table
+. The banana is not in the bowl, and the task is to
+move the banana into the bowl.
+The main actions relevant to the task are `pick(banana)` and `place(banana, bowl)`.
+The goal involves a relationship between the banana and the bowl only.
+All other objects can be ignored.
+Plan:
+pick(banana); make a stable grasp on the banana - try to make a top-down grasp for
+maximum likelihood of success
+place(banana, bowl); place the banana stably so that it rests in the bowl - the
+banana is too large to fit inside the bowl if it is placed flatly: it needs to
+be reoriented to be upright so that it can fit into the bowl
+achieve_goal(banana, bowl); the goal involves the banana being inside the bowl -
+this relationship is purely between the banana and bowl and doesn't involve/
+require any other objects.
+\"\"\"
+Notice how the plan ends in an `achieve_goal` operator. Every plan you output should
+end with such an operator, and the object arguments
+to this operator (i.e., `(banana, bowl)` in this case) should be all the objects
+necessary to decide whether or not the goal has been achieved
+(i.e., do your best not to include extraneous objects that are irrelevant to
+deciding whether the task goal has been achieved or not).
+Please output your plan in the following format (do not include the angle brackets:
+those are just for illustrative purposes). Importantly, please do not list the
+plan with a numbered or bulleted list,
+simply output each ground operator on a new line with no marking in front of the
+line as indicated below.
+<description of the initial state and task in your own words>
+<description of which objects and actions are particularly relevant to solving the
+task>
+<description of any challenges or other important considerations/obstacles that
+might arise when solving the task>
+Plan:
+<ground_operator0>; <natural language description0>
+<ground_operator1>; <natural language description1>
+...
+<ground_operatorm>; <natural language descriptionm>"""
+
+GOAL_CONSTRAINT_PROMPT = """You are an expert-level robot task planning system whose job is to help a robot
+accomplish the following task: ''{task_str}''.
+An image of the initial state is attached. The objects and regions available in the scene, with their
+poses in the initial state, are:
+{object_poses}
+The plan the robot will follow ends with the operator
+{achieve_goal}; {goal_description}
+Write Python functions named goal_check0, goal_check1, ... (each taking no arguments and returning a
+bool) that are all true exactly when the task goal has been achieved in the final state. Every
+object and region above is available as a variable of the same name with `.pose` (RavenPose with
+x, y, z, roll, pitch, yaw) and `.category` (its name); `init_state`, `env` and `init_bounds` are
+available to pass to the helper functions.
+
+You also have access to helper functions whose signatures and docstrings are shown below:
+{helper_functions}
+
+{few_shot}
+
+Output each function in its own ```python code block."""
+
+ACTION_CONSTRAINT_PROMPT = """You are an expert-level robot task planning system whose job is to help a robot
+accomplish the following task: ''{task_str}''.
+An image of the initial state is attached. The objects and regions available in the scene, with their
+poses in the initial state, are:
+{object_poses}
+The robot's plan is:
+{plan}
+These goal check functions must hold in the final state:
+{goal_functions}
+Write Python functions named goal_check0, goal_check1, ... (each taking no arguments and returning a
+bool) that must be true right after the robot executes the operator
+{operator}; {description}
+They constrain where the placed object ends up. Every object and region above is available as a
+variable of the same name with `.pose` and `.category`; `init_state`, `env` and `init_bounds` are
+available to pass to the helper functions.
+
+You also have access to helper functions whose signatures and docstrings are shown below:
+{helper_functions}
+
+{few_shot}
+
+Output each function in its own ```python code block."""
+
+# Scene data: the grill env's region keys (as in llm_pipeline/executor.py's grill transfer), and
+# regions that are the top surface of a movable object (region_aliases.CANONICAL_REGION_SCENE_OBJECTS).
+GRILL_SAMPLER_REGIONS = {'inside_grill': 'grill-top', 'plate_top': 'plate-top', 'serving_area': 'plate_boundary'}
+CARRIED_REGIONS = {'plate': ('plate_top',)}
+
+
+def _xy_overlap(a, b, margin: float = 0.01) -> bool:
+    (ax0, ay0, _), (ax1, ay1, _) = a
+    (bx0, by0, _), (bx1, by1, _) = b
+    return ax0 < bx1 + margin and bx0 < ax1 + margin and ay0 < by1 + margin and by0 < ay1 + margin
+
+
+PLAN_LINE = re.compile(r'^\s*([a-z_]+\s*\([^()]*\))\s*;?\s*(.*)$')
+
+
+def initial_predicates(obs) -> List[str]:
+    atoms = []
+    for obj, region in obs.objects.items():
+        atoms.append(f'Holding({obj})' if region is None else f'In({obj}, {region})')
+    for lid, is_open in obs.lids.items():
+        atoms.append(f'{"Open" if is_open else "Closed"}({lid})')
+    if not obs.holding:
+        atoms.append('HandEmpty()')
+    return atoms
+
+
+def parse_sketch(text: str, grounded: set) -> Tuple[List[Tuple[Tuple[str, ...], str]], Optional[Tuple[str, ...]], List[str]]:
+    """(operator, description) lines after ``Plan:``; the achieve_goal operator; rejected lines."""
+    answer = strip_reasoning(text)
+    body = answer.split('Plan:', 1)[1] if 'Plan:' in answer else ''
+    sketch, rejected, achieve = [], [], None
+    for line in body.splitlines():
+        match = PLAN_LINE.match(line.strip().strip('`').strip('"'))
+        if not match:
+            continue
+        op = parse_action_text(match.group(1))
+        if op is None:
+            continue
+        if op[0] == 'achieve_goal':
+            achieve = (op, match.group(2).strip())
+            break
+        if op in grounded:
+            sketch.append((op, match.group(2).strip()))
+        else:
+            rejected.append(action_text(op))
+    return sketch, achieve, rejected
+
+
+def astar_with_sketch(domain: SymbolicDomain, start: SymState, sketch: Sequence[Tuple[str, ...]],
+                      max_expansions: int = MAX_EXPANSIONS) -> Optional[List[Tuple[str, ...]]]:
+    """A* for the shortest plan admitting ``sketch`` as a subsequence (Executed(i) compilation)."""
+    n = len(sketch)
+    counter = itertools.count()
+    frontier = [(n, next(counter), 0, start, 0, [])]
+    best = {(start, 0): 0}
+    expansions = 0
+    while frontier:
+        _, _, g, state, k, plan = heapq.heappop(frontier)
+        if k == n:
+            return plan
+        expansions += 1
+        if expansions > max_expansions:
+            return None
+        for action, nxt in domain.successors(state):
+            k2 = k + 1 if action == sketch[k] else k
+            key = (nxt, k2)
+            if best.get(key, 1e9) <= g + 1:
+                continue
+            best[key] = g + 1
+            heapq.heappush(frontier, (g + 1 + (n - k2), next(counter), g + 1, nxt, k2, plan + [action]))
+    return None
+
+
+class OWLTAMPPipeline(BaselinePipeline):
+    baseline_name = 'owl_tamp'
+
+    # -- geometry --------------------------------------------------------------
+    def geometry(self, obs) -> Geometry:
+        from llm_pipeline.object_aliases import scene_object_for_object
+
+        # Object boxes from the same detector the scene state uses for region boxes (perception).
+        detector = getattr(self.segmentation_adapter, 'detector', None)
+        boxes = dict(obs.region_boxes)
+        for name in obs.objects:
+            try:
+                bb = detector.get_bounding_box(scene_object_for_object(name, self.env)) if detector else None
+                if bb:
+                    boxes[name] = (tuple(float(v) for v in bb[0]), tuple(float(v) for v in bb[1]))
+            except Exception:
+                continue
+        poses = {name: raven_pose(pose) for name, pose in obs.poses.items()}
+        try:
+            base = self.env.robot.get_position()
+            robot_xy = (float(base[0]), float(base[1]))
+        except Exception:
+            robot_xy = (0.0, 0.0)
+        return Geometry(boxes, poses, robot_xy)
+
+    def sample_pose(self, obj: str, region: str) -> Optional[RavenPose]:
+        """One sample from the scene's own placement sampler (collision-free footprint in the region)."""
+        from llm_pipeline.object_aliases import scene_object_for_object
+        from llm_pipeline.region_aliases import normalize_region_name
+
+        region = normalize_region_name(region)
+        if (self.config.task_family or '').lower() == 'grill':
+            # the grill env keys its regions by the scene names the grill executor also uses
+            region = GRILL_SAMPLER_REGIONS.get(region, region)
+        try:
+            scene_obj = self.env.get_object(scene_object_for_object(obj, self.env))
+            return raven_pose(self.env.sample_stable_pose(scene_obj, region))
+        except Exception as exc:
+            self._baseline_trace.setdefault('sampler_errors', []).append(f'{obj}->{region}: {exc}')
+            return None
+
+    # -- prompts ---------------------------------------------------------------
+    @staticmethod
+    def object_poses_text(geo: Geometry, names: Sequence[str]) -> str:
+        lines = []
+        for name in names:
+            pose = geo.poses.get(name)
+            if pose is None:
+                (x0, y0, z0), (x1, y1, z1) = geo.box(name)
+                pose = RavenPose((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, 0.0, 0.0, 0.0)
+            lines.append(f'{name}: Pose=RavenPose(x={pose.x:.4f}, y={pose.y:.4f}, z={pose.z:.4f}, roll={pose.roll:.4f}, '
+                         f'pitch={pose.pitch:.4f}, yaw={pose.yaw:.4f})')
+        return '\n'.join(lines)
+
+    # -- search-then-sample ------------------------------------------------------
+    def sample_plan(self, plan, geo: Geometry, names, action_constraints: Dict[int, List[str]],
+                    goal_functions: List[str], trace: dict) -> Tuple[Optional[Dict[int, RavenPose]], Optional[int]]:
+        """Poses for every place of ``plan`` satisfying the constraints, or the failed operator's index."""
+        budgets = {i: SAMPLES_PER_OPERATOR for i, a in enumerate(plan) if a[0] == 'place'}
+        goal_budget = SAMPLES_PER_OPERATOR
+        while goal_budget > 0:
+            goal_budget -= 1
+            predicted = Geometry(geo.boxes, dict(geo.poses), geo.robot_xy)
+            chosen: Dict[int, RavenPose] = {}
+            moved: set = set()
+            for i, action in enumerate(plan):
+                if action[0] != 'place':
+                    continue
+                obj, region = action[1], action[2]
+                accepted = pose = None
+                while budgets[i] > 0:
+                    budgets[i] -= 1
+                    pose = self.sample_pose(obj, region)
+                    if pose is None:
+                        continue
+                    box = predicted.box_at(obj, pose)
+                    # Engineered collision constraint on the predicted state: the scene sampler only
+                    # knows the current scene, not the objects this plan has already placed.
+                    # (placing onto the top surface of a moved object, e.g. the plate, is not a collision)
+                    if any(_xy_overlap(box, predicted.boxes[m]) for m in moved
+                           if m != obj and m in predicted.boxes and region not in CARRIED_REGIONS.get(m, ())):
+                        continue
+                    predicted.poses[obj] = pose
+                    predicted.boxes[obj] = box
+                    # a region on top of a movable object (the plate's top) moves with it
+                    # (a plate rests flat once placed: its top is its full footprint, whatever its current tilt,
+                    # e.g. on edge in the dish rack)
+                    for carried in CARRIED_REGIONS.get(obj, ()):
+                        (x0, y0, z0), (x1, y1, z1) = geo.box(obj)
+                        extents = sorted((x1 - x0, y1 - y0, z1 - z0))
+                        half, height = extents[2] / 2, extents[0]
+                        predicted.boxes[carried] = ((pose.x - half, pose.y - half, pose.z - 0.02),
+                                                    (pose.x + half, pose.y + half, pose.z + height + 0.05))
+                    ok, errors = evaluate(action_constraints.get(i, []), predicted, names)
+                    if errors:
+                        trace.setdefault('constraint_errors', []).append({'operator': action_text(action),
+                                                                          'errors': errors[:3]})
+                    if ok:
+                        accepted = pose
+                        break
+                if accepted is None:
+                    trace.setdefault('exhausted', []).append({
+                        'operator': action_text(action), 'last_sample': list(pose) if pose else None,
+                        'object_box': predicted.boxes.get(obj), 'region_box': predicted.boxes.get(region),
+                        'predicted_poses': {k: list(v) for k, v in predicted.poses.items() if k in (obj, 'plate')}})
+                    return None, i
+                chosen[i] = accepted
+                moved.add(obj)
+            ok, errors = evaluate(goal_functions, predicted, names)
+            if errors:
+                trace.setdefault('constraint_errors', []).append({'operator': 'achieve_goal', 'errors': errors[:3]})
+            if ok:
+                return chosen, None
+            if not budgets:
+                break                          # nothing to resample: the goal constraints fail on this plan
+        return None, len(plan)                 # achieve_goal failed
+
+    @staticmethod
+    def modify_plan(plan, failed: int, obs, domain: SymbolicDomain, rng: random.Random):
+        """A.1.1: a failed place onto a region with objects on it -> move one of them elsewhere first."""
+        if failed >= len(plan) or plan[failed][0] != 'place':
+            return None
+        obj, region = plan[failed][1], plan[failed][2]
+        state = obs.symbolic()
+        for action in plan[:failed]:
+            state = domain.apply(state, action)
+        blockers = [o for o, r in state.regions if r == region and o != obj]
+        if not blockers or state.holding is not None and state.holding != obj:
+            return None
+        blocker = rng.choice(sorted(blockers))
+        others = [r for r in domain.regions if r != region]
+        destination = 'table' if 'table' in others else (others[0] if others else None)
+        if destination is None:
+            return None
+        # insert before the pick of ``obj`` that precedes the failed place
+        pick_index = max((j for j in range(failed) if plan[j] == ('pick', obj)), default=failed)
+        return plan[:pick_index] + [('pick', blocker), ('place', blocker, destination)] + plan[pick_index:]
+
+    # -- run -------------------------------------------------------------------
+    def run_baseline(self, goal_text: str) -> Optional[str]:
+        trace = self._baseline_trace
+        chat = self.chat()
+        obs = observe(self)
+        domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
+        grounded = set(domain.ground_actions())
+        trace['observation'] = obs.to_dict()
+        prompt = DISCRETE_PROMPT.format(
+            task_str=goal_text, initial_preds='\n'.join(initial_predicates(obs)),
+            nsrts_description=action_definitions_text(),
+            ground_operators='\n'.join(action_text(a) for a in domain.ground_actions()))
+        answer = chat.complete([('user', prompt)], image=obs.image, purpose='owl_tamp_discrete')
+        sketch, achieve, rejected = parse_sketch(answer['content'], grounded)
+        trace.update({'sketch': [f'{action_text(op)}; {d}' for op, d in sketch],
+                      'achieve_goal': f'{action_text(achieve[0])}; {achieve[1]}' if achieve else None,
+                      'rejected_sketch_lines': rejected})
+        self.record_cycle(False, [action_text(op) for op, _ in sketch], strip_reasoning(answer['content']), 0.0,
+                          bool(sketch))
+        if not sketch:
+            return 'no plan sketch in the model answer'
+
+        geo = self.geometry(obs)
+        names = sorted(set(obs.objects) | set(obs.regions) | set(obs.lids))
+        poses_text = self.object_poses_text(geo, names)
+        goal_functions: List[str] = []
+        if achieve is not None:
+            goal_answer = chat.complete([('user', GOAL_CONSTRAINT_PROMPT.format(
+                task_str=goal_text, object_poses=poses_text, achieve_goal=action_text(achieve[0]),
+                goal_description=achieve[1], helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
+                image=obs.image, purpose='owl_tamp_goal_constraints')
+            goal_functions, goal_rejected = extract_functions(goal_answer['content'])
+            trace.update({'goal_functions': goal_functions, 'goal_functions_rejected': goal_rejected})
+        plan_text = '\n'.join(f'{action_text(op)}; {d}' for op, d in sketch)
+        sketch_constraints: Dict[Tuple[str, ...], List[str]] = {}
+        for op, description in sketch:
+            if op[0] != 'place':
+                continue                          # only operators with a VLM pose constraint
+            reply = chat.complete([('user', ACTION_CONSTRAINT_PROMPT.format(
+                task_str=goal_text, object_poses=poses_text, plan=plan_text,
+                goal_functions='\n\n'.join(goal_functions) or '(none)', operator=action_text(op),
+                description=description, helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
+                image=obs.image, purpose='owl_tamp_action_constraints')
+            functions, bad = extract_functions(reply['content'])
+            sketch_constraints[op] = functions
+            trace.setdefault('action_functions', {})[action_text(op)] = {'functions': functions, 'rejected': bad}
+
+        rng = random.Random(self.config.seed or 0)
+        skeletons = []
+        plan = astar_with_sketch(domain, obs.symbolic(), [op for op, _ in sketch])
+        solution = None
+        while plan is not None and len(skeletons) < MAX_SKELETONS:
+            # constraints attach to the sketch's own operators (first unused occurrence in the plan)
+            constraints, used = {}, set()
+            for op, _ in sketch:
+                index = next((i for i, a in enumerate(plan) if a == op and i not in used), None)
+                if index is not None:
+                    used.add(index)
+                    if op in sketch_constraints:
+                        constraints[index] = sketch_constraints[op]
+            poses, failed = self.sample_plan(plan, geo, names, constraints, goal_functions, trace)
+            skeletons.append({'plan': [action_text(a) for a in plan],
+                              'failed_operator': None if failed is None else
+                              (action_text(plan[failed]) if failed < len(plan) else 'achieve_goal')})
+            if poses is not None:
+                solution = (plan, poses, constraints)
+                break
+            plan = self.modify_plan(plan, failed, obs, domain, rng)
+        trace['skeletons'] = skeletons
+        if solution is None:
+            self._set_termination(TerminationReason.PLANNING_FAILED)
+            return ('no task plan admits the sketch' if not skeletons else
+                    f'sampling budget exhausted on {len(skeletons)} skeleton(s)')
+
+        plan, poses, constraints = solution
+        trace['executed_plan'] = [action_text(a) for a in plan]
+        with self.forced_placements(plan, poses):
+            outcome = self.execute(plan)
+        self.record_cycle(False, [action_text(a) for a in plan], '', 0.0, bool(outcome.success),
+                          error=outcome.error_message)
+        trace['execution'] = {'success': bool(outcome.success), 'failure': outcome.error_message}
+        return None if outcome.success else f'open-loop execution failed: {outcome.error_message}'
+
+    @contextlib.contextmanager
+    def forced_placements(self, plan, poses: Dict[int, RavenPose]):
+        """While executing, the k-th placement of an (object, region) uses OWL-TAMP's sampled pose first."""
+        from llm_pipeline.object_aliases import scene_object_for_object
+        from llm_pipeline.region_aliases import normalize_region_name
+
+        env = self.env
+        queue: Dict[Tuple[str, str], List[list]] = {}
+        for i, pose in sorted(poses.items()):
+            obj, region = plan[i][1], normalize_region_name(plan[i][2])
+            try:
+                scene = scene_object_for_object(obj, env)
+                quat = env.get_object(scene).get_quaternion()
+            except Exception:
+                continue
+            queue.setdefault((scene, region), []).append([pose.x, pose.y, pose.z, *quat])
+        original_sample = getattr(env, 'sample_stable_pose', None)
+        original_best = getattr(env, 'find_best_placement', None)
+        forced_log = self._baseline_trace.setdefault('forced_placements', [])
+
+        def _key(obj, region):
+            try:
+                name = obj.get_name()
+            except Exception:
+                name = str(obj)
+            return name, normalize_region_name(region)
+
+        def sample(obj, region_name, *a, **k):
+            key = _key(obj, region_name)
+            if queue.get(key):
+                pose = queue[key].pop(0)
+                forced_log.append({'object': key[0], 'region': key[1], 'pose': pose})
+                return pose
+            return original_sample(obj, region_name, *a, **k)
+
+        def best(obj, region_name, *a, **k):
+            key = _key(obj, region_name)
+            if queue.get(key):
+                pose = queue[key].pop(0)
+                forced_log.append({'object': key[0], 'region': key[1], 'pose': pose})
+                return pose
+            return original_best(obj, region_name, *a, **k)
+
+        if original_sample is not None:
+            env.sample_stable_pose = sample
+        if original_best is not None:
+            env.find_best_placement = best
+        try:
+            yield
+        finally:
+            if original_sample is not None:
+                env.__dict__.pop('sample_stable_pose', None)
+            if original_best is not None:
+                env.__dict__.pop('find_best_placement', None)
+
+
+__all__ = ['OWLTAMPPipeline', 'DISCRETE_PROMPT', 'parse_sketch', 'astar_with_sketch']
