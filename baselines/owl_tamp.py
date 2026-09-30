@@ -38,7 +38,7 @@ import random
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_definitions_text, action_text,
+from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_text,
                               observe, parse_action_text, strip_reasoning)
 from baselines.owl_constraints import (GOAL_FEW_SHOT, HELPER_DOCS, Geometry, RavenPose, evaluate, extract_functions,
                                        raven_pose)
@@ -190,10 +190,97 @@ def _xy_overlap(a, b, margin: float = 0.01) -> bool:
 PLAN_LINE = re.compile(r'^\s*([a-z_]+\s*\([^()]*\))\s*;?\s*(.*)$')
 
 
+# Unground operators and their descriptions (Sec. 5.1: "we associate a natural language description of
+# each available action"; the paper's operators are pick, place_ontop and place_inside -- A.7 example;
+# open and close are added for this scene's lids, which the paper's tasks do not have).
+NSRTS_DESCRIPTION = """pick(?obj): grasp ?obj with the gripper and lift it. The gripper must be empty.
+place_ontop(?obj, ?surface): place the held ?obj so that it rests on top of ?surface.
+place_inside(?obj, ?container): place the held ?obj inside ?container.
+open(?lid): open ?lid. The gripper must be empty.
+close(?lid): close ?lid. The gripper must be empty."""
+
+
+def surface_region_of(name: str, obs) -> Optional[str]:
+    """The region an object provides as a surface (the plate's top, the box lid's top), if any."""
+    from llm_pipeline.region_aliases import planner_region_name
+
+    tops = {'plate': 'plate_top', 'box_lid': 'box_lid_top'}
+    region = tops.get(name)
+    return planner_region_name(region) if region and planner_region_name(region) in obs.regions else None
+
+
+class OWLDomain(SymbolicDomain):
+    """Relaxed grounding over every named entity (as the paper's example grounds pick(table),
+    place_inside(table, bowl), ...); the TAMP system's own semantics decide which are feasible."""
+
+    def __init__(self, obs):
+        super().__init__(obs.objects, obs.regions, obs.lids)
+        self.obs = obs
+        from baselines.vlm_tamp import space_regions
+
+        self.spaces = set(space_regions(obs.regions))
+        self.entities = list(obs.objects) + list(obs.regions) + list(obs.lids)
+
+    def target(self, action) -> Optional[str]:
+        """The region a place_ontop / place_inside puts the object in (None: not a feasible support)."""
+        kind, obj, support = action
+        if support == obj:
+            return None
+        if support in self.regions:
+            is_space = support in self.spaces
+            if kind == 'place_inside':
+                return support if is_space else None
+            return support if (not is_space or 'cupboard' in support) else None
+        if kind == 'place_ontop':
+            return surface_region_of(support, self.obs)
+        return None
+
+    def primitive(self, action) -> Tuple[str, ...]:
+        if action[0] in ('place_ontop', 'place_inside'):
+            return ('place', action[1], self.target(action))
+        return action
+
+    def ground_actions(self):
+        ents = self.entities
+        out = [('pick', e) for e in ents]
+        for kind in ('place_ontop', 'place_inside'):
+            out += [(kind, x, y) for x in ents for y in ents if x != y]
+        out += [('open', l) for l in self.lids] + [('close', l) for l in self.lids]
+        return out
+
+    def applicable(self, state, action) -> bool:
+        if action[0] in ('place_ontop', 'place_inside'):
+            region = self.target(action)
+            return region is not None and super().applicable(state, ('place', action[1], region))
+        return super().applicable(state, action)
+
+    def apply(self, state, action):
+        return SymbolicDomain.apply(state, self.primitive(action))
+
+    def successors(self, state):
+        # (the same set as filtering ground_actions() by applicability, without enumerating the pairs
+        # whose first object is not the held one)
+        if state.holding is None:
+            candidates = [('pick', o) for o in self.objects] + [('open', l) for l in self.lids] + \
+                         [('close', l) for l in self.lids]
+        else:
+            candidates = [(kind, state.holding, y) for kind in ('place_ontop', 'place_inside')
+                          for y in self.entities if y != state.holding]
+        for action in candidates:
+            if self.applicable(state, action):
+                yield action, self.apply(state, action)
+
+
 def initial_predicates(obs) -> List[str]:
+    from baselines.vlm_tamp import space_regions
+
+    spaces = set(space_regions(obs.regions))
     atoms = []
     for obj, region in obs.objects.items():
-        atoms.append(f'Holding({obj})' if region is None else f'In({obj}, {region})')
+        if region is None:
+            atoms.append(f'Holding({obj})')
+        else:
+            atoms.append(f'{"Inside" if region in spaces else "OnTop"}({obj}, {region})')
     for lid, is_open in obs.lids.items():
         atoms.append(f'{"Open" if is_open else "Closed"}({lid})')
     if not obs.holding:
@@ -449,37 +536,36 @@ class OWLTAMPPipeline(BaselinePipeline):
         return None, len(plan)                 # achieve_goal failed
 
     @staticmethod
-    def modify_plan(plan, failed: int, obs, domain: SymbolicDomain, rng: random.Random):
-        """A.1.1: a failed place onto a region with objects on it -> move one of them elsewhere first."""
-        if failed >= len(plan) or plan[failed][0] != 'place':
+    def modify_plan(plan, failed: int, obs, domain: 'OWLDomain', rng: random.Random):
+        """A.1.1: a failed detach onto a surface with objects on it -> first move one of them to a
+        different part of the table (an attach-detach pair)."""
+        if failed >= len(plan) or plan[failed][0] not in ('place_ontop', 'place_inside'):
             return None
-        obj, region = plan[failed][1], plan[failed][2]
+        obj, region = plan[failed][1], domain.target(plan[failed])
         state = obs.symbolic()
         for action in plan[:failed]:
             state = domain.apply(state, action)
         blockers = [o for o, r in state.regions if r == region and o != obj]
-        if not blockers or state.holding is not None and state.holding != obj:
+        if not blockers or (state.holding is not None and state.holding != obj):
             return None
         blocker = rng.choice(sorted(blockers))
-        others = [r for r in domain.regions if r != region]
-        destination = 'table' if 'table' in others else (others[0] if others else None)
-        if destination is None:
+        if 'table' not in domain.regions or region == 'table':
             return None
-        # insert before the pick of ``obj`` that precedes the failed place
         pick_index = max((j for j in range(failed) if plan[j] == ('pick', obj)), default=failed)
-        return plan[:pick_index] + [('pick', blocker), ('place', blocker, destination)] + plan[pick_index:]
+        return plan[:pick_index] + [('pick', blocker), ('place_ontop', blocker, 'table')] + plan[pick_index:]
 
     # -- run -------------------------------------------------------------------
     def run_baseline(self, goal_text: str) -> Optional[str]:
         trace = self._baseline_trace
         chat = self.chat()
         obs = observe(self)
-        domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
+        domain = OWLDomain(obs)
+        self.owl_domain = domain
         grounded = set(domain.ground_actions())
         trace['observation'] = obs.to_dict()
         prompt = DISCRETE_PROMPT.format(
             task_str=goal_text, initial_preds='\n'.join(initial_predicates(obs)),
-            nsrts_description=action_definitions_text(),
+            nsrts_description=NSRTS_DESCRIPTION,
             ground_operators='\n'.join(action_text(a) for a in domain.ground_actions()))
         answer = chat.complete([('user', prompt)], image=obs.image, purpose='owl_tamp_discrete')
         sketch, achieve, rejected = parse_sketch(answer['content'], grounded)
@@ -506,8 +592,8 @@ class OWLTAMPPipeline(BaselinePipeline):
         plan_text = '\n'.join(f'{action_text(op)}; {d}' for op, d in sketch)
         sketch_constraints: Dict[Tuple[str, ...], List[str]] = {}
         for op, description in sketch:
-            if op[0] != 'place':
-                continue                          # only operators with a VLM pose constraint
+            if op[0] not in ('place_ontop', 'place_inside'):
+                continue                          # only operators with a VLM pose constraint (detach)
             reply = chat.complete([('user', ACTION_CONSTRAINT_PROMPT.format(
                 task_str=goal_text, object_poses=poses_text, plan=plan_text,
                 goal_functions='\n\n'.join(goal_functions) or '(none)', operator=action_text(op),
@@ -530,7 +616,8 @@ class OWLTAMPPipeline(BaselinePipeline):
                     used.add(index)
                     if op in sketch_constraints:
                         constraints[index] = sketch_constraints[op]
-            poses, failed = self.sample_plan(plan, geo, names, constraints, goal_functions, trace)
+            poses, failed = self.sample_plan([domain.primitive(a) for a in plan], geo, names, constraints,
+                                             goal_functions, trace)
             skeletons.append({'plan': [action_text(a) for a in plan],
                               'failed_operator': None if failed is None else
                               (action_text(plan[failed]) if failed < len(plan) else 'achieve_goal')})
@@ -545,9 +632,11 @@ class OWLTAMPPipeline(BaselinePipeline):
                     f'sampling budget exhausted on {len(skeletons)} skeleton(s)')
 
         plan, poses, constraints = solution
+        primitive_plan = [domain.primitive(a) for a in plan]
         trace['executed_plan'] = [action_text(a) for a in plan]
-        with self.forced_placements(plan, poses):
-            outcome = self.execute(plan)
+        trace['executed_primitive_plan'] = [action_text(a) for a in primitive_plan]
+        with self.forced_placements(primitive_plan, poses):
+            outcome = self.execute(primitive_plan)
         self.record_cycle(False, [action_text(a) for a in plan], '', 0.0, bool(outcome.success),
                           error=outcome.error_message)
         trace['execution'] = {'success': bool(outcome.success), 'failure': outcome.error_message}

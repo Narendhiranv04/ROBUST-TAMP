@@ -1,47 +1,45 @@
 """VLM-TAMP (Yang et al., "Guiding Long-Horizon Task and Motion Planning with Vision Language
-Models") in our scenes, ported from the authors' code (Learning-and-Intelligent-Systems/
-kitchen-worlds, pybullet_planning/vlm_tools: prompts_gpt4v.py, vlm_planning_api.py).
+Models") in our scenes, as the authors define it (Learning-and-Intelligent-Systems/kitchen-worlds,
+pybullet_planning/vlm_tools: prompts_gpt4v.py, vlm_planning_api.py, vlm_utils.py,
+world_builder/world_utils.py), planning mode ``sequence-reprompt``.
 
-Protocol (as in the authors' ``_query_subgoals`` / ``backtrack_planning_tree``):
+The method's own input, verbatim:
 
-1. Query 1, with the image: ``prompt_subgoals_english`` -- the goal, the objects, the observed
-   facts, the history, and the five commonsense rules -- asks for intermediate goals in English.
-2. Query 2, the same conversation: ``prompt_english_to_subgoals`` translates them into formal
-   subgoals from a predicate catalogue.
-3. The subgoals are achieved one at a time: each is refined into primitive actions by task-level
-   search from the observed state (the authors refine with PDDLStream; here the task level is
-   ``SymbolicDomain`` and the continuous level is our executor's own PDDLStream pick/place with
-   stable-pose, IK and motion samplers), executed, and checked.
-4. When a subgoal fails, the model is re-prompted (a fresh query 1 + 2 from the current
-   observation) with ``include_history``: the subgoals achieved so far, what the robot holds,
-   and the failed subgoal ("do not list this subgoal as the first subgoal"). At most two
-   re-prompts (the authors' ``len(replan_memory) < 2``). The episode ends when the subgoal
-   list is exhausted or the re-prompt budget is.
+* Query 1 (``prompt_subgoals_english``): the goal, the list of object names, the observed facts
+  ("the X is in/on the Y", "<joint> is fully closed"), the history, "You are a mobile robot with
+  one arm" and the five commonsense rules; the query image with ``composed_annotated_image_description``
+  appended to the prompt (``vlm_api.ask``).
+* The query image (``generate_query_images``): one downward camera view twice, side by side --
+  the first labelled with the movable objects and joints, the second with the movable objects,
+  surfaces and spaces -- each name drawn with its segmentation bounding box.
+* Query 2 (``prompt_english_to_subgoals``, the same conversation): the authors' full subgoal
+  catalogue, with the objects by type (``world.get_objects_by_type``: pformat of every category).
+* Parsing as ``parse_subgoals``: ``preds_rename`` (opened-door/-drawer -> openedjoint, ...),
+  ``preds_skipped`` (pressed, stirred, chopped), subgoals naming an unknown object are skipped.
+* The subgoals are achieved in order; a failed subgoal re-prompts with ``include_history`` (the
+  achieved subgoals, what the robot holds, "do not list this subgoal as the first ..."); at most
+  two re-prompts (``len(replan_memory) < 2``). An empty list or the last subgoal ends the episode.
 
-Adaptations to our scenes (recorded in every trial's ``baseline_trace``):
-* The subgoal catalogue keeps the authors' entries that exist in our scenes (picked, in, on)
-  and their door/drawer entries become lid entries (our articulated parts are lids); entries
-  for actions our scenes do not have (sprinkle, stir, chop, press, turn-on/off) are left out.
-* The object list names only observed objects (the authors list every object of the world,
-  including ones inside closed storage; our benchmark hides them until they are seen).
-* "You are a mobile robot with one arm" -> "You are a robot with one arm" (fixed-base arm).
-* A round whose translation yields no usable subgoal is treated as a failed round (re-prompt),
-  not as a finished plan.
-* Sampling: each model's card sampling, as for every planner in our comparison (the authors
-  used temperature 0.2 with GPT-4V).
+The scene side: our articulated parts are lids, which in the authors' world model are joints of
+type door; our objects and regions are given the authors' categories (movable, food, surface,
+space, joint, door). A subgoal is refined by task-level search over pick / place / open / close
+from the observed state and executed by our executor (its PDDLStream pick/place with stable-pose,
+IK and motion samplers), where the authors' refinement is their PDDLStream domain. Following the
+study protocol, objects appear once the robot observes them (the authors' world model also names
+objects inside closed storage), and the model runs with its card sampling (the authors used
+GPT-4V at temperature 0.2 / 0.0, max_tokens 1000).
 """
 
 from __future__ import annotations
 
 import re
 from pprint import pformat
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_text, observe, region_closed_by,
-                              strip_reasoning)
+from baselines.common import BaselinePipeline, SymbolicDomain, action_text, observe, region_closed_by
 from llm_pipeline.failures import TerminationReason
 
-# --- the authors' prompts (prompts_gpt4v.py), scene adaptations marked [ours] ---------------------
+# --- the authors' prompts (prompts_gpt4v.py), verbatim ------------------------------------------
 
 PROMPT_PLANNING = """
 Plan a short sequence of [OUTPUT] that accomplishes the following goal:
@@ -53,7 +51,7 @@ where <obj>, <surface>, <joint>, <button> and <handle> must be items from the fo
 Currently, you can see the following objects:
 ``{observed}''
 {history}
-You are a robot with {n_arms}. You must obey the following commonsense rules:
+You are a mobile robot with {n_arms}. You must obey the following commonsense rules:
 1. You must have at least one empty hand before you can pick up an object or open or close a joint.
 2. When you sprinkle or pour something into a container, there must not be objects placed on top of the container.
 3. You can only take actions on objects that you can see.
@@ -74,7 +72,6 @@ PROMPT_SUBGOALS_ENGLISH = (PROMPT_PLANNING.replace('[OUTPUT]', 'intermediate goa
                            .replace('[RESPOND_WITH]', """
 Respond with detailed but simple instructions in English. Each line must consists of only one intermediate goal, """))
 
-# [ours] catalogue: the authors' entries present in our scenes; door/drawer entries -> lid entries.
 PROMPT_ENGLISH_TO_SUBGOALS = """
 Translate the above intermediate goals into a formal language defined by the following subgoals.
 
@@ -83,8 +80,16 @@ subgoals =
 'picked(<movable>)': the result of picking up <movable>, it contains one argument.
 'in(<movable>, <space>)': the result of picking up <movable> and placing it inside <space>, it contains two arguments.
 'on(<movable>, <surface>)': the result of picking up <movable> and placing it on <surface>, it contains two arguments.
-'opened-lid(<lid>)': the result of opening <lid>, it contains one argument.
-'closed-lid(<lid>)': the result of closing <lid>, it contains one argument.
+'sprinkled-to(<movable>, <region>)': the result of picking up <movable> and sprinkling it into <region>, it contains two arguments.
+'stirred(<region>, <movable>)': the result of picking up <movable> to stir <region>, it contains two arguments.
+'chopped(<movable>, <utensil>)': the result of picking up <utensil> to chop <movable>, it contains two arguments.
+'opened-door(<door>)': the result of opening <door>, it contains one argument.
+'closed-door(<door>)': the result of closing <door>, it contains one argument.
+'opened-drawer(<drawer>)': the result of closing <drawer>, it contains one argument.
+'closed-drawer(<drawer>)': the result of closing <drawer>, it contains one argument.
+'pressed(<button>)': the result of pressing <button>, it contains one argument.
+'turned-on(<knob>)': the result of turning <handle> or <knob> to start up the associated appliance, it contains one argument.
+'turned-off(<knob>)': the result of turning <handle> or <knob> to shut down the associated appliance, it contains one argument.
 ],
 
 The above subgoals include argument types. Please use the objects in the respective types:
@@ -99,47 +104,152 @@ If a new object not mentioned in the set of objects is used as arguments, please
 If one intermediate goal cannot be translated into a sub-goal, skip that step.
 """
 
-MAX_REPROMPTS = 2        # the authors' ``len(self.agent_memory['replan_memory']) < 2``
+COMPOSED_ANNOTATED_IMAGE_DESCRIPTION = """
+The accompanying image is a collage of two images depicting a scene with a robot in a kitchen.
+There are different sets of annotations of object names with object bounding boxes drawn on the images.
+"""
+
+# vlm_utils.py
+PREDS_RENAME = {
+    'sprinkled-into': 'sprinkledto', 'sprinkled-to': 'sprinkledto', 'poured-into': 'pouredto',
+    'poured-to': 'pouredto', 'opened': 'openedjoint', 'closed': 'closedjoint', 'pulled-open': 'openedjoint',
+    'pulled-close': 'closedjoint', 'opened-door': 'openedjoint', 'opened-drawer': 'openedjoint',
+    'closed-door': 'closedjoint', 'closed-drawer': 'closedjoint', 'turned-on': 'openedjoint',
+    'turned-off': 'closedjoint', 'place': 'arrange',
+}
+PREDS_SKIPPED = ['pressed', 'stirred', 'chopped', 'stir', 'chop']
+
+MAX_REPROMPTS = 2        # ``len(self.agent_memory['replan_memory']) < 2``
+N_ARMS = 'one arm'
+QUERY_CAMERA = 'front'   # the authors' query camera is "tilted downward" (world.cameras[1])
 SUBGOAL = re.compile(r"([a-z][a-z_-]*)\s*\(([^()]*)\)")
-LID_PREDICATES = {'opened-lid': True, 'opened-door': True, 'opened-drawer': True,
-                  'closed-lid': False, 'closed-door': False, 'closed-drawer': False}
+# world.summarize_all_types(categories=extra_categories), in the authors' order
+CATEGORIES = ['movable', 'surface', 'space', 'joint', 'door', 'drawer',
+              'food', 'utensil', 'condiment', 'appliance', 'region', 'button', 'knob']
+FOOD_TOKENS = ('meat', 'steak', 'chicken', 'spam', 'sugar', 'can_of_beans', 'mustard', 'crackers', 'tin', 'soup')
 
 
-def _space_regions(regions) -> List[str]:
+# --- the scene in the authors' world-model terms -------------------------------------------------
+
+def space_regions(regions) -> List[str]:
     return [r for r in regions if region_closed_by(r) is not None or r.startswith('inside') or 'cupboard' in r]
 
 
-def observed_descriptions(obs) -> List[str]:
-    """The authors' ``get_observed_objects`` facts: "the X is in/on the Y", lids and their state."""
-    spaces = set(_space_regions(obs.regions))
-    lines = []
-    for obj, region in obs.objects.items():
-        if region is None:
-            continue
-        lines.append(f"the {obj} is {'in' if region in spaces else 'on'} the {region}")
-    for lid, is_open in obs.lids.items():
-        lines.append(f'{lid} is {"open" if is_open else "closed"}')
-    return lines
+def categories(obs) -> Dict[str, List[str]]:
+    spaces = space_regions(obs.regions)
+    cats = {c: [] for c in CATEGORIES}
+    cats['movable'] = list(obs.objects)
+    cats['food'] = [o for o in obs.objects if any(t in o for t in FOOD_TOKENS)]
+    cats['space'] = spaces
+    cats['surface'] = [r for r in obs.regions if r not in spaces]
+    cats['joint'] = list(obs.lids)
+    cats['door'] = list(obs.lids)
+    return cats
 
 
 def objects_by_type(obs) -> str:
-    spaces = _space_regions(obs.regions)
-    summary = {'<movable>': list(obs.objects), '<space>': spaces,
-               '<surface>': [r for r in obs.regions if r not in spaces], '<lid>': list(obs.lids)}
-    return pformat(summary, indent=3)
+    return pformat({f'<{c}>': names for c, names in categories(obs).items()}, indent=3)
 
+
+def observed_descriptions(obs) -> List[str]:
+    """``get_observed_objects``: attachments ("the X is in/on the Y"), then every joint's status."""
+    spaces = set(space_regions(obs.regions))
+    lines = [f"the {obj} is {'in' if region in spaces else 'on'} the {region}"
+             for obj, region in obs.objects.items() if region is not None]
+    lines += [f'{lid} is {"fully open" if is_open else "fully closed"}' for lid, is_open in obs.lids.items()]
+    return lines
+
+
+def query_image(pipeline, obs):
+    """``generate_query_images``: the query camera's view twice, labelled as the authors do."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    from llm_pipeline.object_aliases import canonical_object_name
+    from llm_pipeline.region_aliases import planner_region_name
+
+    detector = getattr(pipeline.segmentation_adapter, 'detector', None)
+    frames = pipeline._capture_rgb_frames()
+    if not frames or detector is None:
+        return obs.image
+    camera = QUERY_CAMERA if QUERY_CAMERA in frames else next(iter(frames))
+    rgb = frames[camera]
+    try:
+        mask = detector._capture_mask(camera)
+    except Exception:
+        mask = None
+    if mask is None or getattr(mask, 'shape', None)[:2] != rgb.shape[:2]:
+        return obs.image
+    names: Dict[int, str] = {}
+    for handle, task in getattr(detector, 'handle_to_task_name', {}).items():
+        names[int(handle)] = canonical_object_name(task)
+    for handle, region in getattr(detector, 'handle_to_region_name', {}).items():
+        names.setdefault(int(handle), planner_region_name(region))
+    cats = categories(obs)
+    first = set(cats['movable']) | set(cats['joint'])
+    second = set(cats['movable']) | set(cats['surface']) | set(cats['space'])
+
+    def boxes(wanted):
+        out = {}
+        for handle in np.unique(mask):
+            name = names.get(int(handle))
+            if name is None or name not in wanted or name.endswith('space'):
+                continue
+            ys, xs = np.nonzero(mask == handle)
+            if len(xs) < 20:
+                continue
+            x0, y0, x1, y1 = xs.min(), ys.min(), xs.max(), ys.max()
+            prev = out.get(name)
+            out[name] = (min(x0, prev[0]), min(y0, prev[1]), max(x1, prev[2]), max(y1, prev[3])) if prev else (x0, y0, x1, y1)
+        return out
+
+    def panel(wanted):
+        image = Image.fromarray(rgb[:, :, :3]).convert('RGB').resize((800, 600))
+        sx, sy = 800 / rgb.shape[1], 600 / rgb.shape[0]
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default()
+        used = []
+        for name, (x0, y0, x1, y1) in sorted(boxes(wanted).items(), key=lambda kv: kv[1][0]):
+            box = (x0 * sx, y0 * sy, x1 * sx, y1 * sy)
+            draw.rectangle(box, outline=(255, 0, 0), width=2)
+            tx, ty = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+            while any(abs(ty - u) < 14 and abs(tx - v) < 80 for u, v in used):      # keep labels apart
+                ty += 14
+            used.append((ty, tx))
+            w = draw.textlength(name, font=font)
+            draw.rectangle((tx - w / 2 - 2, ty - 7, tx + w / 2 + 2, ty + 7), fill=(255, 255, 255))
+            draw.text((tx - w / 2, ty - 6), name, fill=(0, 0, 0), font=font)
+        return image
+
+    a, b = panel(first), panel(second)
+    collage = Image.new('RGB', (a.width + b.width + 20, a.height), (255, 255, 255))
+    collage.paste(a, (0, 0))
+    collage.paste(b, (a.width + 20, 0))
+    return np.asarray(collage)
+
+
+# --- parsing and refinement ------------------------------------------------------------------------
 
 def parse_subgoals(text: str, obs) -> Tuple[List[Tuple[str, ...]], List[str]]:
-    """Subgoals in order; unknown predicates or objects are skipped, as in the authors' parser."""
+    """``parse_subgoals``: renames, skipped predicates, unknown objects skip the subgoal."""
+    from baselines.common import strip_reasoning
+
     known = set(obs.objects) | set(obs.regions) | set(obs.lids)
     subgoals, skipped = [], []
     for pred, args in SUBGOAL.findall(strip_reasoning(text)):
-        names = tuple(a.strip().strip('\'"') for a in args.split(',') if a.strip())
-        arity = {'picked': 1, 'in': 2, 'on': 2}.get(pred, 1 if pred in LID_PREDICATES else None)
-        if arity is None or len(names) != arity or any(n not in known for n in names):
+        if len(pred) + len(args) + 2 < 4:
+            continue
+        if pred in PREDS_SKIPPED:
+            skipped.append(f'{pred}({args})')
+            continue
+        pred = PREDS_RENAME.get(pred, pred)
+        names = [a.strip().strip('\'"') for a in args.split(',') if a.strip()]
+        if len(names) == 2 and names[1] in ('arm', 'hand', 'gripper'):
+            pred, names = 'picked', names[:1]
+        if any(n not in known for n in names):
             skipped.append(f'{pred}({", ".join(names)})')
             continue
-        subgoals.append((pred,) + names)
+        subgoals.append((pred,) + tuple(names))
     return subgoals, skipped
 
 
@@ -148,13 +258,16 @@ def subgoal_text(subgoal: Tuple[str, ...]) -> str:
 
 
 def subgoal_test(subgoal: Tuple[str, ...]):
+    """The subgoal as a condition on the symbolic state (None: not achievable in this scene)."""
     pred, args = subgoal[0], subgoal[1:]
-    if pred == 'picked':
+    if pred == 'picked' and len(args) == 1:
         return lambda s: s.holding == args[0]
-    if pred in ('in', 'on'):
+    if pred in ('in', 'on') and len(args) == 2:
         return lambda s: s.holding != args[0] and s.region_of(args[0]) == args[1]
-    want_open = LID_PREDICATES[pred]
-    return lambda s: (args[0] in s.open_lids) == want_open
+    if pred in ('openedjoint', 'closedjoint') and len(args) == 1:
+        want_open = pred == 'openedjoint'
+        return lambda s: (args[0] in s.open_lids) == want_open
+    return None
 
 
 class VLMTAMPPipeline(BaselinePipeline):
@@ -162,27 +275,30 @@ class VLMTAMPPipeline(BaselinePipeline):
 
     def query_subgoals(self, goal_text: str, obs, history: str) -> Tuple[List[Tuple[str, ...]], dict]:
         chat = self.chat()
-        # The authors list every body of the world (movables, surfaces, spaces, joints); here the observed ones.
-        prompt = PROMPT_SUBGOALS_ENGLISH.format(goal=goal_text,
-                                                objects=list(obs.objects) + list(obs.lids) + list(obs.regions),
+        object_names = list(obs.objects) + list(obs.regions) + list(obs.lids)
+        prompt = PROMPT_SUBGOALS_ENGLISH.format(goal=goal_text, objects=object_names,
                                                 observed=',\n'.join(observed_descriptions(obs)),
-                                                history=history, n_arms='one arm')
-        english = chat.complete([('user', prompt)], image=obs.image, purpose='vlm_tamp_subgoals_english')
+                                                history=history, n_arms=N_ARMS)
+        prompt += COMPOSED_ANNOTATED_IMAGE_DESCRIPTION           # vlm_api.ask: prompt += image_description
+        image = query_image(self, obs)
+        english = chat.complete([('user', prompt)], image=image, purpose='vlm_tamp_subgoals_english')
+        from baselines.common import strip_reasoning
+
         translation = PROMPT_ENGLISH_TO_SUBGOALS.format(objects=objects_by_type(obs))
         formal = chat.complete([('user', prompt), ('assistant', strip_reasoning(english['content'])),
-                                ('user', translation)], image=obs.image, purpose='vlm_tamp_subgoals_string')
+                                ('user', translation)], image=image, purpose='vlm_tamp_subgoals_string')
         subgoals, skipped = parse_subgoals(formal['content'], obs)
         return subgoals, {'english': strip_reasoning(english['content']), 'formal': strip_reasoning(formal['content']),
                           'subgoals': [subgoal_text(s) for s in subgoals], 'skipped': skipped,
                           'observation': obs.to_dict()}
 
-    def refine(self, obs, subgoal) -> Optional[List[Tuple[str, ...]]]:
+    def refine(self, obs, test) -> Optional[List[Tuple[str, ...]]]:
         domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
-        return domain.search(obs.symbolic(), subgoal_test(subgoal), max_depth=8)
+        return domain.search(obs.symbolic(), test, max_depth=8)
 
     def run_baseline(self, goal_text: str) -> Optional[str]:
         trace = self._baseline_trace
-        trace.update({'rounds': [], 'max_reprompts': MAX_REPROMPTS})
+        trace.update({'rounds': [], 'max_reprompts': MAX_REPROMPTS, 'query_camera': QUERY_CAMERA})
         succeeded: List[str] = []
         history = ''
         for round_index in range(MAX_REPROMPTS + 1):
@@ -191,22 +307,25 @@ class VLMTAMPPipeline(BaselinePipeline):
             round_trace['subgoal_results'] = []
             trace['rounds'].append(round_trace)
             failed = None
-            if not subgoals:
-                failed = ('the intermediate goals', 'no subgoal could be read from the translation')
             for subgoal in subgoals:
                 obs = observe(self)
-                if subgoal_test(subgoal)(obs.symbolic()):
+                test = subgoal_test(subgoal)
+                if test is None:
+                    failed = subgoal_text(subgoal)
+                    round_trace['subgoal_results'].append({'subgoal': failed, 'result': 'not achievable in this scene'})
+                    break
+                if test(obs.symbolic()):
                     succeeded.append(subgoal_text(subgoal))
                     round_trace['subgoal_results'].append({'subgoal': subgoal_text(subgoal), 'result': 'already true'})
                     continue
-                actions = self.refine(obs, subgoal)
+                actions = self.refine(obs, test)
                 if actions is None:
-                    failed = (subgoal_text(subgoal), 'no task plan from the observed state')
-                    round_trace['subgoal_results'].append({'subgoal': subgoal_text(subgoal), 'result': 'no plan'})
+                    failed = subgoal_text(subgoal)
+                    round_trace['subgoal_results'].append({'subgoal': failed, 'result': 'no plan'})
                     break
                 outcome = self.execute(actions)
                 after = observe(self)
-                holds = subgoal_test(subgoal)(after.symbolic())
+                holds = test(after.symbolic())
                 # An object inside closed storage is not observed; the executor's success stands for it.
                 invisible = subgoal[0] in ('in', 'on') and subgoal[1] not in after.objects
                 ok = bool(outcome.success) and (holds or invisible)
@@ -215,26 +334,27 @@ class VLMTAMPPipeline(BaselinePipeline):
                     'executed': bool(outcome.success), 'holds_after': holds,
                     'failure': outcome.error_message, 'result': 'ok' if ok else 'failed'})
                 if not ok:
-                    failed = (subgoal_text(subgoal), outcome.error_message or 'subgoal not achieved')
+                    failed = subgoal_text(subgoal)
                     break
                 succeeded.append(subgoal_text(subgoal))
             self.record_cycle(round_index > 0, [a for r in round_trace['subgoal_results'] for a in r.get('refined', [])],
                               round_trace['formal'], 0.0, failed is None,
-                              error=None if failed is None else f'{failed[0]}: {failed[1]}')
+                              error=None if failed is None else f'subgoal {failed} failed')
             if failed is None:
-                return None
+                return None              # the subgoal list is exhausted (an empty list included)
             if round_index == MAX_REPROMPTS:
                 self._set_termination(TerminationReason.REPLAN_BUDGET_EXHAUSTED)
-                return f'subgoal {failed[0]} failed ({failed[1]}); re-prompt budget exhausted'
+                return f'subgoal {failed} failed; re-prompt budget exhausted'
+            # get_action_history_and_failure
             holding = observe(self).holding
             actions = '\n'.join(f'{i + 1}. {s}' for i, s in enumerate(succeeded))
             if holding:
-                actions += f'\nCurrently, the robot is holding some objects. The hand is holding {holding}. '
-            failure = (f'subgoals {failed[0]}. So please do not list this subgoals as the first subgoals to achieve '
+                actions += f'\nCurrently, the robot is holding some objects. The left hand is holding {holding}. '
+            failure = (f'subgoals {failed}. So please do not list this subgoals as the first subgoals to achieve '
                        f'in your answer.')
             history = INCLUDE_HISTORY.format(actions=actions, failure=failure)
         return 'unreachable'
 
 
-__all__ = ['VLMTAMPPipeline', 'PROMPT_SUBGOALS_ENGLISH', 'PROMPT_ENGLISH_TO_SUBGOALS', 'parse_subgoals']
-_ = SymState
+__all__ = ['VLMTAMPPipeline', 'PROMPT_SUBGOALS_ENGLISH', 'PROMPT_ENGLISH_TO_SUBGOALS', 'parse_subgoals',
+           'space_regions', 'categories']

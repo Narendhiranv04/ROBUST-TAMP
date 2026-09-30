@@ -69,23 +69,23 @@ def _observed_steps(pipeline) -> List[List[Tuple[str, ...]]]:
 
 
 def vlm_tamp_responder(pipeline):
-    from baselines.vlm_tamp import _space_regions
+    from baselines.vlm_tamp import space_regions
 
     def respond(purpose: str, turns) -> str:
         steps = _observed_steps(pipeline)
         if purpose.endswith('english'):
             return '\n'.join(f'{n + 1}. ' + ' then '.join(f'{a[0]} {" ".join(a[1:])}' for a in step)
                              for n, step in enumerate(steps))
-        spaces = set(_space_regions(observe(pipeline).regions))
+        spaces = set(space_regions(observe(pipeline).regions))
         subgoals = []
         for step in steps:
             last = step[-1]
             if last[0] == 'place':
                 subgoals.append(f"{'in' if last[2] in spaces else 'on'}({last[1]}, {last[2]})")
             elif last[0] == 'open':
-                subgoals.append(f'opened-lid({last[1]})')
+                subgoals.append(f'opened-door({last[1]})')
             elif last[0] == 'close':
-                subgoals.append(f'closed-lid({last[1]})')
+                subgoals.append(f'closed-door({last[1]})')
             elif last[0] == 'pick':
                 subgoals.append(f'picked({last[1]})')
         return '[' + ', '.join(f"'{s}'" for s in subgoals) + ']'
@@ -96,8 +96,17 @@ def vlm_tamp_responder(pipeline):
 def owl_tamp_responder(pipeline):
     def respond(purpose: str, turns) -> str:
         if purpose == 'owl_tamp_discrete':
+            from baselines.vlm_tamp import space_regions
+
             steps = _observed_steps(pipeline)
-            lines = [f"{a[0]}({', '.join(a[1:])}); {a[0]} as in the reference sequence" for s in steps for a in s]
+            spaces = set(space_regions(observe(pipeline).regions))
+
+            def owl_op(a):
+                if a[0] == 'place':
+                    return ('place_inside' if a[2] in spaces else 'place_ontop', a[1], a[2])
+                return a
+            lines = [f"{o[0]}({', '.join(o[1:])}); {o[0]} as in the reference sequence"
+                     for s in steps for o in map(owl_op, s)]
             placed = sorted({a[1] for s in steps for a in s if a[0] == 'place'})
             return ('The scene and task are as described.\nThe relevant objects are listed in the plan.\n'
                     'No particular obstacles.\nPlan:\n' + '\n'.join(lines) +
@@ -106,11 +115,9 @@ def owl_tamp_responder(pipeline):
             return '```python\ndef goal_check0() -> bool:\n    return True\n```'
         # action constraints: the placed object lies over its target region
         prompt = turns[-1][1]
-        operator = next((l.strip() for l in prompt.splitlines() if l.strip().startswith('place(')
-                         and l.strip().endswith(';')), None) or ''
         line = prompt.split('right after the robot executes the operator\n', 1)[-1].splitlines()[0]
-        op = parse_action_text(line.split(';', 1)[0]) or parse_action_text(operator.rstrip(';'))
-        if not op or op[0] != 'place':
+        op = parse_action_text(line.split(';', 1)[0])
+        if not op or op[0] not in ('place_ontop', 'place_inside'):
             return '```python\ndef goal_check0() -> bool:\n    return True\n```'
         return ('```python\ndef goal_check0() -> bool:\n'
                 f'    bounds = modify_pose_bounds_to_be_inside_object(init_state, env, init_bounds, {op[1]}.category, '
