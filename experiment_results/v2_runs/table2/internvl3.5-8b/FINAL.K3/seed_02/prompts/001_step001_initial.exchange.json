@@ -1,0 +1,79 @@
+{
+ "http_elapsed_s": 6.5366,
+ "image_sha256": "dd4d5487ceaf5e9f92d724d8aa4cd4e661376a0519df61d4c335ac4de41676df",
+ "profile_alias": "internvl3.5-8b",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "image_url": {
+       "url": "<png sha256=dd4d5487ceaf5e9f92d724d8aa4cd4e661376a0519df61d4c335ac4de41676df>"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "## Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n## Current state\nVisible objects and the region each one is in:\n- mug1: table_right_area\n- mug2: box_lid_top\n- mug3: cupboard_shelf\n- spam: table_right_area\n- sugar: table_right_area\nRemembered objects (not currently visible): last region, steps since last seen:\n- (none)\nLids:\n- box_lid: closed (closes off inside_box; top surface: box_lid_top)\nGripper: empty\nRegions: table, table_center_area, cupboard_shelf, inside_box, table_right_area, box_lid_top",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "internvl3.5-8b",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.0,
+  "temperature": 0.8,
+  "top_k": -1,
+  "top_p": 0.8
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "To achieve the goal of moving all the groceries inside the cupboard and all the mugs inside the box, we need to follow a sequence of actions. Here\u2019s the reasoning:\n\n1. **Open the Box Lid**: The box lid is closed, and we need to access the inside of the box to place the mugs inside it.\n2. **Pick the Mugs**: We need to pick up the mugs from their current locations and place them inside the box.\n3. **Place the Mugs Inside the Box**: Once the box lid is open, we can place the mugs inside the box.\n4. **Close the Box Lid**: After placing the mugs inside the box, we can close the lid.\n5. **Repeat for Groceries**: We need to ensure all groceries are inside the cupboard.\n\nGiven the current state and the goal, here are the actions:\n\n### Actions\n\n1. **Open the Box Lid**: To access the inside of the box.\n2. **Pick the Mugs**: From their current locations.\n3. **Place the Mugs Inside the Box**: Once the box lid is open.\n4. **Close the Box Lid**: After placing the mugs inside the box.\n5. **Move Groceries to the Cupboard**: Ensure all groceries are inside the cupboard.\n\n### Detailed Actions\n\n1. **Open the Box Lid**\n2. **Pick the Mugs**\n3. **Place the Mugs Inside the Box**\n4. **Close the Box Lid**\n5. **Move Groceries to the Cupboard**\n\n### Execution\n\n1. Open the box lid.\n2. Pick the mugs from their current locations.\n3. Place the mugs inside the box.\n4. Close the box lid.\n5. Move the groceries to the cupboard.\n\nFINAL ACTIONS:\nopen(box_lid)\npick(mug1)\nplace(mug1, inside_box)\npick(mug2)\nplace(mug2, inside_box)\nclose(box_lid)\npick(spam)\nplace(spam, cupboard_shelf)\npick(sugar)\nplace(sugar, cupboard_shelf)",
+     "function_call": null,
+     "reasoning": null,
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790638598,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-bd2a078f72e418b4",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "internvl3.5-8b",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-e0ec395f",
+  "usage": {
+   "completion_tokens": 424,
+   "completion_tokens_details": null,
+   "prompt_tokens": 2748,
+   "prompt_tokens_details": null,
+   "total_tokens": 3172
+  }
+ },
+ "served_model": "internvl3.5-8b",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "e8e014b8aeb5c440"
+}

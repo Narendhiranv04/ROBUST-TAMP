@@ -1,0 +1,79 @@
+{
+ "http_elapsed_s": 3.4614,
+ "image_sha256": "63f26c97731d4d42c90cfa70cb4371c145313d335914f7d11c6f1bab86bd15e8",
+ "profile_alias": "internvl3.5-8b",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "image_url": {
+       "url": "<png sha256=63f26c97731d4d42c90cfa70cb4371c145313d335914f7d11c6f1bab86bd15e8>"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "## Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n## Current state\nVisible objects and the region each one is in:\n- mug1: table_right_area\n- mug2: table_right_area\n- mug3: cupboard_shelf\n- can_of_beans: table_right_area\n- spam: table_right_area\n- sugar: table_right_area\n- can_of_beans_2: table_right_area\nRemembered objects (not currently visible): last region, steps since last seen:\n- (none)\nLids:\n- box_lid: closed (closes off inside_box; top surface: box_lid_top)\nGripper: empty\nRegions: table, table_center_area, cupboard_shelf, inside_box, table_right_area, box_lid_top\n\n## Completed actions\n- a31: pick(mug2)\n\n## Remaining plan (not executed yet)\n- a32: place(mug2, table_right_area)\n- a33: open(box_lid)\n- a34: pick(mug1)\n- a35: place(mug1, inside_box)\n- a36: pick(mug3)\n- a37: place(mug3, inside_box)\n- a38: pick(can_of_beans)\n- a39: place(can_of_beans, cupboard_shelf)\n- a40: pick(spam)\n- a41: place(spam, cupboard_shelf)\n- a42: pick(sugar)\n- a43: place(sugar, cupboard_shelf)\n- a44: pick(can_of_beans_2)\n- a45: place(can_of_beans_2, cupboard_shelf)\n\n## Why a new plan is requested\n- place(mug2, table_right_area) failed (failure code placement_failed).",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "internvl3.5-8b",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.0,
+  "temperature": 0.8,
+  "top_k": -1,
+  "top_p": 0.8
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "Reasoning:\nThe goal is to move all the groceries inside the cupboard and all the mugs inside the box. The previous action to place mug2 failed, so we need to reconsider the plan. The box lid needs to be opened first to place the mugs inside the box. After opening the box lid, we can proceed to pick up the remaining mugs and place them inside the box. Then, we can continue with the plan to move the groceries into the cupboard.\n\nFINAL ACTIONS:\nopen(box_lid)\npick(mug1)\nplace(mug1, inside_box)\npick(mug3)\nplace(mug3, inside_box)\npick(can_of_beans)\nplace(can_of_beans, cupboard_shelf)\npick(spam)\nplace(spam, cupboard_shelf)\npick(sugar)\nplace(sugar, cupboard_shelf)\npick(can_of_beans_2)\nplace(can_of_beans_2, cupboard_shelf)",
+     "function_call": null,
+     "reasoning": null,
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790638092,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-88b9a567715af385",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "internvl3.5-8b",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-e0ec395f",
+  "usage": {
+   "completion_tokens": 191,
+   "completion_tokens_details": null,
+   "prompt_tokens": 2987,
+   "prompt_tokens_details": null,
+   "total_tokens": 3178
+  }
+ },
+ "served_model": "internvl3.5-8b",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "e8e014b8aeb5c440"
+}

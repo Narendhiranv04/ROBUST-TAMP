@@ -1,0 +1,79 @@
+{
+ "http_elapsed_s": 1.9585,
+ "image_sha256": "96a988c57d3edfded74b95ce1c5b5e4c525156857d5c23c0fa29078f0e18543f",
+ "profile_alias": "internvl3.5-8b",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "image_url": {
+       "url": "<png sha256=96a988c57d3edfded74b95ce1c5b5e4c525156857d5c23c0fa29078f0e18543f>"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "## Goal\nmove ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box\n\n## Current state\nVisible objects and the region each one is in:\n- mug1: table_right_area\n- mug2: box_lid_top\n- mug3: cupboard_shelf\n- can_of_beans: table_right_area\n- spam: table_right_area\n- sugar: table_right_area\n- can_of_beans_2: table_right_area\nRemembered objects (not currently visible): last region, steps since last seen:\n- (none)\nLids:\n- box_lid: closed (closes off inside_box; top surface: box_lid_top)\nGripper: empty\nRegions: table, table_center_area, cupboard_shelf, inside_box, table_right_area, box_lid_top\n\n## Completed actions\n- (none)\n\n## Remaining plan (not executed yet)\n- a1: open(box_lid)\n\n## Why a new plan is requested\n- open(box_lid) failed (failure code box_lid_obstructed).",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "internvl3.5-8b",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.0,
+  "temperature": 0.8,
+  "top_k": -1,
+  "top_p": 0.8
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "Reasoning: The goal is to move all groceries inside the cupboard and all mugs inside the box. The current state shows that the box lid is closed, and there is an obstruction preventing the lid from being opened. To proceed, we need to first open the box lid to access the box and place the mugs inside.\n\nGiven the failure to open the box lid, we should first attempt to clear any obstruction. Since the gripper is currently empty, we can pick up an object that might be obstructing the lid and then try to open it again.\n\nFINAL ACTIONS:\npick(mug2)\nplace(mug2, inside_box)\nopen(box_lid)",
+     "function_call": null,
+     "reasoning": null,
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790640555,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-849a7fb5ccd3e027",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "internvl3.5-8b",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-e0ec395f",
+  "usage": {
+   "completion_tokens": 135,
+   "completion_tokens_details": null,
+   "prompt_tokens": 2821,
+   "prompt_tokens_details": null,
+   "total_tokens": 2956
+  }
+ },
+ "served_model": "internvl3.5-8b",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "e8e014b8aeb5c440"
+}

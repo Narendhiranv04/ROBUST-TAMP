@@ -1,0 +1,79 @@
+{
+ "http_elapsed_s": 2.9871,
+ "image_sha256": "2c4d995d0ef98c6ddb2bc16618ca709f9f7873786ad3ec1071b93456881c9ba2",
+ "profile_alias": "internvl3.5-8b",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\nclose(l): close lid l.\n  Preconditions: the gripper is empty; l is open.\n  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "image_url": {
+       "url": "<png sha256=2c4d995d0ef98c6ddb2bc16618ca709f9f7873786ad3ec1071b93456881c9ba2>"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "## Goal\nCOOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.\n\n## Current state\nVisible objects and the region each one is in:\n- plate: dish_rack\n- raw_meat_1: inside_grill\nRemembered objects (not currently visible): last region, steps since last seen:\n- cooked_meat_1: inside_grill, 4 steps ago\nLids:\n- grill_lid: closed (closes off inside_grill)\nGripper: empty\nRegions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack\n\n## Completed actions\n- a1: open(grill_lid)\n- a2: pick(raw_meat_1)\n- a3: place(raw_meat_1, inside_grill)\n- a8: open(grill_lid)\n- a9: pick(cooked_meat_1)\n- a10: place(cooked_meat_1, inside_grill)\n- a11: close(grill_lid)\n- a4: close(grill_lid)\n\n## Remaining plan (not executed yet)\n- a12: pick(cooked_meat_1)\n- a13: place(cooked_meat_1, dish_rack)\n- a5: open(grill_lid)\n- a6: pick(raw_meat_1)\n- a7: place(raw_meat_1, dish_rack)\n\n## Why a new plan is requested\n- pick(cooked_meat_1) failed (failure code pick_object_missing).",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "internvl3.5-8b",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.0,
+  "temperature": 0.8,
+  "top_k": -1,
+  "top_p": 0.8
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "Reasoning: The goal is to cook all raw meat using the grill and serve all cooked meat on the plate in the serving area. The current state shows that the grill lid is closed, and the raw meat is inside the grill. The cooked meat needs to be removed from the grill and placed on the dish rack, and then served on the plate in the serving area.\n\nGiven the current state and the completed actions, the next steps should involve opening the grill lid to access the cooked meat, picking it up, and placing it on the dish rack. After that, the raw meat should be picked up and placed on the dish rack as well.\n\nFINAL ACTIONS:\nopen(grill_lid)\npick(cooked_meat_1)\nplace(cooked_meat_1, dish_rack)\npick(raw_meat_1)\nplace(raw_meat_1, dish_rack)",
+     "function_call": null,
+     "reasoning": null,
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790639429,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-a2d025439855635d",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "internvl3.5-8b",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-e0ec395f",
+  "usage": {
+   "completion_tokens": 178,
+   "completion_tokens_details": null,
+   "prompt_tokens": 2975,
+   "prompt_tokens_details": null,
+   "total_tokens": 3153
+  }
+ },
+ "served_model": "internvl3.5-8b",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "e8e014b8aeb5c440"
+}

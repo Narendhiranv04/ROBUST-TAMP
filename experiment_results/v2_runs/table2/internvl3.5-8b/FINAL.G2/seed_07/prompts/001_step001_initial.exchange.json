@@ -1,0 +1,79 @@
+{
+ "http_elapsed_s": 3.7284,
+ "image_sha256": "505394adbd0c93710a65ce7c63e665842ae71bca28098434ac4b6ddd7057e589",
+ "profile_alias": "internvl3.5-8b",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\nclose(l): close lid l.\n  Preconditions: the gripper is empty; l is open.\n  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "image_url": {
+       "url": "<png sha256=505394adbd0c93710a65ce7c63e665842ae71bca28098434ac4b6ddd7057e589>"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "## Goal\nCOOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.\n\n## Current state\nVisible objects and the region each one is in:\n- plate: dish_rack\n- raw_meat_1: grill_side_area\nRemembered objects (not currently visible): last region, steps since last seen:\n- (none)\nLids:\n- grill_lid: closed (closes off inside_grill)\nGripper: empty\nRegions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "internvl3.5-8b",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.0,
+  "temperature": 0.8,
+  "top_k": -1,
+  "top_p": 0.8
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "To achieve the goal of cooking all raw meat and serving it on the plate, we need to follow these steps:\n\n1. **Open the grill lid** to access the raw meat inside.\n2. **Pick up the raw meat** from the grill side area.\n3. **Place the raw meat inside the grill** for cooking.\n4. **Close the grill lid** to start the cooking process.\n5. **Wait for the meat to cook** (this step is implicit as the robot cannot actively wait, but the cooking process will occur once the lid is closed).\n6. **Open the grill lid** again once the meat is cooked.\n7. **Pick up the cooked meat** from the inside of the grill.\n8. **Place the cooked meat on the plate** in the dish rack.\n\nGiven the current state and the actions available, here are the actions to achieve the goal:\n\nFINAL ACTIONS:\nopen(grill_lid)\npick(raw_meat_1)\nplace(raw_meat_1, inside_grill)\nclose(grill_lid)\nopen(grill_lid)\npick(raw_meat_1)\nplace(raw_meat_1, dish_rack)",
+     "function_call": null,
+     "reasoning": null,
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790639998,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-bfdcee3c1a2faa90",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "internvl3.5-8b",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-e0ec395f",
+  "usage": {
+   "completion_tokens": 238,
+   "completion_tokens_details": null,
+   "prompt_tokens": 2763,
+   "prompt_tokens_details": null,
+   "total_tokens": 3001
+  }
+ },
+ "served_model": "internvl3.5-8b",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "e8e014b8aeb5c440"
+}
