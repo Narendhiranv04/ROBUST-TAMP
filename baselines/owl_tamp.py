@@ -368,7 +368,7 @@ class OWLTAMPPipeline(BaselinePipeline):
             robot_xy = (float(base[0]), float(base[1]))
         except Exception:
             robot_xy = (0.0, 0.0)
-        return Geometry(boxes, poses, robot_xy)
+        return Geometry(boxes, poses, robot_xy, regions=obs.regions)
 
     def scene_sample(self, obj: str, region: str) -> Optional[list]:
         """One pose from the scene's own placement sampler (its resting height and orientation)."""
@@ -476,7 +476,7 @@ class OWLTAMPPipeline(BaselinePipeline):
         while goal_budget > 0 and all(v > 0 for v in budgets.values()):
             goal_budget -= 1
             attempt += 1
-            predicted = Geometry(geo.boxes, dict(geo.poses), geo.robot_xy)
+            predicted = Geometry(geo.boxes, dict(geo.poses), geo.robot_xy, regions=geo.regions)
             chosen: Dict[int, list] = {}
             where = dict(self._initial_regions)          # predicted region of every object, in plan order
             placed: Dict[str, list] = {}                 # 7-D poses the plan has placed objects at

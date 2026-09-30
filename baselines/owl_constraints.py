@@ -273,13 +273,22 @@ class Entity:
 class Geometry:
     """Observed boxes of objects and regions, the robot base, and the predicted poses."""
 
-    def __init__(self, boxes: Dict[str, tuple], poses: Dict[str, RavenPose], robot_xy: Tuple[float, float]):
+    # Regions are placement areas that perception gives as flat boxes at some height; as a volume
+    # they reach from REGION_BELOW under that plane to REGION_ABOVE over it (objects resting there).
+    REGION_BELOW, REGION_ABOVE = 0.15, 0.35
+
+    def __init__(self, boxes: Dict[str, tuple], poses: Dict[str, RavenPose], robot_xy: Tuple[float, float],
+                 regions=()):
         self.boxes = dict(boxes)            # name -> ((x0, y0, z0), (x1, y1, z1))
         self.poses = dict(poses)            # name -> RavenPose (current / predicted)
         self.robot_xy = robot_xy
+        self.regions = set(regions)
 
     def box(self, name: str):
         if name in self.boxes:
+            (x0, y0, z0), (x1, y1, z1) = self.boxes[name]
+            if name in self.regions:
+                return ((x0, y0, min(z0, z1) - self.REGION_BELOW), (x1, y1, max(z0, z1) + self.REGION_ABOVE))
             return self.boxes[name]
         pose = self.poses[name]
         return ((pose.x - 0.03, pose.y - 0.03, pose.z - 0.03), (pose.x + 0.03, pose.y + 0.03, pose.z + 0.03))
@@ -297,8 +306,24 @@ class Geometry:
 
 
 def _helpers(geo: Geometry):
+    """The A.6 codebook. The paper gives docstrings, not signatures, so each helper reads its object
+    name(s) from its last name arguments and its bounds from the bounds-shaped argument; the paper's
+    own examples call them as f(init_state, env, init_bounds, obj1, obj2)."""
+
     def _name(x):
         return getattr(x, 'category', x)
+
+    def _is_bounds(x):
+        try:
+            lo, hi = x
+            return len(lo) >= 3 and len(hi) >= 3 and not isinstance(lo, str)
+        except Exception:
+            return False
+
+    def _parse(args):
+        names = [_name(a) for a in args if isinstance(a, (str, Entity))]
+        bounds = next((a for a in args if _is_bounds(a)), None)
+        return names, (bounds if bounds is not None else geo.workspace())
 
     def _center(name):
         (x0, y0, z0), (x1, y1, z1) = geo.box(name)
@@ -306,20 +331,30 @@ def _helpers(geo: Geometry):
 
     def _copy(bounds):
         lo, hi = bounds
-        return [list(lo), list(hi)]
+        lo, hi = list(lo), list(hi)
+        while len(lo) < 6:
+            lo.append(-PI)
+        while len(hi) < 6:
+            hi.append(PI)
+        return [lo, hi]
 
     def _toward_robot(name):
         cx, cy, _ = _center(name)
         dx, dy = geo.robot_xy[0] - cx, geo.robot_xy[1] - cy
         return (0, 1 if dx > 0 else -1) if abs(dx) >= abs(dy) else (1, 1 if dy > 0 else -1)
 
-    def get_aabb_bounds(state, env, object_name):
-        return geo.box(_name(object_name))
+    def get_aabb_bounds(*args, **kw):
+        names, _ = _parse(list(args) + list(kw.values()))
+        return geo.box(names[-1])
 
-    def get_obj_center(state, env, object_name):
-        return tuple(geo.poses.get(_name(object_name)) or RavenPose(*_center(_name(object_name)), 0.0, 0.0, 0.0))
+    def get_obj_center(*args, **kw):
+        names, _ = _parse(list(args) + list(kw.values()))
+        name = names[-1]
+        return tuple(geo.poses.get(name) or RavenPose(*_center(name), 0.0, 0.0, 0.0))
 
-    def _side(bounds, name, towards_robot: bool, lateral: bool = False):
+    def _side(args, towards_robot: bool, lateral: bool = False):
+        names, bounds = _parse(args)
+        name = names[-1]
         lo, hi = _copy(bounds)
         axis, sign = _toward_robot(name)
         (b0, b1) = geo.box(name)
@@ -332,69 +367,76 @@ def _helpers(geo: Geometry):
             hi[axis] = min(hi[axis], b0[axis])
         return (lo, hi)
 
-    def modify_pose_bounds_to_be_behind_object(state, env, init_bounds, object_name, *a, **k):
-        return _side(init_bounds, _name(object_name), towards_robot=False)
+    def modify_pose_bounds_to_be_behind_object(*args, **kw):
+        return _side(args, towards_robot=False)
 
-    def modify_pose_bounds_to_be_in_front_of_object(state, env, init_bounds, object_name, *a, **k):
-        return _side(init_bounds, _name(object_name), towards_robot=True)
+    def modify_pose_bounds_to_be_in_front_of_object(*args, **kw):
+        return _side(args, towards_robot=True)
 
-    def modify_pose_bounds_to_be_left_of_object(state, env, init_bounds, object_name, *a, **k):
-        return _side(init_bounds, _name(object_name), towards_robot=True, lateral=True)
+    def modify_pose_bounds_to_be_left_of_object(*args, **kw):
+        return _side(args, towards_robot=True, lateral=True)
 
-    def modify_pose_bounds_to_be_right_of_object(state, env, init_bounds, object_name, *a, **k):
-        return _side(init_bounds, _name(object_name), towards_robot=False, lateral=True)
+    def modify_pose_bounds_to_be_right_of_object(*args, **kw):
+        return _side(args, towards_robot=False, lateral=True)
 
-    def modify_pose_bounds_to_be_above_object(state, env, init_bounds, object_name, *a, **k):
-        lo, hi = _copy(init_bounds)
-        (x0, y0, z0), (x1, y1, z1) = geo.box(_name(object_name))
+    def modify_pose_bounds_to_be_above_object(*args, **kw):
+        names, bounds = _parse(args)
+        lo, hi = _copy(bounds)
+        (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
         lo[0], hi[0], lo[1], hi[1], lo[2] = max(lo[0], x0), min(hi[0], x1), max(lo[1], y0), min(hi[1], y1), max(lo[2], z1)
         return (lo, hi)
 
-    def modify_pose_bounds_to_be_below_object(state, env, init_bounds, object_name, *a, **k):
-        lo, hi = _copy(init_bounds)
-        (x0, y0, z0), (x1, y1, z1) = geo.box(_name(object_name))
+    def modify_pose_bounds_to_be_below_object(*args, **kw):
+        names, bounds = _parse(args)
+        lo, hi = _copy(bounds)
+        (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
         lo[0], hi[0], lo[1], hi[1], hi[2] = max(lo[0], x0), min(hi[0], x1), max(lo[1], y0), min(hi[1], y1), min(hi[2], z0)
         return (lo, hi)
 
-    def modify_pose_bounds_to_be_near_object(state, env, init_bounds, object_name, closeness_thresh=(0.1, 0.1, 0.1),
-                                             *a, **k):
+    def modify_pose_bounds_to_be_near_object(*args, closeness_thresh=None, **kw):
+        names, bounds = _parse(args)
+        if closeness_thresh is None:
+            numbers = [a for a in args if isinstance(a, (int, float)) or
+                       (isinstance(a, (tuple, list)) and len(a) == 3 and all(isinstance(v, (int, float)) for v in a))]
+            closeness_thresh = numbers[-1] if numbers else (0.1, 0.1, 0.1)
         if isinstance(closeness_thresh, (int, float)):
             closeness_thresh = (closeness_thresh,) * 3
-        lo, hi = _copy(init_bounds)
-        c = _center(_name(object_name))
+        lo, hi = _copy(bounds)
+        c = _center(names[-1])
         for i in range(3):
             lo[i], hi[i] = max(lo[i], c[i] - closeness_thresh[i]), min(hi[i], c[i] + closeness_thresh[i])
         return (lo, hi)
 
-    def modify_pose_bounds_to_be_ontop_of_object(state, env, init_bounds, obj1_name, obj2_name=None, *a, **k):
-        target = _name(obj2_name if obj2_name is not None else obj1_name)
-        lo, hi = _copy(init_bounds)
-        (x0, y0, z0), (x1, y1, z1) = geo.box(target)
+    def modify_pose_bounds_to_be_ontop_of_object(*args, **kw):
+        names, bounds = _parse(args)
+        lo, hi = _copy(bounds)
+        (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
         lo[0], hi[0], lo[1], hi[1] = max(lo[0], x0), min(hi[0], x1), max(lo[1], y0), min(hi[1], y1)
         lo[2], hi[2] = max(lo[2], z0), min(hi[2], z1 + 0.25)       # resting on its top surface
         return (lo, hi)
 
-    def modify_pose_bounds_to_be_inside_object(state, env, init_bounds, obj1_name, obj2_name=None, *a, **k):
-        target = _name(obj2_name if obj2_name is not None else obj1_name)
-        lo, hi = _copy(init_bounds)
-        (x0, y0, z0), (x1, y1, z1) = geo.box(target)
+    def modify_pose_bounds_to_be_inside_object(*args, **kw):
+        names, bounds = _parse(args)
+        lo, hi = _copy(bounds)
+        (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
         lo[0], hi[0], lo[1], hi[1] = max(lo[0], x0), min(hi[0], x1), max(lo[1], y0), min(hi[1], y1)
         lo[2], hi[2] = max(lo[2], z0 - 0.05), min(hi[2], z1 + 0.1)
         return (lo, hi)
 
-    def position_within_bounds(pose, bounds):
+    def position_within_bounds(pose, bounds, *a, **k):
         lo, hi = bounds
         p = (pose.x, pose.y, pose.z) if hasattr(pose, 'x') else tuple(pose[:3])
         return all(lo[i] - 1e-6 <= p[i] <= hi[i] + 1e-6 for i in range(3))
 
-    def initialize_bounds_anywhere_on_object(state, env, obj, *a, **k):
-        (x0, y0, z0), (x1, y1, z1) = geo.box(_name(obj))
+    def initialize_bounds_anywhere_on_object(*args, **kw):
+        names, _ = _parse(args)
+        (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
         return ([x0, y0, z1, -PI, -PI, -PI], [x1, y1, z1 + 0.25, PI, PI, PI])
 
     def sample_ravenpose_uniformly_within_bounds(bounds, *a, **k):
         import random
 
-        lo, hi = bounds
+        lo, hi = _copy(bounds)
         return RavenPose(*[random.uniform(lo[i], hi[i]) for i in range(6)])
 
     def modify_obj_pose(obj, new_pose, *a, **k):

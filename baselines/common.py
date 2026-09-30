@@ -63,6 +63,7 @@ class Observation:
 def observe(pipeline) -> Observation:
     """The current observation, from the same scene state and image our planner is given."""
     state = pipeline._build_scene_state()
+    pipeline.__dict__.setdefault('_baseline_seen', set()).update(state.visible_objects)
     builder = pipeline.context_builder
     regions = list(builder._regions(state))
     lids = {lid: bool(is_open) for lid, is_open in (getattr(state, 'lid_states', {}) or {}).items()
@@ -376,9 +377,12 @@ class BaselinePipeline(LLMOnlyReplanningPipeline):
             # Our system's replanning triggers are not part of a baseline.
             if hasattr(self.executor, 'set_trigger_check'):
                 self.executor.set_trigger_check(None)
-            inner = getattr(self.failure_checker, 'inner', self.failure_checker)
-            if hasattr(inner, 'replan_on_new_visibility'):
-                inner.replan_on_new_visibility = False
+            if hasattr(self.failure_checker, 'replan_on_new_visibility'):
+                self.failure_checker.replan_on_new_visibility = False
+            # The pre-pick check needs the object in the camera masks at that instant, or remembered by our
+            # memory component (off for a baseline). A baseline plans with the objects it has observed, so
+            # an object it has observed in this trial may be picked when the masks miss it (as with memory).
+            self.failure_checker.remembered_pick_allowed = lambda name: name in getattr(self, '_baseline_seen', set())
         return ok
 
     # -- helpers ---------------------------------------------------------------
@@ -437,6 +441,7 @@ class BaselinePipeline(LLMOnlyReplanningPipeline):
         if self.segmentation_adapter is not None:
             self.segmentation_adapter.refresh_visibility(event='initial')
         started_at = time.time()
+        self._baseline_seen = set()
         self._baseline_trace: Dict[str, object] = {'baseline': self.baseline_name}
         failure_reason = None
         try:

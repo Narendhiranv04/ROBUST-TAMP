@@ -79,3 +79,31 @@ def test_owl_constraint_scope():
     own = "def goal_check0() -> bool:\n    return position_within_bounds(mug1.pose, b)"
     other = "def goal_check1() -> bool:\n    return spam.pose.z > 1.0"
     assert mentions(own, 'mug1') and not mentions(other, 'mug1') and mentions(other, 'spam')
+
+
+def test_owl_real_constraints_accept_valid_placements():
+    """Constraints the model wrote in the server run, on the geometry of those trials (regions are
+    flat perception boxes; helpers called with and without init_state/env)."""
+    boxes = {'cupboard_shelf': ((0.44, -0.172, 1.293), (0.534, 0.2, 1.293)),
+             'inside_box': ((-0.054, 0.187, 0.752), (0.276, 0.473, 0.752)),
+             'serving_area': ((-0.10, 0.12, 0.84), (0.16, 0.40, 0.84)),
+             'spam': ((0.425, 0.012, 1.242), (0.535, 0.091, 1.322)),
+             'mug2': ((0.10, 0.30, 0.76), (0.20, 0.37, 0.84)),
+             'plate': ((-0.072, 0.155, 0.856), (0.133, 0.36, 0.906))}
+    poses = {'spam': RavenPose(0.48, 0.051, 1.282, 0, 0, 0), 'mug2': RavenPose(0.146, 0.334, 0.8, 0, 0, -1.54),
+             'plate': RavenPose(0.03, 0.258, 0.876, 0, 0, 0), 'raw_meat_1': RavenPose(0.007, 0.234, 0.876, 0, 0, 0)}
+    geo = Geometry(boxes, poses, (-0.5, 0.0), regions={'cupboard_shelf', 'inside_box', 'serving_area'})
+    names = list(boxes) + ['raw_meat_1']
+    spam = ("def goal_check0() -> bool:\n    b = modify_pose_bounds_to_be_ontop_of_object(init_state, env, init_bounds, "
+            "spam.category, cupboard_shelf.category)\n    return position_within_bounds(spam.pose, b)")
+    mug = ("def goal_check0() -> bool:\n    b = get_aabb_bounds(init_state, env, 'inside_box')\n"
+           "    return position_within_bounds(mug2.pose, b)")
+    meat = ("def goal_check0() -> bool:\n    s = get_aabb_bounds(serving_area)\n    on = position_within_bounds(plate.pose, s)\n"
+            "    b = modify_pose_bounds_to_be_ontop_of_object(init_state, env, init_bounds, raw_meat_1.category, plate.category)\n"
+            "    return on and position_within_bounds(raw_meat_1.pose, b)")
+    for fn in (spam, mug, meat):
+        ok, errors = evaluate([fn], geo, names)
+        assert ok and not errors, (fn, errors)
+    far = ("def goal_check0() -> bool:\n    b = get_aabb_bounds(init_state, env, 'inside_box')\n"
+           "    return position_within_bounds(spam.pose, b)")
+    assert not evaluate([far], geo, names)[0]          # the spam is not in the box
