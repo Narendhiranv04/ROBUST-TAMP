@@ -116,6 +116,32 @@ def summarize(run_dir: Path) -> dict | None:
                 categories=dict(categories))
 
 
+def summarize_icl(icl_dir: Path, zs_dir: Path) -> dict | None:
+    """An ICL row: the examples change only the grill prompts (kitchen prompts are identical to
+    zero-shot), so the ICL runs cover the grill variants; the kitchen trials come from the same
+    model's zero-shot run. SR, PGC and Plan. are over all 140 trials of the two."""
+    if not icl_dir.is_dir() or not zs_dir.is_dir():
+        return None
+    grill = [v for v in FINAL_VARIANTS if v.startswith('FINAL.G')]
+    kitchen = [v for v in FINAL_VARIANTS if v.startswith('FINAL.K')]
+    g = build_report(icl_dir, grill, list(range(10)))
+    k = build_report(zs_dir, kitchen, list(range(10)))
+    rows_g = [t for v in grill for t in g['per_variant'][v]['trials_detail']]
+    rows_k = [t for v in kitchen for t in k['per_variant'][v]['trials_detail']]
+    if not rows_g:
+        return None
+    mean = lambda xs: sum(xs) / len(xs) if xs else None  # noqa: E731
+    rows = rows_k + rows_g
+    return {'SR_K': mean([float(t['success']) for t in rows_k]), 'SR_G': mean([float(t['success']) for t in rows_g]),
+            'SR': mean([float(t['success']) for t in rows]), 'PGC': mean([t['pgc'] for t in rows]),
+            'Plan_s': mean([t['planner_time_s'] for t in rows]), 'trials': len(rows),
+            'kitchen_trials': len(rows_k), 'grill_trials': len(rows_g),
+            'calls': mean([t['calls'] for t in rows]), 'failure_replans_per_trial': None,
+            'insertion_error_trials': sum(1 for t in rows if t.get('hc_violations')),
+            'complete': g['complete'] and k['complete'], 'categories': {},
+            'note': 'kitchen trials from the zero-shot run (identical kitchen prompts)'}
+
+
 def _fmt(v, pct=True):
     return '--' if v is None else (f'{100 * v:.1f}' if pct else f'{v:.0f}')
 
@@ -131,6 +157,13 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     def find(alias):
+        if alias.endswith('-icl'):
+            for root in roots:
+                for zs_root in roots:
+                    s = summarize_icl(root / alias, zs_root / alias[:-len('-icl')])
+                    if s is not None:
+                        return s
+            return None
         for root in roots:
             s = summarize(root / alias)
             if s is not None:

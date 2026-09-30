@@ -25,11 +25,13 @@ export HF_HOME=${HF_HOME:-/home/projects/long-horizon/.cache/huggingface}
 HUB=$HF_HOME/hub
 DL_LOG=$INFER/logs/downloaded_models.tsv
 KEEP_REPOS=${KEEP_REPOS-"Qwen/Qwen3-VL-8B-Thinking"}   # the selected model, used in all later experiments
-VARIANTS="FINAL.K0 FINAL.G0 FINAL.K1 FINAL.K2 FINAL.K3 FINAL.K4 FINAL.G1 FINAL.G2 FINAL.G3 FINAL.K3-n2 FINAL.K3-n3 FINAL.G1-n1 FINAL.K1-w1 FINAL.K1-w2"
+VARIANTS=${QUEUE_VARIANTS:-"FINAL.K0 FINAL.G0 FINAL.K1 FINAL.K2 FINAL.K3 FINAL.K4 FINAL.G1 FINAL.G2 FINAL.G3 FINAL.K3-n2 FINAL.K3-n3 FINAL.G1-n1 FINAL.K1-w1 FINAL.K1-w2"}
+ICL=${QUEUE_ICL:-zero_shot}                            # examples_v2: the prompt-v2 in-context examples
+SUFFIX=${QUEUE_SUFFIX:-}                               # run directory: <alias><suffix> (e.g. -icl)
 SEEDS=0-9
 JOBS=${QUEUE_JOBS:-6}
 FLAGS="--flag memory.enabled=true --flag replan.trigger_mode=if_rule --flag replan.output_mode=corrective --flag parallel.enabled=true"
-COMMON="--remote --remote-api openai --remote-url http://127.0.0.1:8000 --planner-max-new-tokens 24576 --icl-mode zero_shot"
+COMMON="--remote --remote-api openai --remote-url http://127.0.0.1:8000 --planner-max-new-tokens 24576 --icl-mode $ICL"
 export LLM_REQUEST_TIMEOUT_S=1800                      # per planner call (a timeout is infrastructure, rerun)
 PROFILES_PY="python3 $REPO/llm_pipeline/model_profiles.py"
 mkdir -p "$OUT" "$ARCHIVE" "$INFER/logs"
@@ -75,7 +77,7 @@ disk_free_gb() { mkdir -p "$HF_HOME"; df -BG --output=avail "$HF_HOME" | tail -1
 prefetch_next() { # download the next two aliases while this one runs, when there is room (~20 GB each + 30 GB margin)
   local after=$1 seen=0 n=0 a
   for a in "${ALIASES[@]}"; do
-    if [ "$seen" = 1 ] && [ ! -f "$OUT/$a/COMPLETE" ] && [ "$n" -lt 2 ]; then
+    if [ "$seen" = 1 ] && [ ! -f "$OUT/$a$SUFFIX/COMPLETE" ] && [ "$n" -lt 2 ]; then
       if [ "$(disk_free_gb)" -gt 50 ]; then (download "$a" >/dev/null 2>&1 &) ; log "prefetching $a"; fi
       n=$((n + 1))
     fi
@@ -85,14 +87,14 @@ prefetch_next() { # download the next two aliases while this one runs, when ther
 used_later() {    # does a later alias in the queue use this repo?
   local after=$1 repo=$2 seen=0 a
   for a in "${ALIASES[@]}"; do
-    [ "$seen" = 1 ] && [ "$(field "$a" repo)" = "$repo" ] && [ ! -f "$OUT/$a/COMPLETE" ] && return 0
+    [ "$seen" = 1 ] && [ "$(field "$a" repo)" = "$repo" ] && [ ! -f "$OUT/$a$SUFFIX/COMPLETE" ] && return 0
     [ "$a" = "$after" ] && seen=1
   done
   return 1
 }
 
 for alias in "${ALIASES[@]}"; do
-  run="$OUT/$alias"
+  run="$OUT/$alias$SUFFIX"
   if [ -f "$run/COMPLETE" ]; then log "$alias: already complete"; continue; fi
   mkdir -p "$run"
   repo=$(field "$alias" repo); mtype=$(field "$alias" model_type)
@@ -107,7 +109,7 @@ for alias in "${ALIASES[@]}"; do
   fi
   # Run manifest: the profile, what the server reports, the serve command, GPU, code.
   python3 - "$alias" "$run" "$REPO" "$INFER" <<'PY'
-import json, subprocess, sys, socket, datetime, urllib.request
+import json, os, subprocess, sys, socket, datetime, urllib.request
 alias, run, repo, infer = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 def sh(cmd):
     try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60).stdout.strip()
@@ -123,7 +125,8 @@ manifest = {
     'serve_command': sh(f'cat {infer}/logs/serve_command.txt'),
     'gpu': sh('nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader'),
     'git_commit': sh(f'git -C {repo} rev-parse HEAD'), 'git_status': sh(f'git -C {repo} status --short -uno'),
-    'run_settings': {'variants': 14, 'seeds': '0-9', 'jobs': None, 'max_new_tokens': 24576, 'icl': 'zero_shot',
+    'run_settings': {'variants': os.environ.get('QUEUE_VARIANTS', 'all 14').split(), 'seeds': '0-9', 'jobs': None,
+                     'max_new_tokens': 24576, 'icl': os.environ.get('QUEUE_ICL', 'zero_shot'),
                      'flags': 'memory on, IF rule, corrective, parallel on', 'max_model_len': 32768},
 }
 json.dump(manifest, open(f'{run}/manifest.json', 'w'), indent=1)
@@ -147,7 +150,7 @@ PY
   VISION=""; [ "$mtype" = vlm ] && VISION="--vision"
   log "$alias: running $VARIANTS x $SEEDS ($mtype)"
   nice -n 5 python -m llm_pipeline.run_trial_matrix --planner model --jobs "$JOBS" --timeout 14400 \
-    --variants $VARIANTS --seeds "$SEEDS" --out "$run" --title "$alias (zero-shot, full system)" -- \
+    --variants $VARIANTS --seeds "$SEEDS" --out "$run" --title "$alias$SUFFIX ($ICL, full system)" -- \
     --model "$alias" --model-type "$mtype" $VISION $COMMON $FLAGS > "$run/matrix.log" 2>&1
   curl -s --max-time 30 http://127.0.0.1:8000/metrics > "$run/vllm_metrics.prom"
   cp -L "$INFER/logs/vllm_latest.log" "$run/vllm_server.log" 2>/dev/null
@@ -159,7 +162,7 @@ PY
     log "$alias: INCOMPLETE: $(tail -1 "$run/run_report.out"); weights kept"
   fi
   # Archive the results before any deletion; delete only complete, archived, our own, unused-later weights.
-  if tar -czf "$ARCHIVE/$alias.tar.gz" -C "$OUT" "$alias" && [ -f "$run/COMPLETE" ]; then
+  if tar -czf "$ARCHIVE/$alias$SUFFIX.tar.gz" -C "$OUT" "$alias$SUFFIX" && [ -f "$run/COMPLETE" ]; then
     if echo " $KEEP_REPOS " | grep -q " $repo "; then log "$alias: $repo kept (selected model)";
     elif used_later "$alias" "$repo"; then log "$alias: $repo kept (used by a later profile)";
     elif grep -q "^$repo	.*downloaded_by_robust_tamp" "$DL_LOG" 2>/dev/null; then
