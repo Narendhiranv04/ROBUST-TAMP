@@ -47,6 +47,13 @@ ABLATIONS = [('Full system', V2 / 'table2' / 'qwen3-vl-8b-thinking'), ('−Memor
              ('−IF', V2 / 'ablations' / 'no_if'), ('−WHERE', V2 / 'ablations' / 'no_where'),
              ('Fixed front', V2 / 'ablations' / 'fixed_front'), ('Fixed end', V2 / 'ablations' / 'fixed_end'),
              ('−WHEN', V2 / 'ablations' / 'no_when'), ('LLM planner', V2 / 'table2' / 'qwen3-8b')]
+# Table 5 with the grill in-context examples: the examples reach only the grill prompt, so each row
+# takes its kitchen trials from the zero-shot run above and its grill trials from the ICL run.
+CORE_K = [v for v in CORE if '.K' in v]
+CORE_G = [v for v in CORE if '.G' in v]
+ABLATIONS_ICL = [(label, zs, V2 / 'icl' / 'qwen3-vl-8b-thinking' if label == 'Full system'
+                  else V2 / 'ablations_icl' / ('qwen3-8b-icl' if label == 'LLM planner' else zs.name))
+                 for label, zs in ABLATIONS]
 SCALE = [('4B', 'VLM', 'qwen3-vl-4b-thinking-fp8'), ('4B', 'LLM', 'qwen3-4b-fp8'), ('8B', 'VLM', 'qwen3-vl-8b-thinking-fp8'),
          ('8B', 'LLM', 'qwen3-8b-fp8'), ('32B', 'VLM', 'qwen3-vl-32b-thinking-fp8'), ('32B', 'LLM', 'qwen3-32b-fp8')]
 REQUERY = ('plan_check_requery', 'corrective_requery', 'repeated_output_requery')
@@ -110,13 +117,15 @@ def trial_metrics(path: Path, variant: str) -> dict | None:
             'tokens': [c.get('completion_tokens') for c in calls if c.get('completion_tokens') is not None]}
 
 
-def cell(run: Path, variants) -> dict:
+def cell(run: Path, variants, *more) -> dict:
+    """Metrics over the trials of ``variants`` in ``run`` (and of each further (run, variants) pair)."""
     trials = []
-    for v in variants:
-        for p in sorted((run / v).glob('seed_*/trial_log.jsonl')):
-            m = trial_metrics(p, v)
-            if m:
-                trials.append(m)
+    for r, vs in ((run, variants),) + more:
+        for v in vs:
+            for p in sorted((r / v).glob('seed_*/trial_log.jsonl')):
+                m = trial_metrics(p, v)
+                if m:
+                    trials.append(m)
     if not trials:
         return {'n': 0}
     mean = lambda xs: statistics.mean(xs) if xs else None  # noqa: E731
@@ -181,6 +190,16 @@ def main() -> int:
         vals = [pct(c.get('SR')), num(c.get('Calls')), num(c.get('Unn')), ins, num(c.get('Idle'), 0), num(c.get('Time'), 0)]
         md.append(f'| {label} | ' + ' | '.join(vals) + f" | {c.get('n', 0)}/70 |")
         tex.append(f'% {label}\n' + ' & '.join(vals))
+    md += ['', '# Table 5 with the grill ICL (kitchen trials: zero-shot runs above; grill G1-G3: icl_mode examples_v2)', '',
+           '| Condition | SR (%) | Calls | Unn. | Ins. (%) | Idle | Time (s) | SR grill (%) | trials |',
+           '|---|---|---|---|---|---|---|---|---|']
+    tex.append('% Table 5 with the grill ICL, value cells: SR & Calls & Unn. & Ins. & Idle & Time')
+    for label, zs, icl in ABLATIONS_ICL:
+        c, g = cell(zs, CORE_K, (icl, CORE_G)), cell(icl, CORE_G)
+        ins = '–' if label == '−WHERE' else pct(c.get('Ins'))
+        vals = [pct(c.get('SR')), num(c.get('Calls')), num(c.get('Unn')), ins, num(c.get('Idle'), 0), num(c.get('Time'), 0)]
+        md.append(f'| {label} | ' + ' | '.join(vals) + f" | {pct(g.get('SR'))} | {c.get('n', 0)}/70 |")
+        tex.append(f'% {label} (ICL)\n' + ' & '.join(vals))
     md += ['', '# Planner latency by scale (Qwen3 family, FP8, full system, zero-shot; all 14 variants)', '',
            '| Scale | Mod. | Model | Calls/trial | Plan. (s/trial) | Call latency mean | p50 | p90 | max (s) | Output tokens/call | SR | trials |',
            '|---|---|---|---|---|---|---|---|---|---|---|---|']
