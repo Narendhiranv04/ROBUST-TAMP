@@ -45,6 +45,7 @@ from baselines.owl_constraints import (GOAL_FEW_SHOT, HELPER_DOCS, Geometry, Rav
 from llm_pipeline.failures import TerminationReason
 
 SAMPLES_PER_OPERATOR = 500            # Sec. 6
+SAMPLES_PER_ATTEMPT = 50             # per operator within one joint attempt (then the plan is resampled)
 MAX_SKELETONS = 5                     # Sec. 6
 MAX_EXPANSIONS = 20000
 
@@ -272,8 +273,8 @@ class OWLTAMPPipeline(BaselinePipeline):
             robot_xy = (0.0, 0.0)
         return Geometry(boxes, poses, robot_xy)
 
-    def sample_pose(self, obj: str, region: str) -> Optional[RavenPose]:
-        """One sample from the scene's own placement sampler (collision-free footprint in the region)."""
+    def scene_sample(self, obj: str, region: str) -> Optional[list]:
+        """One pose from the scene's own placement sampler (its resting height and orientation)."""
         from llm_pipeline.object_aliases import scene_object_for_object
         from llm_pipeline.region_aliases import normalize_region_name
 
@@ -283,10 +284,76 @@ class OWLTAMPPipeline(BaselinePipeline):
             region = GRILL_SAMPLER_REGIONS.get(region, region)
         try:
             scene_obj = self.env.get_object(scene_object_for_object(obj, self.env))
-            return raven_pose(self.env.sample_stable_pose(scene_obj, region))
+            return [float(v) for v in self.env.sample_stable_pose(scene_obj, region)]
         except Exception as exc:
             self._baseline_trace.setdefault('sampler_errors', []).append(f'{obj}->{region}: {exc}')
             return None
+
+    @contextlib.contextmanager
+    def predicted_scene(self, where: Dict[str, Optional[str]], placed: Dict[str, list]):
+        """The scene as predicted at this point of the plan, for the scene's own sampler: objects the
+        plan has placed are at their sampled poses, objects in the hand are out of the way. Pure
+        kinematic writes (no physics step); every pose is restored on exit."""
+        from llm_pipeline.object_aliases import scene_object_for_object
+
+        saved = []
+        try:
+            for name, region in where.items():
+                if region is not None and name not in placed:
+                    continue
+                try:
+                    body = self.env.get_object(scene_object_for_object(name, self.env))
+                except Exception:
+                    body = None
+                if body is None:
+                    continue
+                original = list(body.get_pose())
+                target = list(placed[name]) if region is not None else original[:2] + [original[2] + 5.0] + original[3:]
+                saved.append((body, original))
+                body.set_pose(target, reset_dynamics=False)
+            yield
+        finally:
+            for body, original in reversed(saved):
+                body.set_pose(original, reset_dynamics=False)
+
+    def candidate_poses(self, obj: str, region: str, predicted: Geometry, occupants: Sequence[str],
+                        where: Dict[str, Optional[str]], placed: Dict[str, list], rng: random.Random,
+                        count: int) -> List[Tuple[list, bool]]:
+        """Up to ``count`` placement candidates (7-D pose, from the scene sampler?) on the predicted state.
+
+        First the scene's own placement sampler run on the predicted scene (its region-specific packing
+        and clearance rules); then positions on a grid over the region's box ordered by clearance from
+        the predicted occupants, then uniform ones, at the sampler's height and orientation.
+        """
+        out: List[Tuple[list, bool]] = []
+        with self.predicted_scene(where, placed):
+            for _ in range(min(10, count)):
+                pose = self.scene_sample(obj, region)
+                if pose is None:
+                    break
+                if not any(abs(pose[0] - q[0][0]) < 1e-4 and abs(pose[1] - q[0][1]) < 1e-4 for q in out):
+                    out.append((list(pose), True))
+        if not out:
+            return out
+        base = out[0][0]
+        box = predicted.boxes.get(region)
+        if box is not None:
+            (x0, y0, _), (x1, y1, _) = box
+            pad = 0.12 if region == 'inside_box' else 0.05
+            pad_x, pad_y = min(pad, (x1 - x0) / 3), min(pad, (y1 - y0) / 3)
+            lo_x, hi_x, lo_y, hi_y = x0 + pad_x, x1 - pad_x, y0 + pad_y, y1 - pad_y
+            centers = [((b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2) for b in
+                       (predicted.boxes[m] for m in occupants if m in predicted.boxes)]
+            n = 12
+            grid = [(lo_x + (hi_x - lo_x) * i / (n - 1), lo_y + (hi_y - lo_y) * j / (n - 1))
+                    for i in range(n) for j in range(n)]
+            grid.sort(key=lambda c: -min([((c[0] - q[0]) ** 2 + (c[1] - q[1]) ** 2) for q in centers] or [0.0]))
+            start = rng.randrange(0, 6) if len(out) else 0
+            for x, y in grid[start:]:
+                out.append(([x, y] + base[2:], False))
+            while len(out) < count:
+                out.append(([rng.uniform(lo_x, hi_x), rng.uniform(lo_y, hi_y)] + base[2:], False))
+        return out[:count]
 
     # -- prompts ---------------------------------------------------------------
     @staticmethod
@@ -303,31 +370,41 @@ class OWLTAMPPipeline(BaselinePipeline):
 
     # -- search-then-sample ------------------------------------------------------
     def sample_plan(self, plan, geo: Geometry, names, action_constraints: Dict[int, List[str]],
-                    goal_functions: List[str], trace: dict) -> Tuple[Optional[Dict[int, RavenPose]], Optional[int]]:
+                    goal_functions: List[str], trace: dict) -> Tuple[Optional[Dict[int, list]], Optional[int]]:
         """Poses for every place of ``plan`` satisfying the constraints, or the failed operator's index."""
         budgets = {i: SAMPLES_PER_OPERATOR for i, a in enumerate(plan) if a[0] == 'place'}
         goal_budget = SAMPLES_PER_OPERATOR
-        while goal_budget > 0:
+        rng = random.Random((self.config.seed or 0) + 7)
+        attempt = -1
+        while goal_budget > 0 and all(v > 0 for v in budgets.values()):
             goal_budget -= 1
+            attempt += 1
             predicted = Geometry(geo.boxes, dict(geo.poses), geo.robot_xy)
-            chosen: Dict[int, RavenPose] = {}
-            moved: set = set()
+            chosen: Dict[int, list] = {}
+            where = dict(self._initial_regions)          # predicted region of every object, in plan order
+            placed: Dict[str, list] = {}                 # 7-D poses the plan has placed objects at
             for i, action in enumerate(plan):
+                if action[0] == 'pick':
+                    where[action[1]] = None
                 if action[0] != 'place':
                     continue
                 obj, region = action[1], action[2]
                 accepted = pose = None
-                while budgets[i] > 0:
+                occupants = [m for m, r in where.items() if r == region and m != obj]
+                candidates = self.candidate_poses(obj, region, predicted, occupants, where, placed, rng,
+                                                  min(SAMPLES_PER_ATTEMPT, budgets[i]))
+                for pose7, from_scene_sampler in candidates:
                     budgets[i] -= 1
-                    pose = self.sample_pose(obj, region)
-                    if pose is None:
-                        continue
+                    pose = raven_pose(pose7)
                     box = predicted.box_at(obj, pose)
-                    # Engineered collision constraint on the predicted state: the scene sampler only
-                    # knows the current scene, not the objects this plan has already placed.
-                    # (placing onto the top surface of a moved object, e.g. the plate, is not a collision)
-                    if any(_xy_overlap(box, predicted.boxes[m]) for m in moved
-                           if m != obj and m in predicted.boxes and region not in CARRIED_REGIONS.get(m, ())):
+                    # Engineered collision constraint on the predicted state: the scene sampler's own
+                    # clearance rules for its candidates; for the others, no overlap with the objects
+                    # predicted to be in the region (placing onto the top surface of an object, e.g.
+                    # the plate, is not a collision).
+                    if not from_scene_sampler and any(
+                            _xy_overlap(box, predicted.boxes[m]) for m, r in where.items()
+                            if r == region and m != obj and m in predicted.boxes
+                            and region not in CARRIED_REGIONS.get(m, ())):
                         continue
                     predicted.poses[obj] = pose
                     predicted.boxes[obj] = box
@@ -346,22 +423,29 @@ class OWLTAMPPipeline(BaselinePipeline):
                                                                           'errors': errors[:3]})
                     if ok:
                         accepted = pose
+                        placed[obj] = pose7
                         break
+                if accepted is None and budgets[i] > 0:
+                    break                        # this attempt failed; resample the plan jointly
                 if accepted is None:
                     trace.setdefault('exhausted', []).append({
                         'operator': action_text(action), 'last_sample': list(pose) if pose else None,
                         'object_box': predicted.boxes.get(obj), 'region_box': predicted.boxes.get(region),
                         'predicted_poses': {k: list(v) for k, v in predicted.poses.items() if k in (obj, 'plate')}})
                     return None, i
-                chosen[i] = accepted
-                moved.add(obj)
-            ok, errors = evaluate(goal_functions, predicted, names)
-            if errors:
-                trace.setdefault('constraint_errors', []).append({'operator': 'achieve_goal', 'errors': errors[:3]})
-            if ok:
-                return chosen, None
-            if not budgets:
-                break                          # nothing to resample: the goal constraints fail on this plan
+                chosen[i] = placed[obj]
+                where[obj] = region
+            else:
+                ok, errors = evaluate(goal_functions, predicted, names)
+                if errors:
+                    trace.setdefault('constraint_errors', []).append({'operator': 'achieve_goal', 'errors': errors[:3]})
+                if ok:
+                    return chosen, None
+                if not budgets:
+                    break                          # nothing to resample: the goal constraints fail on this plan
+        exhausted = next((i for i, v in budgets.items() if v <= 0), None)
+        if exhausted is not None:
+            return None, exhausted
         return None, len(plan)                 # achieve_goal failed
 
     @staticmethod
@@ -408,6 +492,7 @@ class OWLTAMPPipeline(BaselinePipeline):
             return 'no plan sketch in the model answer'
 
         geo = self.geometry(obs)
+        self._initial_regions = dict(obs.objects)
         names = sorted(set(obs.objects) | set(obs.regions) | set(obs.lids))
         poses_text = self.object_poses_text(geo, names)
         goal_functions: List[str] = []
@@ -469,21 +554,16 @@ class OWLTAMPPipeline(BaselinePipeline):
         return None if outcome.success else f'open-loop execution failed: {outcome.error_message}'
 
     @contextlib.contextmanager
-    def forced_placements(self, plan, poses: Dict[int, RavenPose]):
+    def forced_placements(self, plan, poses: Dict[int, list]):
         """While executing, the k-th placement of an (object, region) uses OWL-TAMP's sampled pose first."""
         from llm_pipeline.object_aliases import scene_object_for_object
         from llm_pipeline.region_aliases import normalize_region_name
 
         env = self.env
         queue: Dict[Tuple[str, str], List[list]] = {}
-        for i, pose in sorted(poses.items()):
+        for i, pose7 in sorted(poses.items()):
             obj, region = plan[i][1], normalize_region_name(plan[i][2])
-            try:
-                scene = scene_object_for_object(obj, env)
-                quat = env.get_object(scene).get_quaternion()
-            except Exception:
-                continue
-            queue.setdefault((scene, region), []).append([pose.x, pose.y, pose.z, *quat])
+            queue.setdefault((scene_object_for_object(obj, env), region), []).append(list(pose7))
         original_sample = getattr(env, 'sample_stable_pose', None)
         original_best = getattr(env, 'find_best_placement', None)
         forced_log = self._baseline_trace.setdefault('forced_placements', [])
