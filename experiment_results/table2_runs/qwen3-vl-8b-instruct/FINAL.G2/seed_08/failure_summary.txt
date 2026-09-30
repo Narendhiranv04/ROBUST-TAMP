@@ -1,0 +1,26 @@
+variant: FINAL.G2
+task_family: grill
+model: qwen3-vl-8b-instruct
+quantization: none
+icl_mode: zero_shot
+trial_index: 9
+status: failed
+episode_success: False
+raw_episode_success: False
+total_cycles: 11
+total_replans: 10
+completed_gt_subtasks: 3/8
+completed_actions: 6
+remaining_actions: 0
+last_completed_action: close(grill_lid)
+
+failure:
+failure_id: invalid_corrective_block
+failure_layer: layer_1
+failure_stage: before_execution
+failure_source: validation
+failure_action: None
+failure_should_replan: True
+failure_message: Corrective blocks rejected (invalid_corrective_block): block 2 handles raw_meat_2, which is not a listed object
+failure_reason: Corrective blocks rejected (invalid_corrective_block): block 2 handles raw_meat_2, which is not a listed object
+failure_evidence: {"corrective_rejection": true, "fact": "block 2 handles raw_meat_2, which is not a listed object", "raw_output": "The goal is to cook all raw meat and serve all cooked meat on the plate in the serving area. The current state shows that cooked_meat_1 is already in the serving_area, which satisfies part of the goal. However, the remaining plan attempts to pick(raw_meat_2) while inside_grill is closed (due to grill_lid being closed), which is invalid because raw_meat_2 is inside_grill and cannot be accessed without opening the lid.\n\nSince the previous plan was rejected due to attempting to pick an object from a closed-off region, we must ensure any action involving objects inside the grill only occurs after the grill lid is open. Additionally, cooked_meat_1 is already in the serving_area, so no further action is needed for it.\n\nWe need to create a block to handle cooked_meat_1, which is already in its goal state, and another block to address the issue of accessing raw_meat_2. Since raw_meat_2 is inside the grill and the lid is closed, we must open the lid before picking it up. This should be done as early as possible in the remaining plan to avoid blocking subsequent actions.\n\nTherefore, we will create two blocks:\n1. One for cooked_meat_1, which requires no action since it's already in the serving_area.\n2. One for raw_meat_2, which requires opening the grill lid first, then picking and placing it inside the grill (as per the original plan).\n\nThe urgency for the raw_meat_2 block is urgent because if we delay opening the lid, we cannot access raw_meat_2, making it impossible to complete the cooking task. We insert this block at the front of the remaining plan to ensure the lid is open before any attempt to pick raw_meat_2.\n\nFINAL BLOCKS:\nBLOCK\nobjects: cooked_meat_1\nurgency: deferred\ninsert: end\nreason: cooked_meat_1 is already in the serving_area and does not require any action.\nactions:\nNO_ACTIONS\nEND BLOCK\nBLOCK\nobjects: raw_meat_2\nurgency: urgent\ninsert: front\nreason: raw_meat_2 is inside the grill, which is closed; the lid must be opened before it can be picked.\nactions:\nopen(grill_lid)\npick(raw_meat_2)\nplace(raw_meat_2, inside_grill)\nEND BLOCK"}
