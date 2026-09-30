@@ -514,6 +514,9 @@ class OWLTAMPPipeline(BaselinePipeline):
                         half, height = extents[2] / 2, extents[0]
                         predicted.boxes[carried] = ((pose.x - half, pose.y - half, pose.z - 0.02),
                                                     (pose.x + half, pose.y + half, pose.z + height + 0.05))
+                        # the plate itself lies flat too (constraints may refer to the object, not its top)
+                        predicted.boxes[obj] = ((pose.x - half, pose.y - half, pose.z - 0.01),
+                                                (pose.x + half, pose.y + half, pose.z + height))
                     ok, errors = evaluate(action_constraints.get(i, []), predicted, names)
                     if errors:
                         trace.setdefault('constraint_errors', []).append({'operator': action_text(action),

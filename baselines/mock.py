@@ -111,6 +111,8 @@ def owl_tamp_responder(pipeline):
             lines = [f"{o[0]}({', '.join(o[1:])}); {o[0]} as in the reference sequence"
                      for s in steps for o in map(owl_op, s)]
             lines = [l.replace('place_inside(', 'place_ontop(', 1) if 'inside_grill' in l else l for l in lines]
+            # as the model writes it: the plate object as the support, not its top region
+            lines = [l.replace(', plate_top)', ', plate)') for l in lines]
             placed = sorted({a[1] for s in steps for a in s if a[0] == 'place'})
             return ('The scene and task are as described.\nThe relevant objects are listed in the plan.\n'
                     'No particular obstacles.\nPlan:\n' + '\n'.join(lines) +
@@ -121,6 +123,11 @@ def owl_tamp_responder(pipeline):
         prompt = turns[-1][1]
         line = prompt.split('right after the robot executes the operator\n', 1)[-1].splitlines()[0]
         op = parse_action_text(line.split(';', 1)[0])
+        if op and op[0] == 'place_ontop' and op[2] == 'plate':      # on top of the plate object, as the model wrote
+            return ('```python\ndef goal_check0() -> bool:\n'
+                    f'    bounds = modify_pose_bounds_to_be_ontop_of_object(init_state, env, init_bounds, {op[1]}.category, '
+                    'plate.category)\n'
+                    f'    return position_within_bounds({op[1]}.pose, bounds)\n```')
         if not op or op[0] not in ('place_ontop', 'place_inside'):
             return '```python\ndef goal_check0() -> bool:\n    return True\n```'
         # as the model does: the placed object's check, plus copied final-state checks of other objects
