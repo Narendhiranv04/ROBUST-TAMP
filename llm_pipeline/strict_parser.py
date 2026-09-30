@@ -30,13 +30,36 @@ class StrictParseError(ValueError):
         return f'Line {self.line_number}: {self.message}'
 
 
+def has_content(segment: str) -> bool:
+    """Whether a section after a final marker has anything besides blank lines and code fences."""
+    return any(line.strip() and not line.strip().startswith('```') for line in (segment or '').splitlines())
+
+
+def last_answer_section(text: str, spans) -> Optional[tuple]:
+    """(start, end, answer) of the answer after the last final marker that has content.
+
+    ``spans`` are the markers' (start, end) positions in order. The answer is the section after a
+    marker up to the next marker. A marker the model repeats at the very end with nothing after it
+    (seen after in-context examples whose answers end with an extra line) is ignored; when no
+    marker has content, the last one is used (an empty answer, as before)."""
+    if not spans:
+        return None
+    bounds = [(spans[k][0], spans[k][1], spans[k + 1][0] if k + 1 < len(spans) else len(text)) for k in range(len(spans))]
+    for start, end, stop in reversed(bounds):
+        if has_content(text[end:stop]):
+            return start, end, text[end:stop]
+    start, end, stop = bounds[-1]
+    return start, end, text[end:stop]
+
+
 def split_reasoning(text: Optional[str]) -> tuple:
-    """Split planner output into (reasoning, answer) at the last FINAL ACTIONS: line."""
+    """Split planner output into (reasoning, answer) at the last FINAL ACTIONS: line with an answer."""
     text = text or ''
-    markers = list(FINAL_ACTIONS_MARKER.finditer(text))
-    if not markers:
+    found = last_answer_section(text, [(m.start(), m.end()) for m in FINAL_ACTIONS_MARKER.finditer(text)])
+    if found is None:
         return text.strip(), ''
-    return text[:markers[-1].start()].strip(), text[markers[-1].end():].strip()
+    start, _, answer = found
+    return text[:start].strip(), answer.strip()
 
 
 class StrictActionParser:
@@ -95,9 +118,10 @@ class StrictActionParser:
         text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
         # Also catch any lingering <think> blocks if there are multiple or if the regex missed
         text = re.sub(r'<think>.*?(</think>|$)', '', text, flags=re.DOTALL | re.IGNORECASE)
-        final_markers = list(FINAL_ACTIONS_MARKER.finditer(text))
+        final_markers = [(m.start(), m.end()) for m in FINAL_ACTIONS_MARKER.finditer(text)]
         if final_markers:
-            text = text[final_markers[-1].end():]
+            # the actions after the last marker that has any (a repeated empty marker at the end is ignored)
+            text = last_answer_section(text, final_markers)[2]
         elif self.require_final_marker:
             raise StrictParseError(
                 'Planner output has no FINAL ACTIONS: line',

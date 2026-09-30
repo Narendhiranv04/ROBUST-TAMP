@@ -129,11 +129,17 @@ def parse_blocks(
 
     ``validate_action`` raises for an action with an unknown action, object or region.
     """
+    from llm_pipeline.strict_parser import last_answer_section
+
     text = raw_output or ''
-    marker = text.rfind(FINAL_BLOCKS_MARKER)
-    if marker < 0:
+    spans, pos = [], text.find(FINAL_BLOCKS_MARKER)
+    while pos >= 0:
+        spans.append((pos, pos + len(FINAL_BLOCKS_MARKER)))
+        pos = text.find(FINAL_BLOCKS_MARKER, pos + 1)
+    if not spans:
         raise CorrectivePlanError(FailureCode.INVALID_CORRECTIVE_BLOCK, f'the output has no {FINAL_BLOCKS_MARKER} line')
-    lines = [line.strip() for line in text[marker + len(FINAL_BLOCKS_MARKER):].splitlines()]
+    # the blocks after the last marker that has content (a repeated empty marker at the end is ignored)
+    lines = [line.strip() for line in last_answer_section(text, spans)[2].splitlines()]
     lines = [line for line in lines if line and not line.startswith('```')]
     if [line.upper() for line in lines] == [NO_ACTIONS]:
         # No listed object needs any action.

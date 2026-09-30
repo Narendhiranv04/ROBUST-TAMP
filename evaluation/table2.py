@@ -234,13 +234,15 @@ def _figures(out: Path, summary, runs) -> None:
     # Figure 4: per scale, planner time vs success; colour = failure-triggered replans.
     scales = ['4B', '8B', '32B']
     points = [(scale, mod, prompt, summary(alias)) for scale, mod, prompt, alias in TABLE2A]
+    # (merged ICL rows carry no replan count: they are drawn grey)
     points = [p for p in points if p[3]]
     if points:
-        vmax = max(p[3]['failure_replans'] for p in points) or 1
+        vmax = max(p[3].get('failure_replans') or 0 for p in points) or 1
         fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), sharey=True)
         for ax, scale in zip(axes, scales):
             for _, mod, prompt, s in [p for p in points if p[0] == scale]:
-                sc = ax.scatter(s['Plan_s'], 100 * s['SR'], c=[s['failure_replans']], cmap='Reds', vmin=0, vmax=vmax,
+                sc = ax.scatter(s['Plan_s'], 100 * s['SR'], c=[s['failure_replans']] if s.get('failure_replans') is not None else 'lightgrey',
+                                cmap='Reds' if s.get('failure_replans') is not None else None, vmin=0, vmax=vmax,
                                 marker='o' if mod == 'LLM' else '^', s=140, edgecolors='k', linewidths=0.6)
                 ax.annotate(prompt, (s['Plan_s'], 100 * s['SR']), textcoords='offset points', xytext=(7, 5), fontsize=8)
             ax.set_title(scale)
