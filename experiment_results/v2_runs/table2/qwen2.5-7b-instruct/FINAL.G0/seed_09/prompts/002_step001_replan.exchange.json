@@ -1,0 +1,68 @@
+{
+ "http_elapsed_s": 0.6266,
+ "image_sha256": null,
+ "profile_alias": "qwen2.5-7b-instruct",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\nclose(l): close lid l.\n  Preconditions: the gripper is empty; l is open.\n  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.",
+    "role": "system"
+   },
+   {
+    "content": "## Goal\nCOOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.\n\n## Current state\nVisible objects and the region each one is in:\n- plate: dish_rack\n- raw_meat_1: grill_side_area\nRemembered objects (not currently visible): last region, steps since last seen:\n- (none)\nLids:\n- grill_lid: closed (closes off inside_grill)\nGripper: empty\nRegions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack\n\n## Completed actions\n- (none)\n\n## Remaining plan (not executed yet)\n- (none)\n\n## Why a new plan is requested\n- The previous planner output was rejected before execution (failure code unknown_action_token). Line 6 (place(raw_meat_1, plate)) uses region 'plate', which is not a listed region.",
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "qwen2.5-7b-instruct",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.05,
+  "temperature": 0.7,
+  "top_k": 20,
+  "top_p": 0.8
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "FINAL ACTIONS:\npick(raw_meat_1)\nplace(raw_meat_1, grill_side_area)\nopen(grill_lid)\nplace(raw_meat_1, inside_grill)\nclose(grill_lid)\npick(raw_meat_1)\nplace(raw_meat_1, plate)",
+     "function_call": null,
+     "reasoning": null,
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790641200,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-b645b98c63c78cc6",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "qwen2.5-7b-instruct",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-07f602f7",
+  "usage": {
+   "completion_tokens": 61,
+   "completion_tokens_details": null,
+   "prompt_tokens": 526,
+   "prompt_tokens_details": null,
+   "total_tokens": 587
+  }
+ },
+ "served_model": "qwen2.5-7b-instruct",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "b9d54a7f822ef77c"
+}
