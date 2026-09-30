@@ -164,9 +164,10 @@ These goal check functions must hold in the final state:
 Write Python functions named goal_check0, goal_check1, ... (each taking no arguments and returning a
 bool) that must be true right after the robot executes the operator
 {operator}; {description}
-They constrain where the placed object ends up. Every object and region above is available as a
-variable of the same name with `.pose` and `.category`; `init_state`, `env` and `init_bounds` are
-available to pass to the helper functions.
+They constrain only where {placed} ends up when this operator places it: at this point of the plan the
+other objects need not be in their final state yet, so do not include checks about them. Every
+object and region above is available as a variable of the same name with `.pose` and `.category`;
+`init_state`, `env` and `init_bounds` are available to pass to the helper functions.
 
 You also have access to helper functions whose signatures and docstrings are shown below:
 {helper_functions}
@@ -179,6 +180,16 @@ Output each function in its own ```python code block."""
 # regions that are the top surface of a movable object (region_aliases.CANONICAL_REGION_SCENE_OBJECTS).
 GRILL_SAMPLER_REGIONS = {'inside_grill': 'grill-top', 'plate_top': 'plate-top', 'serving_area': 'plate_boundary'}
 CARRIED_REGIONS = {'plate': ('plate_top',)}
+
+
+def mentions(source: str, name: str) -> bool:
+    """Whether a constraint function's code refers to the variable ``name``."""
+    import ast
+
+    try:
+        return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(ast.parse(source)))
+    except SyntaxError:
+        return False
 
 
 def _xy_overlap(a, b, margin: float = 0.01) -> bool:
@@ -227,10 +238,9 @@ class OWLDomain(SymbolicDomain):
         if support == obj:
             return None
         if support in self.regions:
-            is_space = support in self.spaces
-            if kind == 'place_inside':
-                return support if is_space else None
-            return support if (not is_space or 'cupboard' in support) else None
+            # Our regions are placement areas: on the grill's grate and inside the grill are the same
+            # region, so both detach operators are feasible for any region.
+            return support
         if kind == 'place_ontop':
             return surface_region_of(support, self.obs)
         return None
@@ -597,11 +607,16 @@ class OWLTAMPPipeline(BaselinePipeline):
             reply = chat.complete([('user', ACTION_CONSTRAINT_PROMPT.format(
                 task_str=goal_text, object_poses=poses_text, plan=plan_text,
                 goal_functions='\n\n'.join(goal_functions) or '(none)', operator=action_text(op),
-                description=description, helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
+                description=description, placed=op[1], helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
                 image=obs.image, purpose='owl_tamp_action_constraints')
             functions, bad = extract_functions(reply['content'])
-            sketch_constraints[op] = functions
-            trace.setdefault('action_functions', {})[action_text(op)] = {'functions': functions, 'rejected': bad}
+            # An operator's constraint restricts that operator's continuous parameter (the placed
+            # object's pose, Sec. 5.2): a function that never refers to the placed object does not
+            # constrain it (e.g. a copied goal check about another object) and is not applied here.
+            used = [f for f in functions if mentions(f, op[1])]
+            sketch_constraints[op] = used
+            trace.setdefault('action_functions', {})[action_text(op)] = {
+                'functions': used, 'not_about_placed_object': [f for f in functions if f not in used], 'rejected': bad}
 
         rng = random.Random(self.config.seed or 0)
         skeletons = []

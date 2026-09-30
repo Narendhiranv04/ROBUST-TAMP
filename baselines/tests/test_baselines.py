@@ -42,7 +42,9 @@ def test_owl_domain_supports_and_sketch_search():
     obs = kitchen_obs()
     domain = OWLDomain(obs)
     assert domain.target(('place_inside', 'mug1', 'inside_box')) == 'inside_box'
-    assert domain.target(('place_inside', 'mug1', 'table')) is None
+    assert domain.target(('place_inside', 'mug1', 'table')) == 'table'      # regions are placement areas
+    assert domain.target(('place_ontop', 'mug1', 'inside_box')) == 'inside_box'
+    assert domain.target(('place_inside', 'mug1', 'box_lid')) is None      # objects: only their top surface
     assert domain.target(('place_ontop', 'mug1', 'box_lid')) == 'box_lid_top'
     assert ('pick', 'table') in domain.ground_actions()        # relaxed grounding over every entity
     text = ("The mug goes in the box.\nPlan:\nopen(box_lid); open it\npick(mug1); grasp\n"
@@ -69,3 +71,11 @@ def test_owl_constraints_sandbox():
     geo.poses['mug1'] = RavenPose(0.9, 0.9, 0.8, 0, 0, 0)
     assert not evaluate(functions, geo, ['mug1', 'inside_box'])[0]
     assert not evaluate(['def goal_check0() -> bool:\n    return undefined_name > 0'], geo, ['mug1'])[0]
+
+
+def test_owl_constraint_scope():
+    from baselines.owl_tamp import mentions
+
+    own = "def goal_check0() -> bool:\n    return position_within_bounds(mug1.pose, b)"
+    other = "def goal_check1() -> bool:\n    return spam.pose.z > 1.0"
+    assert mentions(own, 'mug1') and not mentions(other, 'mug1') and mentions(other, 'spam')
