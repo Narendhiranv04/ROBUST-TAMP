@@ -1,0 +1,71 @@
+=== SYSTEM PROMPT ===
+You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.
+
+Actions available in this scene:
+pick(o): grasp object o.
+  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.
+  Effects: the gripper holds o.
+place(o, r): put the held object o into region r.
+  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.
+  Effects: o is in r; the gripper is empty.
+open(l): open lid l.
+  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.
+  Effects: l is open; the regions l closes off become reachable and their contents can become visible.
+close(l): close lid l.
+  Preconditions: the gripper is empty; l is open.
+  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.
+
+Output format for this request:
+Reasoning is allowed. End your answer with a line containing only FINAL BLOCKS: followed by one or more blocks. Each block handles some of the objects listed under "Why a new plan is requested" and has exactly this form:
+BLOCK
+objects: <names of the listed objects this block handles, comma-separated>
+urgency: urgent or deferred
+insert: front, or after <action id from the remaining plan>, or end
+reason: <one short sentence>
+actions:
+<one action per line, in execution order>
+END BLOCK
+Every listed object must be handled by at least one block. An urgent block must use insert: front. The actions of a block must end with the gripper empty. If a listed object needs no action, handle it with a block whose actions section is the single line NO_ACTIONS; such a block needs no urgency or insert line. If no listed object needs any action, write NO_ACTIONS as the only line after FINAL BLOCKS:. Write nothing after the last END BLOCK.
+
+=== USER PROMPT ===
+## Goal
+COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+
+## Current state
+Visible objects and the region each one is in:
+- plate: dish_rack
+- raw_meat_1: dish_rack
+Remembered objects (not currently visible): last region, steps since last seen:
+- (none)
+Lids:
+- grill_lid: open (closes off inside_grill)
+Gripper: empty
+Regions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack
+
+## Completed actions
+- a1: open(grill_lid)
+- a2: pick(raw_meat_1)
+- a3: place(raw_meat_1, inside_grill)
+- a4: pick(raw_meat_1)
+- a5: place(raw_meat_1, dish_rack)
+- a6: pick(raw_meat_1)
+- a7: place(raw_meat_1, inside_grill)
+- a8: pick(raw_meat_1)
+- a9: place(raw_meat_1, plate_top)
+- a10: pick(raw_meat_1)
+- a11: place(raw_meat_1, inside_grill)
+- a12: pick(raw_meat_1)
+- a13: place(raw_meat_1, dish_rack)
+
+## Remaining plan (not executed yet)
+- (none)
+
+## Why a new plan is requested
+- After place(raw_meat_1, dish_rack), these observed objects are not handled by the remaining plan:
+  - raw_meat_1 (in dish_rack): relevant to the goal, not in its goal state; does not lie where the remaining plan places objects
+- Your previous blocks were rejected (failure code invalid_corrective_block): END BLOCK without BLOCK
+
+## What to plan
+- Plan actions only for the objects listed under "Why a new plan is requested". The remaining plan stays as it is: do not repeat, reorder or remove its actions.
+- Do not move objects that are already in their goal state, and do not move objects that are not relevant to the goal unless they are listed.
+- Decide each block's urgency and where it goes in the remaining plan by considering what would go wrong if its actions were delayed.
