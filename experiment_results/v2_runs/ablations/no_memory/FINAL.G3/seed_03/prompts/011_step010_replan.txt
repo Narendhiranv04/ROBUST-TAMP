@@ -1,0 +1,59 @@
+=== SYSTEM PROMPT ===
+You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.
+
+Actions available in this scene:
+pick(o): grasp object o.
+  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.
+  Effects: the gripper holds o.
+place(o, r): put the held object o into region r.
+  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.
+  Effects: o is in r; the gripper is empty.
+open(l): open lid l.
+  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.
+  Effects: l is open; the regions l closes off become reachable and their contents can become visible.
+close(l): close lid l.
+  Preconditions: the gripper is empty; l is open.
+  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.
+
+Output format:
+Reasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:
+FINAL ACTIONS:
+pick(o)
+place(o, r)
+Use only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.
+
+=== USER PROMPT ===
+## Goal
+COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+
+## Current state
+Visible objects and the region each one is in:
+- plate: serving_area
+- raw_meat_1: plate_top
+- raw_meat_2: inside_grill
+- raw_meat_3: inside_grill
+Lids:
+- grill_lid: open (closes off inside_grill)
+Gripper: empty
+Regions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack
+
+## Completed actions
+- a1: open(grill_lid)
+- a2: pick(raw_meat_1)
+- a3: place(raw_meat_1, inside_grill)
+- a8: pick(plate)
+- a9: place(plate, serving_area)
+- a12: pick(raw_meat_2)
+- a16: pick(raw_meat_2)
+- a17: place(raw_meat_2, inside_grill)
+- a18: pick(raw_meat_1)
+
+## Remaining plan (not executed yet)
+- a19: place(raw_meat_1, serving_area)
+- a20: pick(raw_meat_3)
+- a21: place(raw_meat_3, serving_area)
+- a22: pick(raw_meat_2)
+- a23: place(raw_meat_2, serving_area)
+
+## Why a new plan is requested
+- The previous planner output was rejected before execution (failure code orphan_place). Line 1 (place(raw_meat_1, plate_top)) places 'raw_meat_1' while the gripper is empty.

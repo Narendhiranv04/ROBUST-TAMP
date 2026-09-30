@@ -1,0 +1,26 @@
+variant: FINAL.G1
+task_family: grill
+model: qwen3-vl-8b-thinking
+quantization: none
+icl_mode: zero_shot
+trial_index: 10
+status: passed
+episode_success: True
+raw_episode_success: True
+total_cycles: 4
+total_replans: 3
+completed_gt_subtasks: 7/8
+completed_actions: 13
+remaining_actions: 0
+last_completed_action: place(plate, serving_area)
+
+failure:
+failure_id: invalid_corrective_block
+failure_layer: layer_1
+failure_stage: before_execution
+failure_source: validation
+failure_action: None
+failure_should_replan: True
+failure_message: Corrective blocks rejected (invalid_corrective_block): block 1 is urgent but not inserted at the front
+failure_reason: None
+failure_evidence: {"corrective_rejection": true, "fact": "block 1 is urgent but not inserted at the front", "raw_output": "\n\nReasoning for the new plan: The goal requires serving all cooked meat on the plate in the serving area. The remaining plan (a4 to a11) does not include actions to serve cooked_meat_1 and cooked_meat_2, which are currently in inside_grill but not in their goal state. Since the plate is placed in serving_area by a9 (which must happen before serving meat), and the grill lid is open (from a5), the cooked meats can be picked and placed on plate_top. Serving them is urgent to complete the goal, as delaying could leave cooked meat unattended. The block inserts after a9 to ensure the plate is ready, and actions end with the gripper empty after each place operation.\n\nFINAL BLOCKS:\nBLOCK\nobjects: cooked_meat_1, cooked_meat_2\nurgency: urgent\ninsert: after a9\nreason: serve cooked meats on the plate\nactions:\npick(cooked_meat_1)\nplace(cooked_meat_1, plate_top)\npick(cooked_meat_2)\nplace(cooked_meat_2, plate_top)\nEND BLOCK"}

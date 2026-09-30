@@ -1,0 +1,60 @@
+=== SYSTEM PROMPT ===
+You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.
+
+Actions available in this scene:
+pick(o): grasp object o.
+  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.
+  Effects: the gripper holds o.
+place(o, r): put the held object o into region r.
+  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.
+  Effects: o is in r; the gripper is empty.
+open(l): open lid l.
+  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.
+  Effects: l is open; the regions l closes off become reachable and their contents can become visible.
+
+Output format:
+Reasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:
+FINAL ACTIONS:
+pick(o)
+place(o, r)
+Use only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.
+
+=== USER PROMPT ===
+## Goal
+move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+
+## Current state
+Visible objects and the region each one is in:
+- mug1: inside_box
+- mug2: table_right_area
+- mug3: cupboard_shelf
+- spam: table_right_area
+- sugar: table_right_area
+- phone: inside_box
+Remembered objects (not currently visible): last region, steps since last seen:
+- (none)
+Lids:
+- box_lid: open (closes off inside_box; top surface: box_lid_top)
+Gripper: empty
+Regions: table, table_center_area, cupboard_shelf, inside_box, table_right_area, box_lid_top
+
+## Completed actions
+- a1: pick(mug2)
+- a2: place(mug2, table_right_area)
+- a3: open(box_lid)
+- a14: pick(mug1)
+- a15: place(mug1, inside_box)
+
+## Remaining plan (not executed yet)
+- a16: pick(mug3)
+- a17: place(mug3, inside_box)
+- a18: pick(mug2)
+- a19: place(mug2, inside_box)
+- a20: pick(spam)
+- a21: place(spam, cupboard_shelf)
+- a22: pick(sugar)
+- a23: place(sugar, cupboard_shelf)
+
+## Why a new plan is requested
+- After place(mug1, inside_box), these observed objects are not handled by the remaining plan:
+  - phone (in inside_box): not relevant to the goal; lies where the remaining plan places objects into inside_box
