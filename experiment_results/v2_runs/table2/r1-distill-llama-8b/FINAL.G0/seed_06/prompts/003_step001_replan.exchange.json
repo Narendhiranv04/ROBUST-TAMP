@@ -1,0 +1,66 @@
+{
+ "http_elapsed_s": 5.3227,
+ "image_sha256": null,
+ "profile_alias": "r1-distill-llama-8b",
+ "request": {
+  "max_tokens": 24576,
+  "messages": [
+   {
+    "content": "You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.\n\nActions available in this scene:\npick(o): grasp object o.\n  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.\n  Effects: the gripper holds o.\nplace(o, r): put the held object o into region r.\n  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.\n  Effects: o is in r; the gripper is empty.\nopen(l): open lid l.\n  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.\n  Effects: l is open; the regions l closes off become reachable and their contents can become visible.\nclose(l): close lid l.\n  Preconditions: the gripper is empty; l is open.\n  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.\n\nOutput format:\nReasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:\nFINAL ACTIONS:\npick(o)\nplace(o, r)\nUse only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.\n\n## Goal\nCOOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.\n\n## Current state\nVisible objects and the region each one is in:\n- plate: dish_rack\n- raw_meat_1: grill_side_area\nRemembered objects (not currently visible): last region, steps since last seen:\n- (none)\nLids:\n- grill_lid: closed (closes off inside_grill)\nGripper: empty\nRegions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack\n\n## Completed actions\n- (none)\n\n## Remaining plan (not executed yet)\n- (none)\n\n## Why a new plan is requested\n- The previous planner output was rejected before execution (failure code planner_output_not_parseable). The output has no line containing only FINAL ACTIONS:.",
+    "role": "user"
+   }
+  ],
+  "min_p": 0.0,
+  "model": "r1-distill-llama-8b",
+  "presence_penalty": 0.0,
+  "repetition_penalty": 1.0,
+  "temperature": 0.6,
+  "top_k": -1,
+  "top_p": 0.95
+ },
+ "response": {
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "annotations": null,
+     "audio": null,
+     "content": "\u010a\u010aFINALACTIONS:\u0120\u0120\u010apick(o)\u0120\u0120\u010aplace(o,\u0120grill_side_area)\u0120\u0120\u010aopen(grill_lid)\u0120\u0120\u010aplace(o,\u0120plate_top)\u0120\u0120\u010aserve(o,\u0120serving_area)\u0120\u0120\u010a\u010aFINALACTIONS:",
+     "function_call": null,
+     "reasoning": "\u010aAlright,\u0120I'm\u0120trying\u0120to\u0120figure\u0120out\u0120what\u0120actions\u0120the\u0120robot\u0120arm\u0120should\u0120take\u0120to\u0120achieve\u0120the\u0120goal.\u0120The\u0120goal\u0120is\u0120to\u0120cook\u0120all\u0120the\u0120raw\u0120meat\u0120using\u0120the\u0120grill\u0120and\u0120then\u0120serve\u0120the\u0120cooked\u0120meat\u0120onto\u0120the\u0120plate\u0120in\u0120the\u0120serving\u0120area.\u0120\u010a\u010aFirst,\u0120I\u0120look\u0120at\u0120the\u0120current\u0120state.\u0120There's\u0120a\u0120plate\u0120on\u0120the\u0120dish\u0120rack,\u0120a\u0120raw\u0120meat\u0120object\u0120over\u0120the\u0120grill\u0120side\u0120area,\u0120and\u0120the\u0120grill\u0120lid\u0120is\u0120closed.\u0120The\u0120regions\u0120available\u0120are\u0120table,\u0120grill\u0120side\u0120area,\u0120inside\u0120grill,\u0120plate\u0120top,\u0120serving\u0120area,\u0120and\u0120dish\u0120rack.\u0120The\u0120gripper\u0120is\u0120empty,\u0120so\u0120it\u0120can\u0120pick\u0120up\u0120an\u0120object.\u010a\u010aI\u0120need\u0120to\u0120start\u0120by\u0120picking\u0120up\u0120the\u0120raw\u0120meat.\u0120Since\u0120the\u0120gripper\u0120is\u0120empty,\u0120the\u0120first\u0120action\u0120should\u0120be\u0120pick(o),\u0120where\u0120o\u0120is\u0120the\u0120raw\u0120meat\u0120object.\u0120That\u0120makes\u0120sense\u0120because\u0120you\u0120can't\u0120do\u0120anything\u0120else\u0120without\u0120holding\u0120the\u0120meat.\u010a\u010aOnce\u0120the\u0120meat\u0120is\u0120picked\u0120up,\u0120the\u0120next\u0120step\u0120would\u0120be\u0120to\u0120place\u0120it\u0120onto\u0120the\u0120grill.\u0120So,\u0120the\u0120action\u0120place(o,\u0120r)\u0120where\u0120r\u0120is\u0120the\u0120grill\u0120side\u0120area.\u0120This\u0120places\u0120the\u0120meat\u0120on\u0120the\u0120grill\u0120ready\u0120to\u0120be\u0120cooked.\u010a\u010aNow,\u0120with\u0120the\u0120meat\u0120on\u0120the\u0120grill,\u0120the\u0120lid\u0120is\u0120closed.\u0120To\u0120cook\u0120the\u0120meat,\u0120I\u0120need\u0120to\u0120open\u0120the\u0120lid.\u0120The\u0120action\u0120to\u0120do\u0120that\u0120is\u0120open(l),\u0120where\u0120l\u0120is\u0120the\u0120grill\u0120lid.\u0120This\u0120should\u0120allow\u0120the\u0120grill\u0120to\u0120function\u0120properly.\u010a\u010aAfter\u0120the\u0120meat\u0120is\u0120cooked,\u0120it\u0120should\u0120be\u0120placed\u0120onto\u0120the\u0120plate.\u0120So,\u0120the\u0120next\u0120action\u0120is\u0120place(o,\u0120r)\u0120again,\u0120but\u0120this\u0120time\u0120r\u0120is\u0120the\u0120plate\u0120top.\u0120This\u0120transfers\u0120the\u0120cooked\u0120meat\u0120to\u0120the\u0120plate.\u010a\u010aFinally,\u0120the\u0120meat\u0120is\u0120on\u0120the\u0120plate,\u0120so\u0120it's\u0120served.\u0120The\u0120last\u0120action\u0120would\u0120be\u0120serve(o,\u0120r),\u0120where\u0120r\u0120is\u0120the\u0120serving\u0120area.\u0120This\u0120completes\u0120the\u0120goal.\u010a\u010aI\u0120don't\u0120see\u0120any\u0120other\u0120actions\u0120needed\u0120because\u0120the\u0120lid\u0120was\u0120already\u0120closed,\u0120and\u0120the\u0120plate\u0120was\u0120already\u0120in\u0120the\u0120dish\u0120rack.\u0120So,\u0120these\u0120four\u0120actions\u0120should\u0120achieve\u0120the\u0120goal.\u010a",
+     "refusal": null,
+     "role": "assistant"
+    },
+    "routed_experts": null,
+    "stop_reason": null,
+    "token_ids": null
+   }
+  ],
+  "created": 1790663069,
+  "ec_transfer_params": null,
+  "id": "chatcmpl-84ffe21e32a44645",
+  "kv_transfer_params": null,
+  "metrics": null,
+  "model": "r1-distill-llama-8b",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "prompt_text": null,
+  "prompt_token_ids": null,
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.30.0-672595b2",
+  "usage": {
+   "completion_tokens": 429,
+   "completion_tokens_details": {
+    "reasoning_tokens": 0
+   },
+   "prompt_tokens": 487,
+   "prompt_tokens_details": null,
+   "total_tokens": 916
+  }
+ },
+ "served_model": "r1-distill-llama-8b",
+ "server_url": "http://127.0.0.1:8000",
+ "settings_fingerprint": "5abee4ec0dd53558"
+}
