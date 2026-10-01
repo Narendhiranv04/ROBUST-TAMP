@@ -42,7 +42,8 @@ def test_owl_domain_supports_and_sketch_search():
     obs = kitchen_obs()
     domain = OWLDomain(obs)
     assert domain.target(('place_inside', 'mug1', 'inside_box')) == 'inside_box'
-    assert domain.target(('place_inside', 'mug1', 'table')) == 'table'      # regions are placement areas
+    assert domain.target(('place_inside', 'mug1', 'cupboard_shelf')) == 'cupboard_shelf'   # placement areas
+    assert domain.target(('place_ontop', 'mug1', 'table')) == 'table_center_area'   # parked on a named table area
     assert domain.target(('place_ontop', 'mug1', 'inside_box')) == 'inside_box'
     assert domain.target(('place_inside', 'mug1', 'box_lid')) is None      # objects: only their top surface
     assert domain.target(('place_ontop', 'mug1', 'box_lid')) == 'box_lid_top'

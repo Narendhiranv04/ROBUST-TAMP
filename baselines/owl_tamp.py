@@ -24,7 +24,8 @@ Protocol:
 Recorded deviations: the planning-time checks of a sample are the VLM constraints on the
 predicted poses and the sampler's own collision-free footprint; IK and motion feasibility are
 checked when the executor runs the action (a sample infeasible for motion is an execution
-failure, which open-loop OWL-TAMP cannot recover from). In the grill scene the executor places at
+failure, which open-loop OWL-TAMP cannot recover from). A place on the broad table goes to the
+first named table area, as the VLM-TAMP refinement parks objects. In the grill scene the executor places at
 the scene's fixed slot poses, so the sampled pose is checked but not imposed. Card sampling of
 each model (the paper used GPT-4o).
 """
@@ -230,12 +231,19 @@ class OWLDomain(SymbolicDomain):
 
         self.spaces = set(space_regions(obs.regions))
         self.entities = list(obs.objects) + list(obs.regions) + list(obs.lids)
+        # A place on the broad table goes to a named table area, as the VLM-TAMP refinement parks
+        # objects (baselines.common.SymbolicDomain): in the kitchen the broad table overlaps every
+        # named area, and the executor's broad-table placements can leave an object in the arm's
+        # way (e.g. of the lid's opening). The first named table area in the same order.
+        self.table_area = next((r for r in self.regions if r.startswith('table_')), None)
 
     def target(self, action) -> Optional[str]:
         """The region a place_ontop / place_inside puts the object in (None: not a feasible support)."""
         kind, obj, support = action
         if support == obj:
             return None
+        if support == 'table' and self.table_area is not None:
+            return self.table_area
         if support in self.regions:
             # Our regions are placement areas: on the grill's grate and inside the grill are the same
             # region, so both detach operators are feasible for any region.
