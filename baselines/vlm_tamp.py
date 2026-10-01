@@ -36,7 +36,7 @@ import re
 from pprint import pformat
 from typing import Dict, List, Optional, Tuple
 
-from baselines.common import BaselinePipeline, SymbolicDomain, action_text, observe, region_closed_by
+from baselines.common import BaselinePipeline, SymbolicDomain, action_text, observe, region_closed_by, surface_region_of
 from llm_pipeline.failures import TerminationReason
 
 # --- the authors' prompts (prompts_gpt4v.py), verbatim ------------------------------------------
@@ -141,7 +141,7 @@ def categories(obs) -> Dict[str, List[str]]:
     cats['movable'] = list(obs.objects)
     cats['food'] = [o for o in obs.objects if any(t in o for t in FOOD_TOKENS)]
     cats['space'] = spaces
-    cats['surface'] = [r for r in obs.regions if r not in spaces]
+    cats['surface'] = [r for r in obs.regions if r not in spaces] + [o for o in obs.objects if surface_region_of(o, obs)]
     cats['joint'] = list(obs.lids)
     cats['door'] = list(obs.lids)
     return cats
@@ -249,6 +249,9 @@ def parse_subgoals(text: str, obs) -> Tuple[List[Tuple[str, ...]], List[str]]:
         if any(n not in known for n in names):
             skipped.append(f'{pred}({", ".join(names)})')
             continue
+        if pred in ('in', 'on') and len(names) == 2 and names[1] in obs.objects:
+            # an object as the support: its surface (the plate's top), as in the authors' world model
+            names[1] = surface_region_of(names[1], obs) or names[1]
         subgoals.append((pred,) + tuple(names))
     return subgoals, skipped
 

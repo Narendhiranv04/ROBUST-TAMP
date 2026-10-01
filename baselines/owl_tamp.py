@@ -38,7 +38,7 @@ import random
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_text,
+from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_text, surface_region_of,
                               observe, parse_action_text, strip_reasoning)
 from baselines.owl_constraints import (GOAL_FEW_SHOT, HELPER_DOCS, Geometry, RavenPose, evaluate, extract_functions,
                                        raven_pose)
@@ -183,13 +183,21 @@ CARRIED_REGIONS = {'plate': ('plate_top',)}
 
 
 def mentions(source: str, name: str) -> bool:
-    """Whether a constraint function's code refers to the variable ``name``."""
+    """Whether a constraint function constrains the pose of ``name`` (it reads ``name.pose``, or the
+    object's centre through ``get_obj_center``): only such a function restricts where that object goes."""
     import ast
 
     try:
-        return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(ast.parse(source)))
+        tree = ast.parse(source)
     except SyntaxError:
         return False
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Attribute) and n.attr == 'pose' and isinstance(n.value, ast.Name) and n.value.id == name:
+            return True
+        if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'get_obj_center' and any(
+                isinstance(x, ast.Name) and x.id == name for a in n.args for x in ast.walk(a)):
+            return True
+    return False
 
 
 def _xy_overlap(a, b, margin: float = 0.01) -> bool:
@@ -209,15 +217,6 @@ place_ontop(?obj, ?surface): place the held ?obj so that it rests on top of ?sur
 place_inside(?obj, ?container): place the held ?obj inside ?container.
 open(?lid): open ?lid. The gripper must be empty.
 close(?lid): close ?lid. The gripper must be empty."""
-
-
-def surface_region_of(name: str, obs) -> Optional[str]:
-    """The region an object provides as a surface (the plate's top, the box lid's top), if any."""
-    from llm_pipeline.region_aliases import planner_region_name
-
-    tops = {'plate': 'plate_top', 'box_lid': 'box_lid_top'}
-    region = tops.get(name)
-    return planner_region_name(region) if region and planner_region_name(region) in obs.regions else None
 
 
 class OWLDomain(SymbolicDomain):
@@ -562,10 +561,13 @@ class OWLTAMPPipeline(BaselinePipeline):
         if not blockers or (state.holding is not None and state.holding != obj):
             return None
         blocker = rng.choice(sorted(blockers))
-        if 'table' not in domain.regions or region == 'table':
+        # "a different part of the table": the first other open surface region (the broad 'table' last)
+        others = [r for r in domain.regions if r != region and r not in domain.spaces
+                  and domain._reachable(state, r)]
+        if not others:
             return None
         pick_index = max((j for j in range(failed) if plan[j] == ('pick', obj)), default=failed)
-        return plan[:pick_index] + [('pick', blocker), ('place_ontop', blocker, 'table')] + plan[pick_index:]
+        return plan[:pick_index] + [('pick', blocker), ('place_ontop', blocker, others[0])] + plan[pick_index:]
 
     # -- run -------------------------------------------------------------------
     def run_baseline(self, goal_text: str) -> Optional[str]:

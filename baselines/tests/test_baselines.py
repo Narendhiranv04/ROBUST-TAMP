@@ -107,3 +107,11 @@ def test_owl_real_constraints_accept_valid_placements():
     far = ("def goal_check0() -> bool:\n    b = get_aabb_bounds(init_state, env, 'inside_box')\n"
            "    return position_within_bounds(spam.pose, b)")
     assert not evaluate([far], geo, names)[0]          # the spam is not in the box
+
+
+def test_vlm_tamp_object_support_and_parking_order():
+    obs = Observation(objects={'raw_meat_1': 'grill_side_area', 'plate': 'serving_area'}, lids={'grill_lid': True},
+                      holding=None, regions=['table', 'grill_side_area', 'inside_grill', 'plate_top', 'serving_area'])
+    subgoals, skipped = parse_subgoals("['on(raw_meat_1, plate)']", obs)
+    assert subgoals == [('on', 'raw_meat_1', 'plate_top')] and not skipped
+    assert SymbolicDomain(obs.objects, obs.regions, obs.lids).regions[-1] == 'table'

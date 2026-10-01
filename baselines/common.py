@@ -98,6 +98,13 @@ def region_closed_by(region: str) -> Optional[str]:
     return None
 
 
+def surface_region_of(name: str, obs) -> Optional[str]:
+    """The region an object provides as a surface (the plate's top, the box lid's top), if any."""
+    tops = {'plate': 'plate_top', 'box_lid': 'box_lid_top'}
+    region = tops.get(name)
+    return planner_region_name(region) if region and planner_region_name(region) in obs.regions else None
+
+
 def lid_top_region(lid: str) -> Optional[str]:
     top = LID_TOP_REGIONS.get(lid)
     return planner_region_name(top) if top else None
@@ -129,7 +136,10 @@ class SymbolicDomain:
 
     def __init__(self, objects: Iterable[str], regions: Iterable[str], lids: Iterable[str]):
         self.objects = sorted(set(objects))
-        self.regions = list(dict.fromkeys(regions))
+        # The broad 'table' last: in our scenes it overlaps the named table areas, so an object parked
+        # there by a refinement can resolve to one of them; a named area is tried first.
+        regions = list(dict.fromkeys(regions))
+        self.regions = [r for r in regions if r != 'table'] + [r for r in regions if r == 'table']
         self.lids = sorted(set(lids))
 
     def _reachable(self, state: SymState, region: Optional[str]) -> bool:
@@ -181,7 +191,7 @@ class SymbolicDomain:
             if self.applicable(state, action):
                 yield action, self.apply(state, action)
 
-    def search(self, start: SymState, goal: Callable[[SymState], bool], max_expansions: int = 20000,
+    def search(self, start: SymState, goal: Callable[[SymState], bool], max_expansions: int = 400000,
                max_depth: int = 12) -> Optional[List[Tuple[str, ...]]]:
         """Breadth-first search for the shortest action sequence reaching ``goal``."""
         if goal(start):
