@@ -10,13 +10,15 @@
 # request/response and image); a trial that ends as infrastructure (server error, simulator error)
 # is moved to seed_XX.infra_attemptN and rerun, at most 3 attempts. Then a run report per baseline
 # (evaluation/model_run_report.py), COMPLETE when every trial has a scored result, and an archive.
+# BASELINE_RERUN_EXECUTION_FAILURES=1 first moves the failed executions of an earlier run (shared
+# working directory, baselines/execution_failures.py) to seed_XX.shared_temp, so they are re-run.
 set -uo pipefail
 INFER=${QUEUE_INFER:-$HOME/robust_tamp_infer}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$INFER/sim_env.sh" >/dev/null
 # sim_env.sh activates the main checkout; this run uses its own (the scripts' checkout)
 cd "$REPO" && . mujoco_port/activate_mujoco_env.sh >/dev/null
-OUT=${BASELINE_OUT:?set BASELINE_OUT}
+OUT=$(realpath -m "${BASELINE_OUT:?set BASELINE_OUT}")
 ARCHIVE=${BASELINE_ARCHIVE:-$OUT/archive}
 MODEL=${BASELINE_MODEL:-qwen3-vl-8b-thinking}
 JOBS=${BASELINE_JOBS:-6}
@@ -57,7 +59,7 @@ PY
 
 # one trial, with infrastructure reruns
 trial() {
-  local b=$1 v=$2 s=$3 dir attempt end
+  local b=$1 v=$2 s=$3 dir attempt end cwd
   dir="$OUT/$b/$v/seed_$(printf %02d "$s")"
   for attempt in 1 2 3; do
     if [ -f "$dir/trial_log.jsonl" ] && grep -q '"event": "trial_end"' "$dir/trial_log.jsonl" \
@@ -66,8 +68,13 @@ trial() {
     fi
     [ -d "$dir" ] && mv "$dir" "$dir.infra_attempt$(ls -d "$dir".infra_attempt* 2>/dev/null | wc -l | awk '{print $1+1}')"
     mkdir -p "$dir"
-    nice -n 5 timeout 14400 python3 -m baselines.run_baseline_trial --baseline "$b" --variant "$v" --seed "$s" \
-      --output-dir "$dir" --model "$MODEL" --remote-url http://127.0.0.1:8000 --attempt "$attempt" > "$dir/stdout.log" 2>&1
+    # each trial in its own working directory, as in llm_pipeline/run_trial_matrix.py: FastDownward
+    # writes temp/ under the working directory, shared by the parallel trials otherwise
+    cwd=$(mktemp -d "${TMPDIR:-/tmp}/baseline_${b}_${v}_${s}_XXXXXX")
+    (cd "$cwd" && nice -n 5 timeout 14400 python3 -m baselines.run_baseline_trial --baseline "$b" --variant "$v" \
+      --seed "$s" --output-dir "$dir" --model "$MODEL" --remote-url http://127.0.0.1:8000 --attempt "$attempt") \
+      > "$dir/stdout.log" 2>&1
+    rm -rf "$cwd"
     end=$(grep '"event": "trial_end"' "$dir/trial_log.jsonl" 2>/dev/null | tail -1)
     echo "[trial] $b $v seed $s attempt $attempt: $(echo "$end" | python3 -c 'import sys,json; l=sys.stdin.read().strip(); e=json.loads(l) if l else {}; print(json.dumps({k: e.get(k) for k in ("success","partial_goal_completion","planner_calls","termination_reason")}))')"
     if [ -n "$end" ] && ! echo "$end" | grep -q '"termination_reason": "infrastructure"'; then return 0; fi
@@ -77,6 +84,16 @@ export -f trial log
 export OUT MODEL
 
 for b in $BASELINES; do
+  if [ -n "${BASELINE_RERUN_EXECUTION_FAILURES:-}" ] && [ -d "$OUT/$b" ]; then
+    # a run made before each trial had its own working directory: re-run its failed executions
+    python3 -m baselines.execution_failures "$OUT/$b" > "$OUT/$b.shared_temp_reruns.txt"
+    log "$b: re-running $(wc -l < "$OUT/$b.shared_temp_reruns.txt") trials whose execution failed (shared temp/)"
+    for f in run_report.out matrix.log COMPLETE; do [ -e "$OUT/$b.$f" ] && cp "$OUT/$b.$f" "$OUT/$b.$f.before_shared_temp_reruns"; done
+    rm -f "$OUT/$b.COMPLETE"
+    while read -r v s; do
+      d="$OUT/$b/$v/seed_$(printf %02d "$s")"; mv "$d" "$d.shared_temp"
+    done < "$OUT/$b.shared_temp_reruns.txt"
+  fi
   log "$b: running $(echo $VARIANTS | wc -w) variants x seeds [$SEEDS], $JOBS at a time"
   for s in $SEEDS; do for v in $VARIANTS; do echo "$b $v $s"; done; done \
     | xargs -P "$JOBS" -L 1 bash -c 'trial "$0" "$1" "$2"' >> "$OUT/$b.matrix.log" 2>&1

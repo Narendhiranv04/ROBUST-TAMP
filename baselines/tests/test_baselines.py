@@ -109,6 +109,27 @@ def test_owl_real_constraints_accept_valid_placements():
     assert not evaluate([far], geo, names)[0]          # the spam is not in the box
 
 
+def test_execution_failures_selects_failed_executions_only(tmp_path):
+    import json
+
+    from baselines.execution_failures import execution_failures
+
+    def trial(variant, seed, success, trace):
+        d = tmp_path / variant / f'seed_{seed:02d}'
+        d.mkdir(parents=True)
+        events = [{'event': 'baseline_trace', **trace}, {'event': 'trial_end', 'success': success}]
+        (d / 'trial_log.jsonl').write_text('\n'.join(json.dumps(e) for e in events) + '\n')
+
+    failed = {'rounds': [{'subgoal_results': [{'result': 'ok'}, {'result': 'failed', 'failure': 'Simulator error'}]}]}
+    trial('FINAL.K1', 0, False, failed)
+    trial('FINAL.K1', 1, True, failed)                                                    # recovered: keep
+    trial('FINAL.K2', 0, False, {'rounds': [{'subgoal_results': [{'result': 'no plan'}]}]})   # model's plan
+    trial('FINAL.G0', 3, False, {'execution': {'success': False, 'failure': 'No PDDL plan found!'}})
+    trial('FINAL.G0', 4, False, {'execution': {'success': True}})                         # goal not met
+    (tmp_path / 'FINAL.G0' / 'seed_05.infra_attempt1').mkdir()
+    assert execution_failures(tmp_path) == [('FINAL.G0', 3), ('FINAL.K1', 0)]
+
+
 def test_vlm_tamp_object_support_and_parking_order():
     obs = Observation(objects={'raw_meat_1': 'grill_side_area', 'plate': 'serving_area'}, lids={'grill_lid': True},
                       holding=None, regions=['table', 'grill_side_area', 'inside_grill', 'plate_top', 'serving_area'])
