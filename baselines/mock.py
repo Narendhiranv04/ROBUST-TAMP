@@ -142,4 +142,30 @@ def owl_tamp_responder(pipeline):
     return respond
 
 
-RESPONDERS = {'vlm_tamp': vlm_tamp_responder, 'owl_tamp': owl_tamp_responder}
+def llm_planner_responder(pipeline):
+    def respond(purpose: str, turns) -> str:
+        obs = observe(pipeline)
+        entries = []
+        for step in _observed_steps(pipeline):
+            for a in step:
+                if a[0] == 'pick':
+                    entries.append(f'Pick({a[1]}, {obs.objects.get(a[1]) or "table"})')
+                elif a[0] == 'place':
+                    entries.append(f'Place({a[1]}, {a[2]})')
+                else:
+                    entries.append(f'{a[0].capitalize()}({a[1]})')
+        return 'Here is the plan.\n{\n "Plan": [' + ', '.join(f'"{e}"' for e in entries) + ']\n}'
+
+    return respond
+
+
+def inner_monologue_responder(pipeline):
+    def respond(purpose: str, turns) -> str:
+        lines = [f"{a[0]}({', '.join(a[1:])})" for step in _observed_steps(pipeline) for a in step]
+        return 'FINAL ACTIONS:\n' + ('\n'.join(lines) if lines else 'NO_ACTIONS')
+
+    return respond
+
+
+RESPONDERS = {'vlm_tamp': vlm_tamp_responder, 'owl_tamp': owl_tamp_responder,
+              'llm_planner': llm_planner_responder, 'inner_monologue': inner_monologue_responder}

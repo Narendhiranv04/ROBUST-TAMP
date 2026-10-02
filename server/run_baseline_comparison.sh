@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# External baselines (baselines/: VLM-TAMP, OWL-TAMP) with the selected planner model, every variant
+# External baselines (baselines/: vlm_tamp, owl_tamp, llm_planner, inner_monologue) with the selected planner model, every variant
 # x seeds, on one vLLM server: the comparison rows of the paper.
 #
 #   BASELINE_OUT=<dir> server/run_baseline_comparison.sh [baselines] [seeds]

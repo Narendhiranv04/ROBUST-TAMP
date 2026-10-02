@@ -1,4 +1,4 @@
-"""Run one baseline trial (VLM-TAMP or OWL-TAMP) in one of our variants.
+"""Run one baseline trial (VLM-TAMP, OWL-TAMP, LLM-Planner or Inner Monologue) in one of our variants.
 
     # a real-model trial (vLLM serving the profile's model on 127.0.0.1:8000)
     python -m baselines.run_baseline_trial --baseline vlm_tamp --variant FINAL.K1 --seed 0 \
@@ -33,13 +33,36 @@ from llm_pipeline.flags import PipelineFlags  # noqa: E402
 BASELINE_FLAGS = ('memory.enabled=false', 'parallel.enabled=false', 'prompt.version=v2')
 
 
+def _vlm_tamp():
+    from baselines.vlm_tamp import VLMTAMPPipeline
+    return VLMTAMPPipeline
+
+
+def _owl_tamp():
+    from baselines.owl_tamp import OWLTAMPPipeline
+    return OWLTAMPPipeline
+
+
+def _llm_planner():
+    from baselines.llm_planner import LLMPlannerPipeline
+    return LLMPlannerPipeline
+
+
+def _inner_monologue():
+    from baselines.inner_monologue import InnerMonologuePipeline
+    return InnerMonologuePipeline
+
+
+# baseline name (--baseline) -> its pipeline class
+PIPELINES = {'vlm_tamp': _vlm_tamp, 'owl_tamp': _owl_tamp, 'llm_planner': _llm_planner,
+             'inner_monologue': _inner_monologue}
+
+
 def pipeline_class(baseline: str, mock: bool, gt_exec: bool = False):
     from baselines.gt_exec import GT_EXEC
     from baselines.mock import RESPONDERS, MockPlanner
-    from baselines.owl_tamp import OWLTAMPPipeline
-    from baselines.vlm_tamp import VLMTAMPPipeline
 
-    base = {'vlm_tamp': VLMTAMPPipeline, 'owl_tamp': OWLTAMPPipeline}[baseline]
+    base = PIPELINES[baseline]()
     if gt_exec:
         class GTExecPipeline(GT_EXEC[baseline]):
             def __init__(self, config):
@@ -77,7 +100,7 @@ def run(baseline: str, variant: str, output_dir: Path, seed: int, mock: bool, mo
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--baseline', required=True, choices=('vlm_tamp', 'owl_tamp'))
+    parser.add_argument('--baseline', required=True, choices=tuple(PIPELINES))
     parser.add_argument('--variant', required=True)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--output-dir', required=True)
