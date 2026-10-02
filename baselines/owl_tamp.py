@@ -39,7 +39,7 @@ import random
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from baselines.common import (BaselinePipeline, SymState, SymbolicDomain, action_text, surface_region_of,
+from baselines.common import (UNCLOSABLE_LIDS, BaselinePipeline, SymState, SymbolicDomain, action_text, surface_region_of,
                               observe, parse_action_text, strip_reasoning)
 from baselines.owl_constraints import (GOAL_FEW_SHOT, HELPER_DOCS, Geometry, RavenPose, evaluate, extract_functions,
                                        raven_pose)
@@ -262,7 +262,7 @@ class OWLDomain(SymbolicDomain):
         out = [('pick', e) for e in ents]
         for kind in ('place_ontop', 'place_inside'):
             out += [(kind, x, y) for x in ents for y in ents if x != y]
-        out += [('open', l) for l in self.lids] + [('close', l) for l in self.lids]
+        out += [('open', l) for l in self.lids] + [('close', l) for l in self.lids if l not in UNCLOSABLE_LIDS]
         return out
 
     def applicable(self, state, action) -> bool:
@@ -279,7 +279,7 @@ class OWLDomain(SymbolicDomain):
         # whose first object is not the held one)
         if state.holding is None:
             candidates = [('pick', o) for o in self.objects] + [('open', l) for l in self.lids] + \
-                         [('close', l) for l in self.lids]
+                         [('close', l) for l in self.lids if l not in UNCLOSABLE_LIDS]
         else:
             candidates = [(kind, state.holding, y) for kind in ('place_ontop', 'place_inside')
                           for y in self.entities if y != state.holding]

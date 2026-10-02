@@ -91,6 +91,11 @@ def observe(pipeline) -> Observation:
                        poses=poses, region_boxes=boxes)
 
 
+# Lids our executor cannot close: the kitchen box lid only slides open (executor.execute_close
+# refuses it, and no kitchen goal needs it closed), so close(box_lid) is not an available action.
+UNCLOSABLE_LIDS = frozenset({'box_lid'})
+
+
 def region_closed_by(region: str) -> Optional[str]:
     for lid, closed_off in LID_REGIONS.items():
         if region in {planner_region_name(r) for r in closed_off}:
@@ -163,7 +168,7 @@ class SymbolicDomain:
                     and not any(r == top for _, r in state.regions))
         if name == 'close':
             (l,) = args
-            return state.holding is None and l in self.lids and l in state.open_lids
+            return state.holding is None and l in self.lids and l in state.open_lids and l not in UNCLOSABLE_LIDS
         return False
 
     @staticmethod
@@ -183,7 +188,7 @@ class SymbolicDomain:
         """All ground actions (the relaxed grounding: every argument combination of the observed symbols)."""
         out = [('pick', o) for o in self.objects]
         out += [('place', o, r) for o in self.objects for r in self.regions]
-        out += [('open', l) for l in self.lids] + [('close', l) for l in self.lids]
+        out += [('open', l) for l in self.lids] + [('close', l) for l in self.lids if l not in UNCLOSABLE_LIDS]
         return out
 
     def successors(self, state: SymState):

@@ -14,6 +14,7 @@
 # working directory, baselines/execution_failures.py) to seed_XX.shared_temp, so they are re-run.
 # BASELINE_RERUN_VARIANTS="<variants>" BASELINE_RERUN_TAG=<tag>: every trial of these variants is
 # moved to seed_XX.<tag> and re-run (code changed for them).
+# BASELINE_RERUN_FILE=<file of "<variant> <seed>" lines> BASELINE_RERUN_TAG=<tag>: those trials likewise.
 set -uo pipefail
 INFER=${QUEUE_INFER:-$HOME/robust_tamp_infer}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -105,6 +106,17 @@ for b in $BASELINES; do
       d="$OUT/$b/$v/seed_$(printf %02d "$s")"; [ -d "$d" ] && mv "$d" "$d.$tag"
     done; done
     log "$b: re-running every trial of $BASELINE_RERUN_VARIANTS (earlier trials: seed_XX.$tag)"
+  fi
+  if [ -n "${BASELINE_RERUN_FILE:-}" ] && [ -d "$OUT/$b" ]; then
+    # changed code for these trials ("<variant> <seed>" lines): re-run them (earlier: seed_XX.<tag>)
+    tag=${BASELINE_RERUN_TAG:?set BASELINE_RERUN_TAG with BASELINE_RERUN_FILE}
+    cp "$BASELINE_RERUN_FILE" "$OUT/$b.$tag.txt"
+    for f in run_report.out matrix.log COMPLETE; do [ -e "$OUT/$b.$f" ] && cp "$OUT/$b.$f" "$OUT/$b.$f.before_$tag"; done
+    rm -f "$OUT/$b.COMPLETE"
+    while read -r v s; do
+      d="$OUT/$b/$v/seed_$(printf %02d "$s")"; [ -d "$d" ] && mv "$d" "$d.$tag"
+    done < "$OUT/$b.$tag.txt"
+    log "$b: re-running $(wc -l < "$OUT/$b.$tag.txt") listed trials (earlier trials: seed_XX.$tag)"
   fi
   log "$b: running $(echo $VARIANTS | wc -w) variants x seeds [$SEEDS], $JOBS at a time"
   for s in $SEEDS; do for v in $VARIANTS; do echo "$b $v $s"; done; done \

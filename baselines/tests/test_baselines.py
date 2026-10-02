@@ -48,6 +48,7 @@ def test_owl_domain_supports_and_sketch_search():
     assert domain.target(('place_inside', 'mug1', 'box_lid')) is None      # objects: only their top surface
     assert domain.target(('place_ontop', 'mug1', 'box_lid')) == 'box_lid_top'
     assert ('pick', 'table') in domain.ground_actions()        # relaxed grounding over every entity
+    assert ('close', 'box_lid') not in domain.ground_actions()   # the executor cannot close the box
     text = ("The mug goes in the box.\nPlan:\nopen(box_lid); open it\npick(mug1); grasp\n"
             "place_inside(mug1, inside_box); inside\nachieve_goal(mug1, inside_box); mug1 in the box")
     sketch, achieve, rejected = parse_sketch(text, set(domain.ground_actions()))
