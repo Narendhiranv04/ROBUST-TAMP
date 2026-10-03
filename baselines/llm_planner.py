@@ -38,7 +38,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from baselines.common import BaselinePipeline, action_text, observe, strip_reasoning, surface_region_of
 from llm_pipeline.failures import TerminationReason
-from llm_pipeline.prompt_v2 import LID_REGIONS, LID_TOP_REGIONS
+from llm_pipeline.prompt_v2 import ACTION_DEFINITIONS, LID_REGIONS, LID_TOP_REGIONS
 from llm_pipeline.region_aliases import planner_region_name
 
 # --- the reference's prompts (LLM_Planner.py get_plan), walk removed -------------------------------
@@ -58,6 +58,13 @@ ACTION_LINES = {
     'open': "'Open(x): Open container x',",
     'close': "'Close(x): Close container x',",
 }
+
+# Added to the reference prompt: the preconditions and effects of the actions in this scene, as our
+# planner receives them (prompt_v2.ACTION_DEFINITIONS; the other baselines have them in their
+# task-level search). The reference's domain has no such preconditions (an open needs nothing).
+DOMAIN_DEFINITIONS = """
+Preconditions and effects of the actions (o and x: an object; r and y: a location; l: a lid that opens a container):
+"""
 
 USER_PROMPT = """The current state of the environment is given below.
 {current_description}
@@ -154,18 +161,34 @@ def unknown_names(bundle: Sequence[Tuple[str, ...]], obs, actions_available: Seq
     return bad
 
 
-def resolve_supports(bundle: Sequence[Tuple[str, ...]], obs) -> List[Tuple[str, ...]]:
-    """Place(x, plate): an object given as the location is its top surface (plate_top), as for VLM-TAMP."""
+def container_lid(name: str, obs) -> Optional[str]:
+    """The lid that opens a container named by the container (box) or its inside region (inside_box)."""
+    for lid, regions in LID_REGIONS.items():
+        container = lid[:-len('_lid')] if lid.endswith('_lid') else lid
+        if lid in obs.lids and name in {container} | {planner_region_name(r) for r in regions}:
+            return lid
+    return None
+
+
+def resolve_supports(bundle: Sequence[Tuple[str, ...]], obs, containers: bool = False) -> List[Tuple[str, ...]]:
+    """Place(x, plate): an object given as the location is its top surface (plate_top), as for VLM-TAMP.
+
+    ``containers``: Open(x) / Close(x) of a container (the reference's "Open container x") opens or
+    closes the lid that closes it off (Open(box) -> open(box_lid))."""
     out = []
     for a in bundle:
         if a[0] == 'place' and a[2] in obs.objects:
             a = ('place', a[1], surface_region_of(a[2], obs) or a[2])
+        elif containers and a[0] in ('open', 'close') and a[1] not in obs.lids:
+            a = (a[0], container_lid(a[1], obs) or a[1])
         out.append(a)
     return out
 
 
 class StepLoopPipeline(BaselinePipeline):
     """Shared step loop of the closed-loop baselines: observe, execute one bundle, observe."""
+
+    ground_containers = False      # Open(container) -> open(its lid)
 
     def observe_scene(self):
         return observe(self)
@@ -190,7 +213,7 @@ class StepLoopPipeline(BaselinePipeline):
     def run_step(self, bundle, seen: set) -> dict:
         """Run one bundle; the step's record (executed, failure, newly observed objects)."""
         obs = self.observe_scene()
-        bundle = resolve_supports(bundle, obs)
+        bundle = resolve_supports(bundle, obs, containers=self.ground_containers)
         bad = unknown_names(bundle, obs, self.available_actions())
         step = {'bundle': [action_text(a) for a in bundle]}
         if bad:
@@ -210,12 +233,23 @@ class StepLoopPipeline(BaselinePipeline):
 
 
 class LLMPlannerPipeline(StepLoopPipeline):
-    baseline_name = 'llm_planner'
+    """The reference prompt with the scene's action definitions added (DOMAIN_DEFINITIONS), and
+    Open(container) grounded to the container's lid."""
 
-    def query_plan(self, goal_text: str, obs, purpose: str) -> Tuple[Optional[List[Tuple[str, ...]]], dict]:
+    baseline_name = 'llm_planner'
+    domain_definitions = True
+    ground_containers = True
+
+    def system_prompt(self) -> str:
         names = [n for n in ('pick', 'place', 'open', 'close') if n in self.available_actions()]
         system = SYSTEM_PROMPT.format(action_names=', '.join(names),
                                       action_lines='\n'.join(ACTION_LINES[n] for n in names))
+        if self.domain_definitions:
+            system += DOMAIN_DEFINITIONS + '\n'.join(ACTION_DEFINITIONS[n] for n in names) + '\n'
+        return system
+
+    def query_plan(self, goal_text: str, obs, purpose: str) -> Tuple[Optional[List[Tuple[str, ...]]], dict]:
+        system = self.system_prompt()
         user = USER_PROMPT.format(current_description=belief_description(obs), goal_description=goal_text)
         out = self.chat().complete([('user', user)], image=self.query_image(obs), purpose=purpose, system=system)
         plan, skipped = parse_plan(out['content'])
@@ -262,5 +296,13 @@ class LLMPlannerPipeline(StepLoopPipeline):
             replans += 1
 
 
-__all__ = ['LLMPlannerPipeline', 'StepLoopPipeline', 'parse_plan', 'belief_description', 'split_bundles',
+class LLMPlannerReferencePromptPipeline(LLMPlannerPipeline):
+    """The reference prompt verbatim (walk removed): no action preconditions, Open(x) only for a lid name."""
+
+    baseline_name = 'llm_planner_refprompt'
+    domain_definitions = False
+    ground_containers = False
+
+
+__all__ = ['LLMPlannerPipeline', 'LLMPlannerReferencePromptPipeline',  'StepLoopPipeline', 'parse_plan', 'belief_description', 'split_bundles',
            'SYSTEM_PROMPT', 'USER_PROMPT']

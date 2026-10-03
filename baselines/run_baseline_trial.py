@@ -48,6 +48,11 @@ def _llm_planner():
     return LLMPlannerPipeline
 
 
+def _llm_planner_refprompt():
+    from baselines.llm_planner import LLMPlannerReferencePromptPipeline
+    return LLMPlannerReferencePromptPipeline
+
+
 def _inner_monologue():
     from baselines.inner_monologue import InnerMonologuePipeline
     return InnerMonologuePipeline
@@ -55,7 +60,7 @@ def _inner_monologue():
 
 # baseline name (--baseline) -> its pipeline class
 PIPELINES = {'vlm_tamp': _vlm_tamp, 'owl_tamp': _owl_tamp, 'llm_planner': _llm_planner,
-             'inner_monologue': _inner_monologue}
+             'llm_planner_refprompt': _llm_planner_refprompt, 'inner_monologue': _inner_monologue}
 
 
 def pipeline_class(baseline: str, mock: bool, gt_exec: bool = False):

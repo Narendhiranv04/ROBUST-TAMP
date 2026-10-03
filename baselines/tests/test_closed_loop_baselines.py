@@ -197,3 +197,24 @@ def test_feedback_lines_text():
     assert feedback_lines(step, {}) == ['Robot action: pick(mug1), place(mug1, inside_box)',
                                         'Success: False (place(mug1, inside_box) did not succeed)',
                                         'Scene: no new objects.']
+
+
+def test_llm_planner_prompt_has_the_domain_definitions_and_grounds_containers():
+    from baselines.llm_planner import LLMPlannerReferencePromptPipeline
+
+    world = FakeWorld({'mug1': 'table', 'mug2': 'box_lid_top'})
+    answers = ['{"Plan": ["Pick(mug2, box_lid_top)", "Place(mug2, table)", "Open(box)", "Pick(mug1, table)", '
+               '"Place(mug1, inside_box)"]}']
+    pipeline, prompts = make(LLMPlannerPipeline, world, lambda p, t, n: answers[0])
+    assert pipeline.run_baseline('put mug1 in the box') is None
+    assert world.executed == ['pick(mug2)', 'place(mug2, table)', 'open(box_lid)', 'pick(mug1)', 'place(mug1, inside_box)']
+    system = pipeline.system_prompt()
+    assert "'Open(x): Open container x'," in system
+    assert 'no object is on the top surface of l' in system and 'close(l)' not in system   # the scene's actions only
+    reference = make(LLMPlannerReferencePromptPipeline, FakeWorld({'mug1': 'table'}), lambda *_: '{"Plan": []}')[0]
+    assert 'Preconditions' not in reference.system_prompt()
+    world = FakeWorld({'mug1': 'table'})
+    pipeline, _ = make(LLMPlannerReferencePromptPipeline, world,
+                       lambda p, t, n: '{"Plan": ["Open(box)"]}' if n == 1 else '{"Plan": []}')
+    assert pipeline.run_baseline('open the box') is None
+    assert pipeline._baseline_trace['steps'][0]['failure'] == 'unknown name(s): box'     # verbatim: no grounding

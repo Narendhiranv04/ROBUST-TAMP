@@ -6,7 +6,7 @@ The baselines are **re-implemented** as planner policies inside our pipeline: th
 |---|---|---|---|
 | VLM-TAMP | Yang et al., "Guiding Long-Horizon Task and Motion Planning with Vision Language Models" | `baselines/vlm_tamp.py` | `--baseline vlm_tamp` |
 | OWL-TAMP | Kumar et al., "Open-World Task and Motion Planning via Vision-Language Model Inferred Constraints" | `baselines/owl_tamp.py` | `--baseline owl_tamp` |
-| LLM-Planner | Song et al., ICCV 2023 | `baselines/llm_planner.py` | `--baseline llm_planner` |
+| LLM-Planner | Song et al., ICCV 2023 | `baselines/llm_planner.py` | `--baseline llm_planner` (`llm_planner_refprompt`: the reference prompt verbatim) |
 | Inner Monologue | Huang et al., CoRL 2022 | `baselines/inner_monologue.py` | `--baseline inner_monologue` |
 | EPoG | Yang et al., ICRA 2026 (arXiv 2602.04419) | not yet | |
 
@@ -34,6 +34,8 @@ The baselines are **re-implemented** as planner policies inside our pipeline: th
 - **Names instead of numeric node ids.** Our objects and regions have unique names; the reference prefixes names with graph ids ("51 bread") because its scene graphs repeat categories.
 - **State text.** The reference's belief-graph text ("x is on y") for the visible objects, plus lines the reference keeps in its graph nodes: lid states (open/closed, the regions each closes off, the lid's top surface), what the gripper holds, and the list of locations (an empty region is on no edge, so it would not appear otherwise).
 - **Goal.** The natural-language goal of the variant. The reference gives the task graph's goal edges; LLM-Planner's own input is the language instruction.
+- **Action preconditions added to the prompt.** After the reference's action list, the prompt gives the preconditions and effects of the scene's actions, word for word as our planner receives them (`prompt_v2.ACTION_DEFINITIONS`). The reference's domain has none (an open needs nothing), but ours does: a lid cannot be opened with an object on its top or while holding something. Our planner has them in its prompt, and VLM-TAMP and OWL-TAMP have them in their task-level search. Without them (`--baseline llm_planner_refprompt`, the reference prompt verbatim), the model kept planning `Open(box_lid)` with a mug on the lid. LLM-Planner gets no failure message, so it regenerated the same plan until the budget ran out: 0 of 90 kitchen trials succeeded in that run, kept as a record (`seed_XX.reference_prompt`).
+- **`Open(container)`.** The reference defines `Open(x): Open container x`, and the model often names the container (`Open(box)`) where our scene has its lid (`box_lid`). The container's name, or the region it closes off, is grounded to its lid (`Open(box)` -> `open(box_lid)`), as `Place(x, plate)` is grounded to the plate's top.
 - **Step execution.** `y` in `Pick(x, y)` is not used (our pick takes only the object). `Place(x, plate)` goes to the plate's top surface (as for VLM-TAMP). A step naming an unknown action, object or region fails like a step the environment skips, and so triggers a replan.
 - **Output that is not a JSON plan** triggers a replan with the same state. The reference returns without a plan in this case. A replan is what LLM-Planner's re-planning does on failure, and it is charged to the budget.
 - **Budget.** Ours: the initial plan plus at most `max_replans` (10) replans. The reference's loop has a counter of 20 that is never incremented.

@@ -168,4 +168,5 @@ def inner_monologue_responder(pipeline):
 
 
 RESPONDERS = {'vlm_tamp': vlm_tamp_responder, 'owl_tamp': owl_tamp_responder,
-              'llm_planner': llm_planner_responder, 'inner_monologue': inner_monologue_responder}
+              'llm_planner': llm_planner_responder,
+              'llm_planner_refprompt': llm_planner_responder, 'inner_monologue': inner_monologue_responder}
