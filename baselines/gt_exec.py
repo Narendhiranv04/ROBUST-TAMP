@@ -60,7 +60,13 @@ class GTExecOWLTAMP(OWLTAMPPipeline):
         trace = self._baseline_trace
         obs = observe(self)
         spaces = set(space_regions(obs.regions))
-        plan = gt_actions(self.config.variant_id)
+        # a place on the broad table goes to the first named table area, as in OWL-TAMP's own plans
+        # (OWLDomain.target): the GT is executed the way OWL-TAMP executes it
+        from baselines.owl_tamp import OWLDomain
+
+        table_area = OWLDomain(obs).table_area
+        plan = [('place', a[1], table_area) if a[0] == 'place' and a[2] == 'table' and table_area else a
+                for a in gt_actions(self.config.variant_id)]
         owl_plan = [(('place_inside' if a[2] in spaces else 'place_ontop'), a[1], a[2]) if a[0] == 'place' else a
                     for a in plan]
         # search-then-sample on the part of the plan whose objects are observed now (OWL-TAMP's input)
