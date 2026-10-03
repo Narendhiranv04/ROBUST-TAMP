@@ -63,10 +63,15 @@ def _epog():
     return EPoGPipeline
 
 
+def _epog_language_goal():
+    from baselines.epog import EPoGLanguageGoalPipeline
+    return EPoGLanguageGoalPipeline
+
+
 # baseline name (--baseline) -> its pipeline class
 PIPELINES = {'vlm_tamp': _vlm_tamp, 'owl_tamp': _owl_tamp, 'llm_planner': _llm_planner,
              'llm_planner_refprompt': _llm_planner_refprompt, 'inner_monologue': _inner_monologue,
-             'epog': _epog}
+             'epog': _epog, 'epog_language_goal': _epog_language_goal}
 
 
 def pipeline_class(baseline: str, mock: bool, gt_exec: bool = False):

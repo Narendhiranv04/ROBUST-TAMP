@@ -24,8 +24,9 @@ Adapted to our scenes (docs/BASELINES.md lists every deviation):
   the natural-language goal (the reference gives the task graph's edges; LLM-Planner's own input
   is the instruction).
 * Execution is ours: a pick and the place of the same object run as one executor call (our
-  bundles), with our pre-action checks; ``y`` of ``Pick(x, y)`` is not used (our pick takes the
-  object). A step naming an unknown object, region or action fails like a step the environment
+  bundles), with our pre-action checks. ``Pick(x, y)`` is checked against where ``x`` is observed
+  (the reference's action is the graph edge (y, x)): a wrong source fails the step, which triggers a
+  replan; our pick then takes the object. A step naming an unknown object, region or action fails like a step the environment
   skips. The model receives the same camera image our planner receives.
 * The replan budget is ours (``max_replans``, 10): the initial plan plus at most 10 replans.
 """
@@ -106,7 +107,7 @@ def parse_plan(text: str) -> Tuple[Optional[List[Tuple[str, ...]]], List[str]]:
         name = (two or one).group(1).lower() if (two or one) else None
         if two and name in ('pick', 'place'):
             x, y = two.group(2).strip('\'"'), two.group(3).strip('\'"')
-            actions.append(('pick', x) if name == 'pick' else ('place', x, y))
+            actions.append(('pick', x, y) if name == 'pick' else ('place', x, y))   # the pick keeps its source
         elif one and name in ('open', 'close'):
             actions.append((name, one.group(2).strip('\'"')))
         else:
@@ -170,6 +171,23 @@ def container_lid(name: str, obs) -> Optional[str]:
     return None
 
 
+def wrong_sources(bundle: Sequence[Tuple[str, ...]], obs) -> List[str]:
+    """Pick(x, y) whose source y is not where x is observed (the reference's action is the graph edge
+    (y, x), so a wrong y is a wrong action). The plate is the source of what is on plate_top."""
+    bad = []
+    for a in bundle:
+        if a[0] == 'pick' and len(a) == 3 and a[1] in obs.objects and a[1] != obs.holding:
+            region = obs.objects[a[1]]
+            if region is None:
+                continue                     # perception does not place it: nothing to contradict
+            if a[2] != region and SURFACE_OF.get(region) != a[2]:
+                bad.append(f'{a[1]} is in {region or "an unknown location"}, not {a[2]}')
+    return bad
+
+
+SURFACE_OF = {'plate_top': 'plate'}       # a region that is the top surface of an object -> the object
+
+
 def resolve_supports(bundle: Sequence[Tuple[str, ...]], obs, containers: bool = False) -> List[Tuple[str, ...]]:
     """Place(x, plate): an object given as the location is its top surface (plate_top), as for VLM-TAMP.
 
@@ -214,9 +232,14 @@ class StepLoopPipeline(BaselinePipeline):
         """Run one bundle; the step's record (executed, failure, newly observed objects)."""
         obs = self.observe_scene()
         bundle = resolve_supports(bundle, obs, containers=self.ground_containers)
+        wrong = wrong_sources(bundle, obs)
+        bundle = [a[:2] if a[0] == 'pick' else a for a in bundle]       # our pick takes the object
         bad = unknown_names(bundle, obs, self.available_actions())
         step = {'bundle': [action_text(a) for a in bundle]}
-        if bad:
+        if wrong:
+            step.update(success=False, failure='wrong pick source: ' + '; '.join(wrong), failure_code='wrong_pick_source',
+                        failed_action=step['bundle'][0])
+        elif bad:
             step.update(success=False, failure=f'unknown name(s): {", ".join(bad)}', failure_code='unknown_name',
                         failed_action=step['bundle'][0])
         else:

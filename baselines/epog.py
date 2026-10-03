@@ -459,7 +459,27 @@ def _func_string(a: Action, ids: NodeIds) -> str:
     return f'{a.action_type.name}({ids[a.del_edge[1]]})'
 
 
-# --- goal graph from the language goal (our addition) --------------------------------------------
+# --- goal graph (our adapter: EPoG's tasks come as goal graphs) ----------------------------------
+
+def goal_relations(objects: Sequence[str], scene: str) -> Dict[str, Tuple[str, str]]:
+    """EPoG's native task graph for the given (observed) objects, from the benchmark's goal
+    specification (evaluation.labeled_rules: an object's category -> its goal region; the grill's
+    plate goes to the serving area): child -> (relationType, parent). Objects the goal does not
+    place are left out (obstacle nodes). Hidden objects are never passed in."""
+    from evaluation.labeled_rules import CATEGORY_GOAL_REGIONS, SCENE_GOAL_CATEGORIES, object_category
+
+    placed = set(SCENE_GOAL_CATEGORIES[scene]) | ({'plate'} if scene == 'grill' else set())
+    out = {}
+    for obj in objects:
+        category = object_category(obj)
+        if category in placed:
+            region = planner_region_name(CATEGORY_GOAL_REGIONS[category])
+            relation = 'in' if region in CONTAINER_LID or region == 'cupboard_shelf' else 'on'
+            out[obj] = (relation, node_of_region(region))
+    return out
+
+
+# the language variant (``epog_language_goal``): the goal relations from one model query
 
 GOAL_SYSTEM = 'You are a robot that converts a task instruction into the goal state of a scene graph.'
 GOAL_PROMPT = """The task instruction is: {goal}
@@ -502,8 +522,12 @@ class BudgetExhausted(Exception):
 
 
 class EPoGPipeline(StepLoopPipeline):
+    """EPoG without lost-object estimation (the reported row): the goal graph from the goal
+    specification for the observed objects."""
+
     baseline_name = 'epog'
     ground_containers = False
+    goal_from_language = False
 
     # -- model calls ------------------------------------------------------------------------------
     def complete_json(self, system: str, user: str, schema: dict, purpose: str, obs) -> str:
@@ -512,6 +536,12 @@ class EPoGPipeline(StepLoopPipeline):
         return out['content']
 
     def ground_goal(self, obs, objects: Sequence[str]) -> Dict[str, str]:
+        if not self.goal_from_language:
+            relations = goal_relations(objects, self.scene)
+            self.goal_relation_types.update({c: r for c, (r, _) in relations.items()})
+            self._baseline_trace['goal_queries'].append({'objects': list(objects), 'source': 'goal_specification',
+                                                         'relations': {c: f'{r} {p}' for c, (r, p) in relations.items()}})
+            return {c: p for c, (_, p) in relations.items()}
         known = ''
         if self.goal.parent:
             known = 'The goal relations so far:\n' + '\n'.join(
@@ -520,8 +550,8 @@ class EPoGPipeline(StepLoopPipeline):
         user = GOAL_PROMPT.format(goal=self.goal_text, state=belief_description(obs), known=known, which=which)
         text = self.complete_json(GOAL_SYSTEM, user, GOAL_SCHEMA, 'epog_goal_graph', obs)
         relations, rejected = parse_goal_relations(text, objects, obs)
-        self._baseline_trace['goal_queries'].append({'objects': list(objects), 'relations': relations,
-                                                     'rejected': rejected})
+        self._baseline_trace['goal_queries'].append({'objects': list(objects), 'source': 'model',
+                                                     'relations': relations, 'rejected': rejected})
         return relations
 
     def resolve(self, error: MotionError, obs) -> List[Action]:
@@ -649,7 +679,8 @@ class EPoGPipeline(StepLoopPipeline):
         self.goal_text, self.ids, self.resolve_calls, self.global_replans = goal_text, NodeIds(), 0, 0
         self.rng = random.Random(int(self.config.seed or 0))
         obs = self.obs = self.observe_scene()
-        scene = 'grill' if any('grill' in r for r in obs.regions) else 'kitchen'
+        self.scene = scene = 'grill' if any('grill' in r for r in obs.regions) else 'kitchen'
+        self.goal_relation_types: Dict[str, str] = {}
         self.parking = PARKING[scene]
         for region in [ROOT] + list(obs.regions):
             self.ids[node_of_region(region)]
@@ -659,7 +690,16 @@ class EPoGPipeline(StepLoopPipeline):
         self.belief = graph_from_observation(obs, {o: self.placement_overlaps(o) for o in obs.objects})
         self.goal = SceneGraph()
         self.goal.parent.update(self.ground_goal(obs, list(obs.objects)))
-        trace['goal_graph'] = dict(self.goal.parent)
+        trace['goal_graph'] = {c: f'{self.goal_relation_types.get(c, "on")} {p}' for c, p in self.goal.parent.items()}
+        try:
+            return self._main_loop(trace)
+        finally:
+            trace['final_goal_graph'] = {c: f'{self.goal_relation_types.get(c, "on")} {p}' for c, p in self.goal.parent.items()}
+            trace['budget_use'] = {'global_replans': self.global_replans, 'resolve_calls': self.resolve_calls,
+                                   'goal_queries': len(trace['goal_queries']),
+                                   'model_calls': len(self.chat().calls)}
+
+    def _main_loop(self, trace) -> Optional[str]:
         try:
             rough = self.global_plan()
             while True:
@@ -667,7 +707,6 @@ class EPoGPipeline(StepLoopPipeline):
                     self._set_termination(TerminationReason.PLANNING_FAILED)
                     return 'global planner found no plan'
                 if not rough:
-                    trace['final_goal_graph'] = dict(self.goal.parent)
                     return None                             # the goal graph is reached in the belief
                 step = rough.pop(0)
                 pair = [step]
@@ -691,6 +730,14 @@ class EPoGPipeline(StepLoopPipeline):
             return f'replan budget exhausted ({exc})'
 
 
-__all__ = ['EPoGPipeline', 'ged_seq', 'pick_place_constraints', 'pog_search', 'simulate_step', 'SceneGraph',
+class EPoGLanguageGoalPipeline(EPoGPipeline):
+    """The adaptation in which the goal graph comes from the language goal (one model query per
+    batch of newly observed objects) instead of the goal specification."""
+
+    baseline_name = 'epog_language_goal'
+    goal_from_language = True
+
+
+__all__ = ['EPoGPipeline', 'EPoGLanguageGoalPipeline', 'goal_relations', 'ged_seq', 'pick_place_constraints', 'pog_search', 'simulate_step', 'SceneGraph',
            'Action', 'ActionType', 'MotionError', 'MotionErrorType', 'NodeIds', 'from_func_string',
            'parse_action_seq', 'parse_goal_relations', 'resolve_user_message', 'RESOLVE_SCHEMA', 'GOAL_SCHEMA']

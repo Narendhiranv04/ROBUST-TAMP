@@ -161,7 +161,7 @@ class EPoGWorld(FakeWorld):
         return {'success': True, 'failure': None, 'failure_code': None, 'failed_action': None}
 
 
-def make_epog(world, goal, resolver=None, max_replans=10):
+def make_epog(world, goal, resolver=None, max_replans=10, cls=EPoGPipeline):
     def respond(purpose, prompt, n):
         if purpose == 'epog_goal_graph':
             wanted = prompt.rsplit('child is one of these objects: ', 1)[1].split(', relationType', 1)[0].split(', ')
@@ -170,28 +170,49 @@ def make_epog(world, goal, resolver=None, max_replans=10):
         actions = (resolver or (lambda p: example_resolution(p._last_motion_error, p.ids)))(pipeline)
         return json.dumps({'steps': [], 'final_answer': [{'action': a} for a in actions]})
 
-    pipeline, prompts = make(EPoGPipeline, world, respond, max_replans=max_replans)
+    pipeline, prompts = make(cls, world, respond, max_replans=max_replans)
     pipeline.config.seed = 0
     pipeline.placement_overlaps = lambda obj: ['inside_box'] if world.observation().objects.get(obj) == 'inside_box' else []
     return pipeline, prompts
 
 
 def test_epog_kitchen_loop_access_block_collision_and_global_replan():
-    world = EPoGWorld({'mug1': 'table', 'mug2': 'table', 'spam': 'box_lid_top'}, hidden={'phone': 'inside_box'})
-    pipeline, prompts = make_epog(world, {'mug1': 'inside_box', 'mug2': 'inside_box'})
-    assert pipeline.run_baseline('put the mugs in the box') is None
+    # the goal graph from the goal specification: mugs -> inside_box, groceries -> cupboard_shelf;
+    # the phone (no goal) is an obstacle on the lid; the hidden can is a grocery in the box
+    world = EPoGWorld({'mug1': 'table', 'mug2': 'table', 'phone': 'box_lid_top'}, hidden={'can_of_beans': 'inside_box'})
+    pipeline, prompts = make_epog(world, {})
+    assert pipeline.run_baseline('move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box') is None
     done = world.executed
-    # the lid was cleared before opening (spam is an obstacle: no goal), the revealed phone moved off
-    # the placement area before the next mug went in, and both mugs ended in the box
-    assert done.index('place(spam, table_center_area)') < done.index('open(box_lid)')
+    assert done.index('place(phone, table_center_area)') < done.index('open(box_lid)')        # BlockError
     assert world.objects['mug1'] == 'inside_box' and world.objects['mug2'] == 'inside_box'
-    assert done.index('place(phone, table_center_area)') < done.index('place(mug2, inside_box)') or \
-        done.index('place(phone, table_center_area)') < done.index('place(mug1, inside_box)')
+    assert world.objects['can_of_beans'] == 'cupboard_shelf' and world.objects['phone'] == 'table_center_area'
     trace = pipeline._baseline_trace
     kinds = [r['error_type'] for r in trace['resolves']]
-    assert 'AccessError' in kinds and 'BlockError' in kinds and 'CollisionError' in kinds
-    assert len(trace['global_plans']) >= 2                          # the phone appeared: a global replan
-    assert [p for p, _ in prompts].count('epog_goal_graph') == 2     # the goal of the new object (none)
+    assert 'AccessError' in kinds and 'BlockError' in kinds
+    assert trace['goal_graph'] == {'mug1': 'in inside_box', 'mug2': 'in inside_box'}
+    assert trace['final_goal_graph']['can_of_beans'] == 'in cupboard_shelf'      # added when observed
+    assert len(trace['global_plans']) >= 2                                      # the can appeared: a global replan
+    assert all(p == 'epog_resolve' for p, _ in prompts)                          # no goal-graph model calls
+    assert trace['budget_use']['resolve_calls'] == len(trace['resolves'])
+    assert trace['baseline_terminated_normally'] if 'baseline_terminated_normally' in trace else True
+
+
+def test_epog_goal_relations_from_the_goal_specification():
+    from baselines.epog import goal_relations
+
+    assert goal_relations(['mug3', 'spam', 'phone', 'can_of_beans_2'], 'kitchen') == {
+        'mug3': ('in', 'inside_box'), 'spam': ('in', 'cupboard_shelf'), 'can_of_beans_2': ('in', 'cupboard_shelf')}
+    assert goal_relations(['plate', 'raw_meat_1', 'cooked_meat_2'], 'grill') == {
+        'plate': ('on', 'serving_area'), 'raw_meat_1': ('on', 'plate'), 'cooked_meat_2': ('on', 'plate')}
+
+
+def test_epog_language_goal_variant_queries_the_model():
+    from baselines.epog import EPoGLanguageGoalPipeline
+
+    world = EPoGWorld({'mug1': 'table'})
+    pipeline, prompts = make_epog(world, {'mug1': 'inside_box'}, cls=EPoGLanguageGoalPipeline)
+    assert pipeline.run_baseline('put the mug in the box') is None
+    assert [p for p, _ in prompts][0] == 'epog_goal_graph' and world.objects['mug1'] == 'inside_box'
 
 
 def test_epog_resolve_calls_are_capped_by_the_budget():
@@ -213,11 +234,11 @@ def test_unresolved_regions_hang_off_the_root_and_are_still_planned():
 
 
 def test_resolve_calls_carry_the_latest_image():
-    world = EPoGWorld({'mug1': 'table', 'spam': 'box_lid_top'})
+    world = EPoGWorld({'mug1': 'table', 'phone': 'box_lid_top'})
     pipeline, prompts = make_epog(world, {'mug1': 'inside_box'})
     images = []
     pipeline.query_image = lambda obs: images.append(dict(obs.objects)) or None
     assert pipeline.run_baseline('put the mug in the box') is None
     # the first resolve is planned from the initial observation; later calls see the updated scene
-    assert images[0] == {'mug1': 'table', 'spam': 'box_lid_top'}
+    assert images[0] == {'mug1': 'table', 'phone': 'box_lid_top'}
     assert pipeline.obs.objects == world.observation().objects

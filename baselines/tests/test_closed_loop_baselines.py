@@ -83,12 +83,12 @@ def test_llm_planner_parses_the_reference_json_plan():
     text = ('<think>x</think>Sure.\n{"Plan": ["Pick(mug1, table)", "Place(mug1, inside_box)", "Open(box_lid)", '
             '"Walk(5)", "garbage"]}')
     plan, skipped = parse_plan(text)
-    assert plan == [('pick', 'mug1'), ('place', 'mug1', 'inside_box'), ('open', 'box_lid')]
+    assert plan == [('pick', 'mug1', 'table'), ('place', 'mug1', 'inside_box'), ('open', 'box_lid')]
     assert skipped == ['Walk(5)', 'garbage']
     assert parse_plan('no json here')[0] is None
     assert parse_plan('{"plan": []}')[0] is None             # the reference reads the key "Plan"
     assert parse_plan('{"Plan": []}')[0] == []
-    assert split_bundles(plan) == [[('pick', 'mug1'), ('place', 'mug1', 'inside_box')], [('open', 'box_lid')]]
+    assert split_bundles(plan) == [[('pick', 'mug1', 'table'), ('place', 'mug1', 'inside_box')], [('open', 'box_lid')]]
 
 
 def test_llm_planner_replans_the_full_plan_when_a_new_object_appears():
@@ -218,3 +218,14 @@ def test_llm_planner_prompt_has_the_domain_definitions_and_grounds_containers():
                        lambda p, t, n: '{"Plan": ["Open(box)"]}' if n == 1 else '{"Plan": []}')
     assert pipeline.run_baseline('open the box') is None
     assert pipeline._baseline_trace['steps'][0]['failure'] == 'unknown name(s): box'     # verbatim: no grounding
+
+
+def test_llm_planner_a_wrong_pick_source_fails_the_step():
+    world = FakeWorld({'mug1': 'table', 'meat': 'plate_top'})
+    answers = ['{"Plan": ["Pick(mug1, cupboard_shelf)", "Place(mug1, inside_box)"]}',
+               '{"Plan": ["Pick(mug1, table)", "Place(mug1, inside_box)", "Pick(meat, plate)", "Place(meat, table)"]}']
+    pipeline, prompts = make(LLMPlannerPipeline, world, lambda p, t, n: answers[min(n, 2) - 1])
+    assert pipeline.run_baseline('put the mug in the box') is None
+    steps = pipeline._baseline_trace['steps']
+    assert steps[0]['failure_code'] == 'wrong_pick_source' and 'mug1 is in table, not cupboard_shelf' in steps[0]['failure']
+    assert world.executed == ['pick(mug1)', 'place(mug1, inside_box)', 'pick(meat)', 'place(meat, table)']  # plate = plate_top
