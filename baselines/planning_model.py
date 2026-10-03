@@ -65,7 +65,8 @@ def planning_model(env):
     """The trial's scene, restored exactly on exit; no simulation step is taken inside.
 
     The snapshot is the simulator's state (MuJoCo's qpos, qvel, controls, warm start, applied forces
-    and time) and every joint's control state in the shim (targets, lock position, mode, gains), so the
+    and time; the model's body poses, which place kinematic bodies such as the IK target) and every
+    joint's control state in the shim (targets, lock position, mode, gains), so the
     arm and the gripper's fingers go back to exactly where they were and keep the same targets; shape
     dynamic flags the planning changed are set back. Nothing else is touched."""
     import mujoco
@@ -75,6 +76,7 @@ def planning_model(env):
     world = sim._w()
     m, d = world.m, world.d
     saved = {k: getattr(d, k).copy() for k in MUJOCO_STATE_FIELDS}
+    saved_model = {k: getattr(m, k).copy() for k in ('body_pos', 'body_quat')}   # kinematic bodies (IK target)
     saved_time = float(d.time)
     joints = {h: {k: getattr(o.jstate, k) for k in JOINT_STATE_FIELDS}
               for h, o in world.objs.items() if getattr(o, 'jstate', None) is not None}
@@ -105,6 +107,8 @@ def planning_model(env):
                 pass
         for k, v in saved.items():
             getattr(d, k)[...] = v
+        for k, v in saved_model.items():
+            getattr(m, k)[...] = v
         d.time = saved_time
         for h, fields in joints.items():
             for k, v in fields.items():
