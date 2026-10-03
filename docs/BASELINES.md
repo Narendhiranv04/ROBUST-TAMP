@@ -23,6 +23,40 @@ The names in the first column are the names to use in the paper: each says how t
 - **Scoring:** success and partial goal completion come from our evaluator on the final simulator state, for every baseline and for our system alike. A baseline ending its own loop (an empty plan, `NO_ACTIONS`, an executed EPoG plan) is not success: the trace records it as `baseline_terminated_normally`, and the record's `planning_success` / `raw_episode_success` (fields shared with our system's records) mean the same, never the scored success.
 - **Budgets** are not one shared number: each baseline's budget follows its own replanning structure (below), and the tables report planner calls per trial.
 
+## VLM-TAMP
+
+**Original:** Yang et al., "Guiding Long-Horizon Task and Motion Planning with Vision Language Models" (arXiv 2410.02193); the authors' `vlm_tools` (zt-yang/pybullet_planning: `prompts_gpt4v.py`, `vlm_planning_api.py`, `vlm_utils.py`), planning mode `sequence-reprompt`. Module docstring of `baselines/vlm_tamp.py` for details.
+
+**Kept:** the two-stage query verbatim (English intermediate goals, then the formal subgoals in the same conversation; the five commonsense rules; the annotated two-panel query image from one camera view), the authors' parsing (`preds_rename`, `preds_skipped`, unknown object -> subgoal skipped), subgoals achieved in order, two reprompts (`len(replan_memory) < 2`), and the reprompt's history and failure text from `get_action_history_and_failure`, **including the collision feedback** ("When trying to solve the previous problem in simulation. The robot has collided with these objects: [...]").
+
+**The TAMP refinement:** each subgoal is refined before any of it executes: discretely (the shortest pick / place / open / close sequence, prerequisites included; bounded by the search's expansion budget, no depth cap) and, in the kitchen, geometrically: every pick-place by our planner (the executor's PDDLStream grasp / IK / motion refinement) on the scene as the refinement predicts it, with place poses from the scene's sampler (5 tries per transfer), in a planning model that leaves the trial's scene untouched (`baselines/planning_model.py`). A failed refinement fails the subgoal before execution, and the bodies the robot collided with while planning (`baselines/collisions.py`) go into the reprompt. The refined poses are the ones executed. The grill executor plans each stage while it moves, so grill subgoals are refined discretely before execution and geometrically while executing (their collisions also reach the reprompt).
+
+**Adapted, and why:**
+- **A pick subgoal and the subgoal placing the same object run as one executor call** (one refinement, one execution; each subgoal keeps its own result). Our executor plans a pick together with its place; a pick and a place sent as separate calls take its weaker held-object paths. This removes the observation between the two subgoals.
+- **Object reduction (`REDUCE-OBJECT`) disabled:** every observed object is passed to each refinement (our scenes have about ten objects).
+- **Object types** from each object's benchmark category (`CATEGORY_TYPES`: groceries and meats are food, every object is movable, the plate is also a surface), as the authors' world model gives semantic types.
+- **Observed objects only** (the study's protocol): the authors' world model also names objects inside closed storage; hidden objects' identities are not given.
+- **A place subgoal holds** when perception sees the object in the target region; an object perception no longer sees after its place counts only if the executor's post-place check confirmed it in the target region (recorded as `confirmed_by`).
+- **Camera:** the authors' query camera is "tilted downward"; ours is the scene's `front` camera.
+
+## OWL-TAMP
+
+**Original:** Kumar et al., "Open-World Task and Motion Planning via Vision-Language Model Generated Constraints" (arXiv 2411.08253). No code released; implemented from the paper (Sec. 5, Algorithms 1-2, Appendix A.1, A.6, A.7). Module docstring of `baselines/owl_tamp.py` for details.
+
+**Kept:** the A.7 prompts (discrete sketch with the banana/bowl example, natural-language operator descriptions, mandatory `achieve_goal`; goal constraints with the A.6 helper codebook and few-shot examples; per-operator constraints conditioned on the description and the goal constraints), `Executed(i)` sketch-subsequence search, search-then-sample with 500 samples per operator, skeleton backtracking (at most five skeletons), single-shot open-loop execution.
+
+**Changed after the fidelity review:**
+- **Robot feasibility during search-then-sample.** A place pose is accepted only if the operator's constraints hold and our planner refines the operator's pick-place with it (grasp, IK, motion; the executor's PDDLStream refinement) on the predicted scene, in the planning model (kitchen). A failure consumes the sample; an exhausted operator backtracks. At most 20 refinements per operator (a failed refinement takes up to 60 s). The grill executor plans while it moves, so grill operators are checked by their constraints at planning time and for robot feasibility at execution.
+- **Samples from the scene's own sampler** (its packing and clearance rules) on the predicted scene, up to the 500 budget; the clearance-ranked grid and the 2-D overlap test are gone.
+- **Plan modifications** from the failed operator: the paper's example (a place onto an occupied region: move one object on it elsewhere first) and the same for movable objects the operator's refinement collided with. This is the applicable subset of the authors' engineered strategies.
+- **`achieve_goal` missing, or no valid goal constraint function:** a planning failure (they were skipped, which left the goal unconstrained).
+- **Action constraints applied as generated:** a generated function that does not constrain the placed object is the model's error and stays (it was filtered out).
+- **Typed operators:** `place_inside` needs a space (inside the box, the cupboard, the grill), `place_ontop` a surface or an object's top (the plate); the prompt lists the ground operators reachable by relaxed planning (delete effects ignored), not every pairing of entities.
+- **Helper semantics (A.6):** `modify_pose_bounds_to_be_ontop_of_object` keeps the object touching the support's top (its bottom from 8 cm under to 6 cm over the support box's top: our region boxes are planes up to ~5 cm above the surface, and the plate's box top is its rim); `..._inside_object` keeps x and y within the container and the object's origin within its vertical extent. Predicted boxes keep each object's observed origin-to-box offset.
+- **Grill:** each place is executed at its sampled pose (the grill executor otherwise places at fixed slots).
+
+**Caveat (not changed):** the method is single-shot from the initial scene, so an object revealed later never enters its sketch. That is a weakness of the method in this setting; an `OWL-TAMP + requery` extension would be a new method.
+
 ## LLM-Planner
 
 **Original:** Song et al., "LLM-Planner: Few-Shot Grounded Planning for Embodied Agents with Large Language Models", ICCV 2023. This is **the EPoG repository's re-implementation** of LLM-Planner, not a port of Song et al.'s own code (which prompts with kNN-retrieved examples organised as task description, completed plans, visible objects and "Next Plans"); the paper names it "LLM-Planner (EPoG implementation)". **Reference code:** the re-implementation in the EPoG repository, https://github.com/buaa-colalab/EPoG, `epog/algorithm/baseline/LLM_Planner.py` (and `base.py`), Apache-2.0, commit `1e7ed52`, read from a local clone in `external/EPoG` (git-ignored). The prompts and the output parsing follow that file.
@@ -98,7 +132,7 @@ The names in the first column are the names to use in the paper: each says how t
 - **Kept as the authors have it, with its consequence:** the main loop ends when the global plan has been executed, with no final goal check. If a resolution moves a goal object aside (the meat parked so the plate can be picked) and nothing in the observation contradicts the belief, nothing puts it back. EPoG's `is_goal_achieved` is only used in its evaluation.
 - **Mock trials** answer the goal query with the variant's ground-truth final regions. Resolves are answered as the authors' prompt example reasons (the held object parked first); `rule_based_replanner` is kept as `rule_based_resolution`, but it ignores the gripper, which the authors' simulator never checks.
 
-## VLM-TAMP and OWL-TAMP: history
+## VLM-TAMP and OWL-TAMP: history (initial inspection, superseded by the sections above)
 
 The first two baselines started from the GRAB-TAMP ports (https://github.com/Narendhiranv04/GRAB-TAMP, branch `baseline_executions`, commit `f2976cc`) and were then re-implemented in `baselines/`; their module docstrings record what was kept and adapted. The notes below are from the initial inspection.
 

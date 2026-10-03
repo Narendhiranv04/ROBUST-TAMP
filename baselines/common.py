@@ -472,6 +472,10 @@ class BaselinePipeline(LLMOnlyReplanningPipeline):
                               else TerminationReason.NON_REPLANNABLE_FAILURE)
         # how the baseline's own loop ended (not success: that is the evaluator's, on the final state)
         self._baseline_trace['baseline_terminated_normally'] = failure_reason is None
+        from baselines.planning_model import RESTORE_DEVIATIONS
+        if RESTORE_DEVIATIONS:
+            self._baseline_trace['planning_model'] = {'uses': len(RESTORE_DEVIATIONS),
+                                                      'max_restore_deviation': max(RESTORE_DEVIATIONS)}
         self._log_event('baseline_trace', **json.loads(json.dumps(self._baseline_trace, default=str)))
         return self.baseline_summary(goal_text, started_at, failure_reason)
 

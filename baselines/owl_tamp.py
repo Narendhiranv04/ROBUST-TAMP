@@ -5,29 +5,37 @@ A.6 (helper codebook) and A.7 (prompts, verbatim where the paper gives them).
 
 Protocol:
 
-1. Relaxed grounding of the observed scene: every pick / place / open / close over the observed
-   objects, regions and lids (ground operators), and the initial ground atoms.
+1. Typed operators (pick(movable), place_inside(movable, space), place_ontop(movable, surface or an
+   object's top), open / close(lid)) and the ground operators reachable by relaxed planning from the
+   initial state (delete effects ignored), with the initial ground atoms.
 2. Discrete constraints (one call, image + A.7 prompt, 1-shot, chain of thought): a plan sketch,
-   each operator with a natural-language description, ending in ``achieve_goal(...)``.
+   each operator with a natural-language description, ending in ``achieve_goal(...)``. An answer
+   without ``achieve_goal`` is a planning failure (its literals are the planning goal).
 3. Continuous constraints: first the goal (``achieve_goal``) constraints with the helper codebook
-   and the three few-shot examples, then, for each sketch operator with a VLM pose constraint
-   (every ``place``), constraints conditioned on its description and the goal constraints.
-4. Search-then-sample: A* for a plan that contains the sketch as a subsequence (Executed(i));
-   then up to 500 samples per operator from the scene's own placement sampler, each accepted
-   only if the operator's constraints (and at the end the goal constraints) hold on the
-   predicted state. When an operator's budget is exhausted, backtrack with the paper's
-   plan-modification strategy (a failed place onto an occupied region: move one of the
-   objects on it elsewhere first), at most five skeletons.
-5. Execute the plan open-loop with our executor; the sampled placement pose of each place is the
-   one the executor uses (kitchen). The VLM is never re-queried (single-shot protocol, Sec. 6.1).
+   and the three few-shot examples (an answer with no valid goal function is a constraint-generation
+   failure), then, for each sketch operator with a VLM pose constraint (every ``place``), constraints
+   conditioned on its description and the goal constraints, every safe generated function applied
+   as generated.
+4. Search-then-sample: A* for a plan that contains the sketch as a subsequence (Executed(i)); then,
+   for each place, up to 500 poses from the scene's own placement sampler on the predicted state, each
+   accepted only if the operator's constraints hold and our planner refines the operator's
+   pick-place with that pose on the predicted state (the executor's PDDLStream grasp / IK / motion
+   refinement, baselines.planning_model; kitchen); at the end the goal constraints. When an
+   operator's budget is exhausted, backtrack with plan modifications chosen from the failed operator
+   (a place onto an occupied region, or one whose refinement collided with movable objects: move one
+   of them elsewhere first), at most five skeletons.
+5. Execute the plan open-loop with our executor; each place uses its sampled pose (the kitchen
+   samplers and the grill's slot pose both return it). The VLM is never re-queried (single-shot
+   protocol, Sec. 6.1).
 
-Recorded deviations: the planning-time checks of a sample are the VLM constraints on the
-predicted poses and the sampler's own collision-free footprint; IK and motion feasibility are
-checked when the executor runs the action (a sample infeasible for motion is an execution
-failure, which open-loop OWL-TAMP cannot recover from). A place on the broad table goes to the
-first named table area, as the VLM-TAMP refinement parks objects. In the grill scene the executor places at
-the scene's fixed slot poses, so the sampled pose is checked but not imposed. Card sampling of
-each model (the paper used GPT-4o).
+Recorded deviations: the planning model is our executor's own refinement on the scene as predicted
+(objects at their planned poses, the box lid moved open if the plan opened it), restored afterwards;
+the grill executor plans each stage while it moves, so grill operators are checked by their
+constraints at planning time and for robot feasibility at execution. At most 20 refinements per
+operator (a failed refinement takes up to 60 s). A place on the broad table goes to the first named
+table area, as the VLM-TAMP refinement parks objects. Card sampling of each model (the paper used
+GPT-4o). Hidden objects: the method is single-shot from the initial scene, so an object revealed
+later is never in its sketch -- a weakness of the method in this setting, not changed here.
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from llm_pipeline.failures import TerminationReason
 
 SAMPLES_PER_OPERATOR = 500            # Sec. 6
 SAMPLES_PER_ATTEMPT = 50             # per operator within one joint attempt (then the plan is resampled)
+MAX_REFINEMENTS_PER_OPERATOR = 20    # our planner's refinements per operator (a failed one takes up to 60 s)
 MAX_SKELETONS = 5                     # Sec. 6
 MAX_EXPANSIONS = 20000
 
@@ -201,12 +210,6 @@ def mentions(source: str, name: str) -> bool:
     return False
 
 
-def _xy_overlap(a, b, margin: float = 0.01) -> bool:
-    (ax0, ay0, _), (ax1, ay1, _) = a
-    (bx0, by0, _), (bx1, by1, _) = b
-    return ax0 < bx1 + margin and bx0 < ax1 + margin and ay0 < by1 + margin and by0 < ay1 + margin
-
-
 PLAN_LINE = re.compile(r'^\s*([a-z_]+\s*\([^()]*\))\s*;?\s*(.*)$')
 
 
@@ -221,8 +224,9 @@ close(?lid): close ?lid. The gripper must be empty."""
 
 
 class OWLDomain(SymbolicDomain):
-    """Relaxed grounding over every named entity (as the paper's example grounds pick(table),
-    place_inside(table, bowl), ...); the TAMP system's own semantics decide which are feasible."""
+    """Typed operators: pick(movable), place_inside(movable, space), place_ontop(movable, surface or
+    an object with a top surface), open / close(lid). The candidates in the prompt are the ground
+    operators reachable by relaxed planning from the initial state (Sec. 5.1), not every pairing."""
 
     def __init__(self, obs):
         super().__init__(obs.objects, obs.regions, obs.lids)
@@ -230,6 +234,8 @@ class OWLDomain(SymbolicDomain):
         from baselines.vlm_tamp import space_regions
 
         self.spaces = set(space_regions(obs.regions))
+        self.surfaces = [r for r in obs.regions if r not in self.spaces]
+        self.object_supports = [o for o in obs.objects if surface_region_of(o, obs)]
         self.entities = list(obs.objects) + list(obs.regions) + list(obs.lids)
         # A place on the broad table goes to a named table area, as the VLM-TAMP refinement parks
         # objects (baselines.common.SymbolicDomain): in the kitchen the broad table overlaps every
@@ -238,32 +244,70 @@ class OWLDomain(SymbolicDomain):
         self.table_area = next((r for r in self.regions if r.startswith('table_')), None)
 
     def target(self, action) -> Optional[str]:
-        """The region a place_ontop / place_inside puts the object in (None: not a feasible support)."""
+        """The region a place_ontop / place_inside puts the object in (None: the operator's type does
+        not fit the support: place_inside needs a space, place_ontop a surface or an object's top)."""
         kind, obj, support = action
         if support == obj:
             return None
+        if kind == 'place_inside':
+            return support if support in self.spaces else None
         if support == 'table' and self.table_area is not None:
             return self.table_area
-        if support in self.regions:
-            # Our regions are placement areas: on the grill's grate and inside the grill are the same
-            # region, so both detach operators are feasible for any region.
+        if support in self.surfaces:
             return support
-        if kind == 'place_ontop':
-            return surface_region_of(support, self.obs)
-        return None
+        return surface_region_of(support, self.obs)
 
     def primitive(self, action) -> Tuple[str, ...]:
         if action[0] in ('place_ontop', 'place_inside'):
             return ('place', action[1], self.target(action))
         return action
 
-    def ground_actions(self):
-        ents = self.entities
-        out = [('pick', e) for e in ents]
-        for kind in ('place_ontop', 'place_inside'):
-            out += [(kind, x, y) for x in ents for y in ents if x != y]
+    def typed_actions(self):
+        movable = list(self.objects)
+        out = [('pick', o) for o in movable]
+        out += [('place_inside', o, s) for o in movable for s in sorted(self.spaces)]
+        out += [('place_ontop', o, t) for o in movable for t in self.surfaces + self.object_supports if t != o]
         out += [('open', l) for l in self.lids] + [('close', l) for l in self.lids if l not in UNCLOSABLE_LIDS]
-        return out
+        return [a for a in out if a[0] not in ('place_ontop', 'place_inside') or self.target(a) is not None]
+
+    def ground_actions(self):
+        """The relaxed-reachable ground operators: a fixed point from the initial atoms with the
+        operators' delete effects ignored (an operator is reachable once its preconditions are)."""
+        state = self.obs.symbolic()
+        at = {(o, r) for o, r in state.regions}
+        holding, opened, reached = {state.holding} - {None}, set(state.open_lids), []
+        actions = self.typed_actions()
+        changed = True
+        while changed:
+            changed = False
+            for a in actions:
+                if a in reached:
+                    continue
+                if a[0] == 'pick':
+                    regions = {r for o, r in at if o == a[1]}
+                    ok = any(self._reachable_relaxed(r, opened) for r in regions)
+                elif a[0] in ('place_ontop', 'place_inside'):
+                    ok = a[1] in holding and self._reachable_relaxed(self.target(a), opened)
+                elif a[0] == 'open':
+                    ok = True                    # an empty gripper and a clear top are reachable when deletes are ignored
+                else:
+                    ok = a[1] in opened
+                if ok:
+                    reached.append(a)
+                    changed = True
+                    if a[0] == 'pick':
+                        holding.add(a[1])
+                    elif a[0] == 'open':
+                        opened.add(a[1])
+                    elif a[0] != 'close':
+                        at.add((a[1], self.target(a)))
+        return [a for a in actions if a in reached]
+
+    def _reachable_relaxed(self, region, opened) -> bool:
+        from baselines.common import region_closed_by
+
+        lid = region_closed_by(region) if region else None
+        return lid is None or lid in opened
 
     def applicable(self, state, action) -> bool:
         if action[0] in ('place_ontop', 'place_inside'):
@@ -420,44 +464,33 @@ class OWLTAMPPipeline(BaselinePipeline):
             for body, original in reversed(saved):
                 body.set_pose(original, reset_dynamics=False)
 
-    def candidate_poses(self, obj: str, region: str, predicted: Geometry, occupants: Sequence[str],
-                        where: Dict[str, Optional[str]], placed: Dict[str, list], rng: random.Random,
-                        count: int) -> List[Tuple[list, bool]]:
-        """Up to ``count`` placement candidates (7-D pose, from the scene sampler?) on the predicted state.
-
-        First the scene's own placement sampler run on the predicted scene (its region-specific packing
-        and clearance rules); then positions on a grid over the region's box ordered by clearance from
-        the predicted occupants, then uniform ones, at the sampler's height and orientation.
-        """
-        out: List[Tuple[list, bool]] = []
+    def candidate_poses(self, obj: str, region: str, where: Dict[str, Optional[str]], placed: Dict[str, list],
+                        count: int) -> List[list]:
+        """Up to ``count`` placement poses from the scene's own placement sampler (its packing and
+        clearance rules), drawn on the scene as predicted at this point of the plan."""
+        out: List[list] = []
+        misses = 0
         with self.predicted_scene(where, placed):
-            for _ in range(min(10, count)):
+            while len(out) < count and misses < 3:
                 pose = self.scene_sample(obj, region)
                 if pose is None:
-                    break
-                if not any(abs(pose[0] - q[0][0]) < 1e-4 and abs(pose[1] - q[0][1]) < 1e-4 for q in out):
-                    out.append((list(pose), True))
-        if not out:
-            return out
-        base = out[0][0]
-        box = predicted.boxes.get(region)
-        if box is not None:
-            (x0, y0, _), (x1, y1, _) = box
-            pad = 0.12 if region == 'inside_box' else 0.05
-            pad_x, pad_y = min(pad, (x1 - x0) / 3), min(pad, (y1 - y0) / 3)
-            lo_x, hi_x, lo_y, hi_y = x0 + pad_x, x1 - pad_x, y0 + pad_y, y1 - pad_y
-            centers = [((b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2) for b in
-                       (predicted.boxes[m] for m in occupants if m in predicted.boxes)]
-            n = 12
-            grid = [(lo_x + (hi_x - lo_x) * i / (n - 1), lo_y + (hi_y - lo_y) * j / (n - 1))
-                    for i in range(n) for j in range(n)]
-            grid.sort(key=lambda c: -min([((c[0] - q[0]) ** 2 + (c[1] - q[1]) ** 2) for q in centers] or [0.0]))
-            start = rng.randrange(0, 6) if len(out) else 0
-            for x, y in grid[start:]:
-                out.append(([x, y] + base[2:], False))
-            while len(out) < count:
-                out.append(([rng.uniform(lo_x, hi_x), rng.uniform(lo_y, hi_y)] + base[2:], False))
-        return out[:count]
+                    misses += 1
+                    continue
+                out.append(list(pose))
+        return out
+
+    def feasible(self, obj: str, region: str, pose: list, placed: Dict[str, list], opened: List[str]
+                 ) -> Tuple[bool, List[str]]:
+        """Our planner's refinement of pick(obj) + place(obj, region) at ``pose`` (grasp, IK, motion) on
+        the predicted scene, nothing executed (kitchen; the grill executor plans while it moves)."""
+        from baselines.planning_model import planning_model, predict, refine_transfer
+
+        if (self.config.task_family or '').lower() == 'grill':
+            return True, []
+        with planning_model(self.env):
+            predict(self.env, placed, opened)
+            ok, _message, bodies = refine_transfer(self.env, obj, region, pose)
+        return ok, bodies
 
     # -- prompts ---------------------------------------------------------------
     @staticmethod
@@ -475,43 +508,39 @@ class OWLTAMPPipeline(BaselinePipeline):
     # -- search-then-sample ------------------------------------------------------
     def sample_plan(self, plan, geo: Geometry, names, action_constraints: Dict[int, List[str]],
                     goal_functions: List[str], trace: dict) -> Tuple[Optional[Dict[int, list]], Optional[int]]:
-        """Poses for every place of ``plan`` satisfying the constraints, or the failed operator's index."""
+        """Search-then-sample (A.1): for each place of ``plan``, poses from the scene's sampler, each
+        accepted only if the operator's constraints hold on the predicted state and our planner refines
+        the operator's pick-place with it (grasp, IK, motion); at the end the goal constraints. Returns
+        the poses by operator index, or the failed operator's index (the bodies the robot collided
+        with while refining it in ``self.failed_collisions``)."""
         budgets = {i: SAMPLES_PER_OPERATOR for i, a in enumerate(plan) if a[0] == 'place'}
+        checks = {i: 0 for i in budgets}
+        collided: Dict[int, List[str]] = {i: [] for i in budgets}
+        self.failed_collisions = []
         goal_budget = SAMPLES_PER_OPERATOR
-        rng = random.Random((self.config.seed or 0) + 7)
-        attempt = -1
         while goal_budget > 0 and all(v > 0 for v in budgets.values()):
             goal_budget -= 1
-            attempt += 1
             predicted = Geometry(geo.boxes, dict(geo.poses), geo.robot_xy, regions=geo.regions)
+            predicted._offsets = {n: geo.origin_offset(n) for n in geo.poses}     # as observed
             chosen: Dict[int, list] = {}
             where = dict(self._initial_regions)          # predicted region of every object, in plan order
             placed: Dict[str, list] = {}                 # 7-D poses the plan has placed objects at
+            opened = [l for l, is_open in self._initial_lids.items() if is_open]
             for i, action in enumerate(plan):
+                if action[0] == 'open':
+                    opened.append(action[1])
                 if action[0] == 'pick':
                     where[action[1]] = None
                 if action[0] != 'place':
                     continue
                 obj, region = action[1], action[2]
                 accepted = pose = None
-                occupants = [m for m, r in where.items() if r == region and m != obj]
-                candidates = self.candidate_poses(obj, region, predicted, occupants, where, placed, rng,
-                                                  min(SAMPLES_PER_ATTEMPT, budgets[i]))
-                for pose7, from_scene_sampler in candidates:
+                before = dict(placed)                    # the scene before this pick-place
+                for pose7 in self.candidate_poses(obj, region, where, placed, min(SAMPLES_PER_ATTEMPT, budgets[i])):
                     budgets[i] -= 1
                     pose = raven_pose(pose7)
-                    box = predicted.box_at(obj, pose)
-                    # Engineered collision constraint on the predicted state: the scene sampler's own
-                    # clearance rules for its candidates; for the others, no overlap with the objects
-                    # predicted to be in the region (placing onto the top surface of an object, e.g.
-                    # the plate, is not a collision).
-                    if not from_scene_sampler and any(
-                            _xy_overlap(box, predicted.boxes[m]) for m, r in where.items()
-                            if r == region and m != obj and m in predicted.boxes
-                            and region not in CARRIED_REGIONS.get(m, ())):
-                        continue
                     predicted.poses[obj] = pose
-                    predicted.boxes[obj] = box
+                    predicted.boxes[obj] = predicted.box_at(obj, pose)
                     # a region on top of a movable object (the plate's top) moves with it
                     # (a plate rests flat once placed: its top is its full footprint, whatever its current tilt,
                     # e.g. on edge in the dish rack)
@@ -521,24 +550,29 @@ class OWLTAMPPipeline(BaselinePipeline):
                         half, height = extents[2] / 2, extents[0]
                         predicted.boxes[carried] = ((pose.x - half, pose.y - half, pose.z - 0.02),
                                                     (pose.x + half, pose.y + half, pose.z + height + 0.05))
-                        # the plate itself lies flat too (constraints may refer to the object, not its top)
                         predicted.boxes[obj] = ((pose.x - half, pose.y - half, pose.z - 0.01),
                                                 (pose.x + half, pose.y + half, pose.z + height))
                     ok, errors = evaluate(action_constraints.get(i, []), predicted, names)
                     if errors:
                         trace.setdefault('constraint_errors', []).append({'operator': action_text(action),
                                                                           'errors': errors[:3]})
-                    if ok:
+                    if not ok or checks[i] >= MAX_REFINEMENTS_PER_OPERATOR:
+                        continue
+                    checks[i] += 1
+                    refined, bodies = self.feasible(obj, region, pose7, before, opened)
+                    collided[i] += [b for b in bodies if b not in collided[i]]
+                    if refined:
                         accepted = pose
                         placed[obj] = pose7
                         break
-                if accepted is None and budgets[i] > 0:
+                if accepted is None and budgets[i] > 0 and checks[i] < MAX_REFINEMENTS_PER_OPERATOR:
                     break                        # this attempt failed; resample the plan jointly
                 if accepted is None:
                     trace.setdefault('exhausted', []).append({
                         'operator': action_text(action), 'last_sample': list(pose) if pose else None,
-                        'object_box': predicted.boxes.get(obj), 'region_box': predicted.boxes.get(region),
-                        'predicted_poses': {k: list(v) for k, v in predicted.poses.items() if k in (obj, 'plate')}})
+                        'refinements': checks[i], 'collided': collided[i],
+                        'object_box': predicted.boxes.get(obj), 'region_box': predicted.boxes.get(region)})
+                    self.failed_collisions = collided[i]
                     return None, i
                 chosen[i] = placed[obj]
                 where[obj] = region
@@ -552,26 +586,37 @@ class OWLTAMPPipeline(BaselinePipeline):
                     break                          # nothing to resample: the goal constraints fail on this plan
         exhausted = next((i for i, v in budgets.items() if v <= 0), None)
         if exhausted is not None:
+            self.failed_collisions = collided[exhausted]
             return None, exhausted
         return None, len(plan)                 # achieve_goal failed
 
     @staticmethod
-    def modify_plan(plan, failed: int, obs, domain: 'OWLDomain', rng: random.Random):
-        """A.1.1: a failed detach onto a surface with objects on it -> first move one of them to a
-        different part of the table (an attach-detach pair)."""
+    def modify_plan(plan, failed: int, obs, domain: 'OWLDomain', rng: random.Random, collided: Sequence[str] = ()):
+        """A.1.1: plan modifications from the most recently failed operator (the paper's manually
+        engineered set; the strategies that apply to our failures):
+        * a failed place onto a region with objects on it -> first move one of them to a different
+          part of the table (the paper's example);
+        * a failed place whose refinement collided with movable objects -> first move the first of them
+          to a different part of the table (our planner reports the collided bodies)."""
         if failed >= len(plan) or plan[failed][0] not in ('place_ontop', 'place_inside'):
             return None
         obj, region = plan[failed][1], domain.target(plan[failed])
         state = obs.symbolic()
         for action in plan[:failed]:
             state = domain.apply(state, action)
-        blockers = [o for o, r in state.regions if r == region and o != obj]
-        if not blockers or (state.holding is not None and state.holding != obj):
+        if state.holding is not None and state.holding != obj:
             return None
-        blocker = rng.choice(sorted(blockers))
+        blockers = [o for o, r in state.regions if r == region and o != obj]
+        movable_collided = [b for b in collided if b in domain.objects and b != obj and state.region_of(b) is not None]
+        if blockers:
+            blocker = rng.choice(sorted(blockers))
+        elif movable_collided:
+            blocker = movable_collided[0]
+        else:
+            return None
         # "a different part of the table": the first other open surface region (the broad 'table' last)
-        others = [r for r in domain.regions if r != region and r not in domain.spaces
-                  and domain._reachable(state, r)]
+        here = state.region_of(blocker)
+        others = [r for r in domain.surfaces if r not in (region, here) and domain._reachable(state, r)]
         if not others:
             return None
         pick_index = max((j for j in range(failed) if plan[j] == ('pick', obj)), default=failed)
@@ -599,19 +644,26 @@ class OWLTAMPPipeline(BaselinePipeline):
                           bool(sketch))
         if not sketch:
             return 'no plan sketch in the model answer'
+        if achieve is None:
+            # the prompt requires the plan to end in achieve_goal; its literals are the planning goal
+            self._set_termination(TerminationReason.PLANNING_FAILED)
+            return 'no achieve_goal in the model answer'
 
         geo = self.geometry(obs)
         self._initial_regions = dict(obs.objects)
+        self._initial_lids = dict(obs.lids)
         names = sorted(set(obs.objects) | set(obs.regions) | set(obs.lids))
         poses_text = self.object_poses_text(geo, names)
-        goal_functions: List[str] = []
-        if achieve is not None:
-            goal_answer = chat.complete([('user', GOAL_CONSTRAINT_PROMPT.format(
-                task_str=goal_text, object_poses=poses_text, achieve_goal=action_text(achieve[0]),
-                goal_description=achieve[1], helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
-                image=obs.image, purpose='owl_tamp_goal_constraints')
-            goal_functions, goal_rejected = extract_functions(goal_answer['content'])
-            trace.update({'goal_functions': goal_functions, 'goal_functions_rejected': goal_rejected})
+        goal_answer = chat.complete([('user', GOAL_CONSTRAINT_PROMPT.format(
+            task_str=goal_text, object_poses=poses_text, achieve_goal=action_text(achieve[0]),
+            goal_description=achieve[1], helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
+            image=obs.image, purpose='owl_tamp_goal_constraints')
+        goal_functions, goal_rejected = extract_functions(goal_answer['content'])
+        trace.update({'goal_functions': goal_functions, 'goal_functions_rejected': goal_rejected})
+        if not goal_functions:
+            # no usable goal constraint is a constraint-generation failure, not an always-true goal
+            self._set_termination(TerminationReason.PLANNING_FAILED)
+            return 'no valid goal constraint function in the model answer'
         plan_text = '\n'.join(f'{action_text(op)}; {d}' for op, d in sketch)
         sketch_constraints: Dict[Tuple[str, ...], List[str]] = {}
         for op, description in sketch:
@@ -623,13 +675,12 @@ class OWLTAMPPipeline(BaselinePipeline):
                 description=description, placed=op[1], helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
                 image=obs.image, purpose='owl_tamp_action_constraints')
             functions, bad = extract_functions(reply['content'])
-            # An operator's constraint restricts that operator's continuous parameter (the placed
-            # object's pose, Sec. 5.2): a function that never refers to the placed object does not
-            # constrain it (e.g. a copied goal check about another object) and is not applied here.
-            used = [f for f in functions if mentions(f, op[1])]
-            sketch_constraints[op] = used
+            # every safe generated function is applied as generated (a function that does not constrain
+            # the placed object is the model's error, which the method has to live with)
+            sketch_constraints[op] = functions
             trace.setdefault('action_functions', {})[action_text(op)] = {
-                'functions': used, 'not_about_placed_object': [f for f in functions if f not in used], 'rejected': bad}
+                'functions': functions, 'not_about_placed_object': [f for f in functions if not mentions(f, op[1])],
+                'rejected': bad}
 
         rng = random.Random(self.config.seed or 0)
         skeletons = []
@@ -648,11 +699,12 @@ class OWLTAMPPipeline(BaselinePipeline):
                                              goal_functions, trace)
             skeletons.append({'plan': [action_text(a) for a in plan],
                               'failed_operator': None if failed is None else
-                              (action_text(plan[failed]) if failed < len(plan) else 'achieve_goal')})
+                              (action_text(plan[failed]) if failed < len(plan) else 'achieve_goal'),
+                              'collided': list(self.failed_collisions)})
             if poses is not None:
                 solution = (plan, poses, constraints)
                 break
-            plan = self.modify_plan(plan, failed, obs, domain, rng)
+            plan = self.modify_plan(plan, failed, obs, domain, rng, collided=self.failed_collisions)
         trace['skeletons'] = skeletons
         if solution is None:
             self._set_termination(TerminationReason.PLANNING_FAILED)
@@ -663,62 +715,14 @@ class OWLTAMPPipeline(BaselinePipeline):
         primitive_plan = [domain.primitive(a) for a in plan]
         trace['executed_plan'] = [action_text(a) for a in plan]
         trace['executed_primitive_plan'] = [action_text(a) for a in primitive_plan]
-        with self.forced_placements(primitive_plan, poses):
+        from baselines.planning_model import forced_placements
+
+        entries = [(primitive_plan[i][1], primitive_plan[i][2], pose) for i, pose in sorted(poses.items())]
+        with forced_placements(self.env, entries, self._baseline_trace.setdefault('forced_placements', [])):
             outcome = self.execute(primitive_plan)
         self.record_cycle(False, [action_text(a) for a in plan], '', 0.0, bool(outcome.success),
                           error=outcome.error_message)
         trace['execution'] = {'success': bool(outcome.success), 'failure': outcome.error_message}
         return None if outcome.success else f'open-loop execution failed: {outcome.error_message}'
-
-    @contextlib.contextmanager
-    def forced_placements(self, plan, poses: Dict[int, list]):
-        """While executing, the k-th placement of an (object, region) uses OWL-TAMP's sampled pose first."""
-        from llm_pipeline.object_aliases import scene_object_for_object
-        from llm_pipeline.region_aliases import normalize_region_name
-
-        env = self.env
-        queue: Dict[Tuple[str, str], List[list]] = {}
-        for i, pose7 in sorted(poses.items()):
-            obj, region = plan[i][1], normalize_region_name(plan[i][2])
-            queue.setdefault((scene_object_for_object(obj, env), region), []).append(list(pose7))
-        original_sample = getattr(env, 'sample_stable_pose', None)
-        original_best = getattr(env, 'find_best_placement', None)
-        forced_log = self._baseline_trace.setdefault('forced_placements', [])
-
-        def _key(obj, region):
-            try:
-                name = obj.get_name()
-            except Exception:
-                name = str(obj)
-            return name, normalize_region_name(region)
-
-        def sample(obj, region_name, *a, **k):
-            key = _key(obj, region_name)
-            if queue.get(key):
-                pose = queue[key].pop(0)
-                forced_log.append({'object': key[0], 'region': key[1], 'pose': pose})
-                return pose
-            return original_sample(obj, region_name, *a, **k)
-
-        def best(obj, region_name, *a, **k):
-            key = _key(obj, region_name)
-            if queue.get(key):
-                pose = queue[key].pop(0)
-                forced_log.append({'object': key[0], 'region': key[1], 'pose': pose})
-                return pose
-            return original_best(obj, region_name, *a, **k)
-
-        if original_sample is not None:
-            env.sample_stable_pose = sample
-        if original_best is not None:
-            env.find_best_placement = best
-        try:
-            yield
-        finally:
-            if original_sample is not None:
-                env.__dict__.pop('sample_stable_pose', None)
-            if original_best is not None:
-                env.__dict__.pop('find_best_placement', None)
-
 
 __all__ = ['OWLTAMPPipeline', 'DISCRETE_PROMPT', 'parse_sketch', 'astar_with_sketch']

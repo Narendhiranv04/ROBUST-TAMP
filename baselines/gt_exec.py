@@ -6,7 +6,7 @@ own vocabulary, carried out by the baseline's own execution code (no model).
   refinement, joint pick-place execution and checks as a real trial, with a fresh observation
   before every subgoal (a hidden object is observed by the time the GT reaches it).
 * OWL-TAMP: the GT as the paper's operators, executed open-loop in one call through
-  ``forced_placements`` with OWL-TAMP's sampled placement poses for the objects it observes at
+  ``planning_model.forced_placements`` with OWL-TAMP's sampled (and, in the kitchen, refined) placement poses for the objects it observes at
   planning time (search-then-sample on the predicted scene); objects hidden at planning time are
   placed by the executor's own sampler.
 
@@ -49,7 +49,7 @@ class GTExecVLMTAMP(VLMTAMPPipeline):
                 subgoals.append(('openedjoint' if a[0] == 'open' else 'closedjoint', a[1]))
         round_trace = {'subgoals': [f"{s[0]}({', '.join(s[1:])})" for s in subgoals], 'subgoal_results': []}
         self._baseline_trace['rounds'] = [round_trace]
-        failed = self.execute_subgoals(subgoals, round_trace, [])
+        failed, _ = self.execute_subgoals(subgoals, round_trace, [])
         return None if failed is None else f'GT subgoal {failed} failed'
 
 
@@ -68,12 +68,16 @@ class GTExecOWLTAMP(OWLTAMPPipeline):
         sub_plan = [plan[i] for i in known]
         geo = self.geometry(obs)
         self._initial_regions = dict(obs.objects)
+        self._initial_lids = dict(obs.lids)
         names = sorted(set(obs.objects) | set(obs.regions) | set(obs.lids))
         sub_poses, failed = self.sample_plan(sub_plan, geo, names, {}, [], trace)
         poses = {known[j]: pose for j, pose in (sub_poses or {}).items()}
         trace.update({'gt_plan': [f"{a[0]}({', '.join(a[1:])})" for a in owl_plan],
                       'sampled_places': len(poses), 'sampling_failed_at': failed})
-        with self.forced_placements(plan, poses):
+        from baselines.planning_model import forced_placements
+
+        entries = [(plan[i][1], plan[i][2], pose) for i, pose in sorted(poses.items())]
+        with forced_placements(self.env, entries, trace.setdefault('forced_placements', [])):
             outcome = self.execute(plan)
         trace['execution'] = {'success': bool(outcome.success), 'failure': outcome.error_message}
         return None if outcome.success else f'open-loop GT execution failed: {outcome.error_message}'

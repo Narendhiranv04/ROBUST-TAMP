@@ -270,6 +270,13 @@ class Entity:
         self.pose = pose
 
 
+# "touching the top of the bounding box" (A.6), on our perception boxes: a region's box is a plane
+# up to ~5 cm above the surface objects rest on (the cupboard shelf), and a concave support's box top
+# is its rim (an object on the plate rests below it); so the object's bottom may be up to TOUCH_BELOW
+# under the support's top and up to TOUCH_ABOVE over it (an object floating higher is not on it).
+TOUCH_BELOW, TOUCH_ABOVE = 0.08, 0.06
+
+
 class Geometry:
     """Observed boxes of objects and regions, the robot base, and the predicted poses."""
 
@@ -283,6 +290,7 @@ class Geometry:
         self.poses = dict(poses)            # name -> RavenPose (current / predicted)
         self.robot_xy = robot_xy
         self.regions = set(regions)
+        self._offsets: Dict[str, Tuple[float, float, float]] = {}
 
     def box(self, name: str):
         if name in self.boxes:
@@ -294,10 +302,24 @@ class Geometry:
         return ((pose.x - 0.03, pose.y - 0.03, pose.z - 0.03), (pose.x + 0.03, pose.y + 0.03, pose.z + 0.03))
 
     def box_at(self, name: str, pose: RavenPose):
-        """The object's box moved to ``pose`` (same extents)."""
+        """The object's box moved with its pose to ``pose`` (same extents; the offset between the
+        object's origin and its box centre, as observed, is kept: a mug's origin is at its base)."""
         (x0, y0, z0), (x1, y1, z1) = self.box(name)
         hx, hy, hz = (x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2
-        return ((pose.x - hx, pose.y - hy, pose.z - hz), (pose.x + hx, pose.y + hy, pose.z + hz))
+        ox, oy, oz = self.origin_offset(name)
+        cx, cy, cz = pose.x - ox, pose.y - oy, pose.z - oz
+        return ((cx - hx, cy - hy, cz - hz), (cx + hx, cy + hy, cz + hz))
+
+    def origin_offset(self, name: str):
+        """Origin minus box centre, from the observed pose and box (0 when either is missing)."""
+        if name not in self._offsets:
+            pose, box = self.poses.get(name), self.boxes.get(name)
+            if pose is None or box is None or name in self.regions:
+                self._offsets[name] = (0.0, 0.0, 0.0)
+            else:
+                (x0, y0, z0), (x1, y1, z1) = box
+                self._offsets[name] = (pose.x - (x0 + x1) / 2, pose.y - (y0 + y1) / 2, pose.z - (z0 + z1) / 2)
+        return self._offsets[name]
 
     def workspace(self):
         lo = [min(b[0][i] for b in self.boxes.values()) for i in range(3)] if self.boxes else [-2.0, -2.0, 0.0]
@@ -407,20 +429,37 @@ def _helpers(geo: Geometry):
             lo[i], hi[i] = max(lo[i], c[i] - closeness_thresh[i]), min(hi[i], c[i] + closeness_thresh[i])
         return (lo, hi)
 
+    def _top(name):
+        """Height of the support's top surface: a region's plane (perception gives flat boxes), or
+        the top of an object's box."""
+        if name in geo.boxes and name in geo.regions:
+            (_, _, z0), (_, _, z1) = geo.boxes[name]
+            return max(z0, z1)
+        return geo.box(name)[1][2]
+
+    def _origin_above_bottom(name):
+        """How far the object's pose (its origin) is above the bottom of its box."""
+        pose = geo.poses.get(name)
+        (_, _, z0), (_, _, z1) = geo.box(name)
+        return pose.z - z0 if pose is not None else (z1 - z0) / 2
+
     def modify_pose_bounds_to_be_ontop_of_object(*args, **kw):
+        """Within x and y of the support's box, z such that the object touches the support's top."""
         names, bounds = _parse(args)
         lo, hi = _copy(bounds)
-        (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
+        (x0, y0, _), (x1, y1, _) = geo.box(names[-1])
         lo[0], hi[0], lo[1], hi[1] = max(lo[0], x0), min(hi[0], x1), max(lo[1], y0), min(hi[1], y1)
-        lo[2], hi[2] = max(lo[2], z0), min(hi[2], z1 + 0.25)       # resting on its top surface
+        z = _top(names[-1]) + (_origin_above_bottom(names[0]) if len(names) > 1 else 0.0)
+        lo[2], hi[2] = max(lo[2], z - TOUCH_BELOW), min(hi[2], z + TOUCH_ABOVE)
         return (lo, hi)
 
     def modify_pose_bounds_to_be_inside_object(*args, **kw):
+        """Within x and y of the container's box (the paper's docstring); z within its vertical extent."""
         names, bounds = _parse(args)
         lo, hi = _copy(bounds)
         (x0, y0, z0), (x1, y1, z1) = geo.box(names[-1])
         lo[0], hi[0], lo[1], hi[1] = max(lo[0], x0), min(hi[0], x1), max(lo[1], y0), min(hi[1], y1)
-        lo[2], hi[2] = max(lo[2], z0 - 0.05), min(hi[2], z1 + 0.1)
+        lo[2], hi[2] = max(lo[2], z0), min(hi[2], z1)
         return (lo, hi)
 
     def position_within_bounds(pose, bounds, *a, **k):

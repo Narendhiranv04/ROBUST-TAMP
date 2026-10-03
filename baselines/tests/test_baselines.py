@@ -42,13 +42,17 @@ def test_owl_domain_supports_and_sketch_search():
     obs = kitchen_obs()
     domain = OWLDomain(obs)
     assert domain.target(('place_inside', 'mug1', 'inside_box')) == 'inside_box'
-    assert domain.target(('place_inside', 'mug1', 'cupboard_shelf')) == 'cupboard_shelf'   # placement areas
+    assert domain.target(('place_inside', 'mug1', 'cupboard_shelf')) == 'cupboard_shelf'   # spaces
     assert domain.target(('place_ontop', 'mug1', 'table')) == 'table_center_area'   # parked on a named table area
-    assert domain.target(('place_ontop', 'mug1', 'inside_box')) == 'inside_box'
+    assert domain.target(('place_ontop', 'mug1', 'inside_box')) is None             # typed: a space is not a surface
+    assert domain.target(('place_inside', 'mug1', 'table_right_area')) is None      # typed: a surface is not a space
     assert domain.target(('place_inside', 'mug1', 'box_lid')) is None      # objects: only their top surface
     assert domain.target(('place_ontop', 'mug1', 'box_lid')) == 'box_lid_top'
-    assert ('pick', 'table') in domain.ground_actions()        # relaxed grounding over every entity
-    assert ('close', 'box_lid') not in domain.ground_actions()   # the executor cannot close the box
+    grounded = domain.ground_actions()
+    assert ('pick', 'table') not in grounded and ('pick', 'box_lid') not in grounded   # typed: movable objects only
+    assert ('place_inside', 'mug1', 'inside_box') in grounded and ('place_ontop', 'spam', 'box_lid_top') in grounded
+    assert ('place_ontop', 'mug1', 'inside_box') not in grounded
+    assert ('close', 'box_lid') not in grounded                  # the executor cannot close the box
     text = ("The mug goes in the box.\nPlan:\nopen(box_lid); open it\npick(mug1); grasp\n"
             "place_inside(mug1, inside_box); inside\nachieve_goal(mug1, inside_box); mug1 in the box")
     sketch, achieve, rejected = parse_sketch(text, set(domain.ground_actions()))
@@ -109,6 +113,14 @@ def test_owl_real_constraints_accept_valid_placements():
     far = ("def goal_check0() -> bool:\n    b = get_aabb_bounds(init_state, env, 'inside_box')\n"
            "    return position_within_bounds(spam.pose, b)")
     assert not evaluate([far], geo, names)[0]          # the spam is not in the box
+    # on top means touching the top (A.6): the same spam 15 cm above the shelf is not on it
+    lifted = RavenPose(0.48, 0.051, 1.432, 0, 0, 0)
+    geo.origin_offset('spam')                          # as observed, then pose and box move together
+    geo.boxes['spam'], geo.poses['spam'] = geo.box_at('spam', lifted), lifted
+    assert not evaluate([spam], geo, names)[0]
+    resting = RavenPose(0.48, 0.051, 1.282, 0, 0, 0)
+    geo.boxes['spam'], geo.poses['spam'] = geo.box_at('spam', resting), resting
+    assert evaluate([spam], geo, names)[0]
 
 
 def test_execution_failures_selects_failed_executions_only(tmp_path):

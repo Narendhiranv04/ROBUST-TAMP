@@ -108,10 +108,9 @@ def owl_tamp_responder(pipeline):
                 if a[0] == 'place':
                     return ('place_inside' if a[2] in spaces else 'place_ontop', a[1], a[2])
                 return a
-            # (on top of / inside chosen as a model might, regardless of the region's kind)
+            # (inside for a space, on top of for a surface, as the typed operators require)
             lines = [f"{o[0]}({', '.join(o[1:])}); {o[0]} as in the reference sequence"
                      for s in steps for o in map(owl_op, s)]
-            lines = [l.replace('place_inside(', 'place_ontop(', 1) if 'inside_grill' in l else l for l in lines]
             # as the model writes it: the plate object as the support, not its top region
             lines = [l.replace(', plate_top)', ', plate)') for l in lines]
             placed = sorted({a[1] for s in steps for a in s if a[0] == 'place'})
@@ -131,14 +130,11 @@ def owl_tamp_responder(pipeline):
                     f'    return position_within_bounds({op[1]}.pose, bounds)\n```')
         if not op or op[0] not in ('place_ontop', 'place_inside'):
             return '```python\ndef goal_check0() -> bool:\n    return True\n```'
-        # as the model does: the placed object's check, plus copied final-state checks of other objects
-        others = sorted({a[1] for s in _observed_steps(pipeline) for a in s if a[0] == 'place' and a[1] != op[1]})[:2]
-        extra = ''.join(f'```python\ndef goal_check{k + 1}() -> bool:\n    return {o}.pose.z < -100\n```\n'
-                        for k, o in enumerate(others))
+        helper = 'inside' if op[0] == 'place_inside' else 'ontop_of'
         return ('```python\ndef goal_check0() -> bool:\n'
-                f'    bounds = modify_pose_bounds_to_be_inside_object(init_state, env, init_bounds, {op[1]}.category, '
+                f'    bounds = modify_pose_bounds_to_be_{helper}_object(init_state, env, init_bounds, {op[1]}.category, '
                 f'{op[2]}.category)\n'
-                f'    return position_within_bounds({op[1]}.pose, bounds)\n```\n' + extra)
+                f'    return position_within_bounds({op[1]}.pose, bounds)\n```\n')
 
     return respond
 

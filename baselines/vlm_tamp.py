@@ -22,12 +22,36 @@ The method's own input, verbatim:
 
 The scene side: our articulated parts are lids, which in the authors' world model are joints of
 type door; our objects and regions are given the authors' categories (movable, food, surface,
-space, joint, door). A subgoal is refined by task-level search over pick / place / open / close
-from the observed state and executed by our executor (its PDDLStream pick/place with stable-pose,
-IK and motion samplers), where the authors' refinement is their PDDLStream domain. Following the
-study protocol, objects appear once the robot observes them (the authors' world model also names
-objects inside closed storage), and the model runs with its card sampling (the authors used
-GPT-4V at temperature 0.2 / 0.0, max_tokens 1000).
+space, joint, door), the semantic types from each object's benchmark category (CATEGORY_TYPES), as
+the authors' world model gives them.
+
+Refinement (the TAMP half; Algorithm 1): each subgoal is refined before anything of it is executed:
+(1) discretely, the shortest pick / place / open / close sequence that achieves it from the observed
+state, prerequisite actions included (bounded by the search's expansion budget, no depth cap); (2)
+geometrically, in the kitchen, every pick-place of that sequence by our planner -- the executor's
+PDDLStream refinement (grasp, IK and motion streams) run on the scene as the sequence predicts it
+(baselines.planning_model), with place poses from the scene's sampler (MAX_PLACE_SAMPLES tries per
+transfer). A subgoal whose refinement fails is a failed subgoal before execution; the bodies the robot
+collided with while planning (baselines.collisions) go into the reprompt in the authors' words
+(get_action_history_and_failure: "When trying to solve the previous problem in simulation. The
+robot has collided with these objects: [...]"). The refined poses are the ones executed. The grill
+executor plans each stage while it moves, so grill subgoals are refined discretely before execution
+and geometrically by the executor as it runs (its collisions also reach the reprompt).
+
+Adapted, and why:
+* picked(x) followed by the subgoal placing x run as one executor call (one refinement, one
+  execution), with each subgoal keeping its own result: our executor plans a pick together with its
+  place, and a pick and a place sent as separate calls take its weaker held-object paths. This
+  removes the observation between the two subgoals.
+* Object reduction (REDUCE-OBJECT) is disabled: every observed object is passed to each refinement
+  (our scenes have at most ~10 objects).
+* Objects appear once the robot observes them, by the study's protocol (the authors' world model
+  also names objects inside closed storage); hidden objects' identities are not given.
+* A place subgoal holds when perception sees the object in the target region; an object perception
+  no longer sees after its place counts only if the executor's post-place check confirmed it in the
+  target region.
+* The model runs with its card sampling (the authors used GPT-4V at temperature 0.2 / 0.0,
+  max_tokens 1000).
 """
 
 from __future__ import annotations
@@ -120,13 +144,23 @@ PREDS_RENAME = {
 PREDS_SKIPPED = ['pressed', 'stirred', 'chopped', 'stir', 'chop']
 
 MAX_REPROMPTS = 2        # ``len(self.agent_memory['replan_memory']) < 2``
+MAX_PLACE_SAMPLES = 5    # place poses tried per pick-place during a subgoal's geometric refinement
 N_ARMS = 'one arm'
 QUERY_CAMERA = 'front'   # the authors' query camera is "tilted downward" (world.cameras[1])
 SUBGOAL = re.compile(r"([a-z][a-z_-]*)\s*\(([^()]*)\)")
 # world.summarize_all_types(categories=extra_categories), in the authors' order
 CATEGORIES = ['movable', 'surface', 'space', 'joint', 'door', 'drawer',
               'food', 'utensil', 'condiment', 'appliance', 'region', 'button', 'knob']
-FOOD_TOKENS = ('meat', 'steak', 'chicken', 'spam', 'sugar', 'can_of_beans', 'mustard', 'crackers', 'tin', 'soup')
+# Semantic types as the authors' world model gives them, from each object's benchmark category
+# (evaluation.labeled_rules.object_category); every object is also movable, the plate also a surface.
+CATEGORY_TYPES = {'grocery': 'food', 'raw_meat': 'food', 'cooked_meat': 'food', 'mug': 'movable',
+                  'phone': 'movable', 'plate': 'movable'}
+
+
+def object_type(name: str) -> str:
+    from evaluation.labeled_rules import object_category
+
+    return CATEGORY_TYPES.get(object_category(name), 'movable')
 
 
 # --- the scene in the authors' world-model terms -------------------------------------------------
@@ -139,7 +173,7 @@ def categories(obs) -> Dict[str, List[str]]:
     spaces = space_regions(obs.regions)
     cats = {c: [] for c in CATEGORIES}
     cats['movable'] = list(obs.objects)
-    cats['food'] = [o for o in obs.objects if any(t in o for t in FOOD_TOKENS)]
+    cats['food'] = [o for o in obs.objects if object_type(o) == 'food']
     cats['space'] = spaces
     cats['surface'] = [r for r in obs.regions if r not in spaces] + [o for o in obs.objects if surface_region_of(o, obs)]
     cats['joint'] = list(obs.lids)
@@ -276,6 +310,10 @@ def subgoal_test(subgoal: Tuple[str, ...]):
 class VLMTAMPPipeline(BaselinePipeline):
     baseline_name = 'vlm_tamp'
 
+    @property
+    def scene(self) -> str:
+        return 'grill' if (self.config.task_family or '').lower() == 'grill' else 'kitchen'
+
     def query_subgoals(self, goal_text: str, obs, history: str) -> Tuple[List[Tuple[str, ...]], dict]:
         chat = self.chat()
         object_names = list(obs.objects) + list(obs.regions) + list(obs.lids)
@@ -296,12 +334,57 @@ class VLMTAMPPipeline(BaselinePipeline):
                           'observation': obs.to_dict()}
 
     def refine(self, obs, test) -> Optional[List[Tuple[str, ...]]]:
+        """The subgoal's discrete refinement: the shortest pick / place / open / close sequence from the
+        observed state (prerequisite actions included), bounded by the search's expansion budget."""
         domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
-        return domain.search(obs.symbolic(), test, max_depth=8)
+        return domain.search(obs.symbolic(), test, max_depth=10 ** 6)
 
-    def execute_subgoals(self, subgoals, round_trace: dict, succeeded: List[str]) -> Optional[str]:
-        """Achieve the subgoals in order (refine, execute, check); the failed subgoal, or None."""
-        failed = None
+    def refine_geometry(self, obs, actions) -> Tuple[bool, list, List[str], Optional[str]]:
+        """The subgoal's geometric refinement before anything is executed (kitchen): every pick-place
+        of the refinement is refined by our planner (PDDLStream grasp / IK / motion) on the scene as the
+        refinement predicts it, with place poses from the scene's sampler (MAX_PLACE_SAMPLES tries).
+        Returns (feasible, (object, region, pose) to execute, collided bodies, failed transfer)."""
+        from baselines.planning_model import planning_model, predict, refine_transfer, sample_place_pose
+
+        if self.scene != 'kitchen':
+            return True, [], [], None
+        entries, collided = [], []
+        predicted: Dict[str, list] = {}
+        opened = [lid for lid, is_open in obs.lids.items() if is_open]
+        with planning_model(self.env):
+            i = 0
+            while i < len(actions):
+                a = actions[i]
+                if a[0] == 'open':
+                    opened.append(a[1])
+                elif a[0] == 'pick' and i + 1 < len(actions) and actions[i + 1][0] == 'place' and actions[i + 1][1] == a[1]:
+                    obj, region = a[1], actions[i + 1][2]
+                    predict(self.env, predicted, opened)
+                    feasible, pose = False, None
+                    for _ in range(MAX_PLACE_SAMPLES):
+                        pose = sample_place_pose(self.env, obj, region)
+                        if pose is None:
+                            break
+                        feasible, _message, bodies = refine_transfer(self.env, obj, region, pose)
+                        collided += [b for b in bodies if b not in collided]
+                        if feasible:
+                            break
+                    if not feasible:
+                        return False, entries, collided, f'{action_text(a)}, {action_text(actions[i + 1])}'
+                    predicted[obj] = pose
+                    entries.append((obj, region, pose))
+                    i += 2
+                    continue
+                i += 1
+        return True, entries, collided, None
+
+    def execute_subgoals(self, subgoals, round_trace: dict, succeeded: List[str]) -> Tuple[Optional[str], List[str]]:
+        """Achieve the subgoals in order: refine (discrete, then geometric), execute, check. Returns the
+        failed subgoal (or None) and the bodies the robot collided with while planning / executing it."""
+        from baselines.collisions import collision_bodies, recorded_collisions
+        from baselines.planning_model import forced_placements
+
+        failed, collided = None, []
         index = 0
         while index < len(subgoals):
             subgoal = subgoals[index]
@@ -332,11 +415,24 @@ class VLMTAMPPipeline(BaselinePipeline):
                 for a in actions:
                     state = SymbolicDomain.apply(state, a)
                 domain = SymbolicDomain(obs.objects, obs.regions, obs.lids)
-                more = domain.search(state, subgoal_test(nxt), max_depth=8)
+                more = domain.search(state, subgoal_test(nxt), max_depth=10 ** 6)
                 if more:
                     pair = (nxt, more)
+            plan = actions + (pair[1] if pair else [])
+            feasible, entries, planning_collisions, failed_transfer = self.refine_geometry(obs, plan)
+            if not feasible:
+                # the TAMP refinement failed before execution: the subgoal (the first of a joint pair)
+                failed = subgoal_text(subgoal)
+                collided = planning_collisions
+                round_trace['subgoal_results'].append({
+                    'subgoal': failed, 'refined': [action_text(a) for a in plan], 'executed': False,
+                    'result': 'refinement failed', 'failed_transfer': failed_transfer, 'collided': collided})
+                break
             done_before = len(getattr(self.executor, 'completed_primitive_actions', []) or [])
-            outcome = self.execute(actions + (pair[1] if pair else []))
+            with recorded_collisions() as hits, forced_placements(self.env, entries,
+                                                                  self._baseline_trace.setdefault('forced_placements', [])):
+                outcome = self.execute(plan)
+            execution_collisions = collision_bodies(hits, exclude=[a[1] for a in plan if a[0] == 'pick'])
             done = len(getattr(self.executor, 'completed_primitive_actions', []) or []) - done_before
             after = observe(self)
             steps = [(subgoal, actions, test)] + ([(pair[0], pair[1], subgoal_test(pair[0]))] if pair else [])
@@ -347,23 +443,30 @@ class VLMTAMPPipeline(BaselinePipeline):
                 last = k == len(steps) - 1
                 if last:
                     holds = test_k(after.symbolic())
+                    # the target relation must be observed; an object perception no longer sees after
+                    # its place counts only if the executor's post-place check confirmed it in the
+                    # target region (outcome.success includes that check)
                     invisible = goal_k[0] in ('in', 'on') and goal_k[1] not in after.objects
                     ok = bool(outcome.success) and executed_k and (holds or invisible)
+                    confirmed_by = 'perception' if holds else ('executor_post_place_check' if ok else None)
                 else:
                     holds = executed_k        # the pick completed (the place that follows then released it)
                     ok = executed_k
+                    confirmed_by = 'executor' if ok else None
                 round_trace['subgoal_results'].append({
                     'subgoal': subgoal_text(goal_k), 'refined': [action_text(a) for a in actions_k],
-                    'executed': executed_k, 'holds_after': holds, 'joint_execution': pair is not None,
-                    'failure': None if ok else outcome.error_message, 'result': 'ok' if ok else 'failed'})
+                    'executed': executed_k, 'holds_after': holds, 'confirmed_by': confirmed_by,
+                    'joint_execution': pair is not None, 'failure': None if ok else outcome.error_message,
+                    'result': 'ok' if ok else 'failed'})
                 if not ok:
                     failed = subgoal_text(goal_k)
+                    collided = planning_collisions + [b for b in execution_collisions if b not in planning_collisions]
                     break
                 succeeded.append(subgoal_text(goal_k))
             if failed is not None:
                 break
             index += len(steps)
-        return failed
+        return failed, collided
 
     def run_baseline(self, goal_text: str) -> Optional[str]:
         trace = self._baseline_trace
@@ -375,7 +478,8 @@ class VLMTAMPPipeline(BaselinePipeline):
             subgoals, round_trace = self.query_subgoals(goal_text, obs, history)
             round_trace['subgoal_results'] = []
             trace['rounds'].append(round_trace)
-            failed = self.execute_subgoals(subgoals, round_trace, succeeded)
+            failed, collided = self.execute_subgoals(subgoals, round_trace, succeeded)
+            round_trace['collision_bodies'] = collided
             self.record_cycle(round_index > 0, [a for r in round_trace['subgoal_results'] for a in r.get('refined', [])],
                               round_trace['formal'], 0.0, failed is None,
                               error=None if failed is None else f'subgoal {failed} failed')
@@ -391,6 +495,9 @@ class VLMTAMPPipeline(BaselinePipeline):
                 actions += f'\nCurrently, the robot is holding some objects. The left hand is holding {holding}. '
             failure = (f'subgoals {failed}. So please do not list this subgoals as the first subgoals to achieve '
                        f'in your answer.')
+            if collided:
+                failure += (f'\nWhen trying to solve the previous problem in simulation. '
+                            f'The robot has collided with these objects: {collided}')
             history = INCLUDE_HISTORY.format(actions=actions, failure=failure)
         return 'unreachable'
 
