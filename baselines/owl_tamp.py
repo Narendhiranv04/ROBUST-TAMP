@@ -430,6 +430,10 @@ class OWLTAMPPipeline(BaselinePipeline):
         if (self.config.task_family or '').lower() == 'grill':
             # the grill env keys its regions by the scene names the grill executor also uses
             region = GRILL_SAMPLER_REGIONS.get(region, region)
+        else:
+            from baselines.planning_model import sampler_region
+
+            region = sampler_region(region)        # the name the kitchen executor samples under
         try:
             scene_obj = self.env.get_object(scene_object_for_object(obj, self.env))
             return [float(v) for v in self.env.sample_stable_pose(scene_obj, region)]

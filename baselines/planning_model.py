@@ -229,14 +229,23 @@ def forced_placements(env, entries: Sequence[Tuple[str, str, Sequence[float]]], 
             grill_gt._region_slot_pose = original_slot
 
 
+def sampler_region(region: str) -> str:
+    """The region name the kitchen executor passes to the placement sampler (its scene name, e.g.
+    cupboard_boundary): the sampler seeds its k-th draw for an (object, region name) pair from that
+    name, so sampling under the same name draws the executor's own samples."""
+    from llm_pipeline.region_aliases import normalize_region_name, scene_object_for_region
+
+    return scene_object_for_region(normalize_region_name(region))
+
+
 def sample_place_pose(env, obj: str, region: str) -> Optional[list]:
-    """One pose from the scene's own placement sampler (on the current, possibly predicted scene)."""
+    """One pose from the scene's own placement sampler (on the current, possibly predicted scene),
+    drawn as the executor draws it (``sampler_region``)."""
     from llm_pipeline.object_aliases import scene_object_for_object
-    from llm_pipeline.region_aliases import normalize_region_name
 
     try:
         body = env.get_object(scene_object_for_object(obj, env))
-        return [float(v) for v in env.sample_stable_pose(body, normalize_region_name(region))]
+        return [float(v) for v in env.sample_stable_pose(body, sampler_region(region))]
     except Exception:
         return None
 
