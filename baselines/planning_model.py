@@ -18,6 +18,8 @@ it moves (its ``prepare`` only records the start pose), so grill transfers are n
 from __future__ import annotations
 
 import contextlib
+
+import numpy as np
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from baselines.collisions import collision_bodies, recorded_collisions
@@ -53,10 +55,29 @@ def _shapes(env):
     return out
 
 
+JOINT_STATE_FIELDS = ('target_pos', 'target_vel', 'lock_q', 'ref', 'mode', 'ctrl', 'motor', 'vlock', 'kp', 'kvd')
+MUJOCO_STATE_FIELDS = ('qpos', 'qvel', 'act', 'ctrl', 'qacc_warmstart', 'mocap_pos', 'mocap_quat', 'qfrc_applied',
+                       'xfrc_applied')
+
+
 @contextlib.contextmanager
 def planning_model(env):
-    """The trial's scene, restored on exit; no simulation step is taken inside."""
+    """The trial's scene, restored exactly on exit; no simulation step is taken inside.
+
+    The snapshot is the simulator's state (MuJoCo's qpos, qvel, controls, warm start, applied forces
+    and time) and every joint's control state in the shim (targets, lock position, mode, gains), so the
+    arm and the gripper's fingers go back to exactly where they were and keep the same targets; shape
+    dynamic flags the planning changed are set back. Nothing else is touched."""
+    import mujoco
+    from pyrep.backend import sim
+
     gt = _gt_module()
+    world = sim._w()
+    m, d = world.m, world.d
+    saved = {k: getattr(d, k).copy() for k in MUJOCO_STATE_FIELDS}
+    saved_time = float(d.time)
+    joints = {h: {k: getattr(o.jstate, k) for k in JOINT_STATE_FIELDS}
+              for h, o in world.objs.items() if getattr(o, 'jstate', None) is not None}
     bodies = _shapes(env)
     poses = {n: list(o.get_pose()) for n, o in bodies.items()}
     dynamic = {}
@@ -67,15 +88,6 @@ def planning_model(env):
             pass
     robot = env.robot
     q = list(robot.get_joint_positions())
-    try:
-        q_target = list(robot.get_joint_target_positions())
-    except Exception:
-        q_target = None
-    gripper = getattr(env, 'gripper', None) or getattr(robot, 'gripper', None)
-    try:
-        g = list(gripper.get_joint_positions()) if gripper is not None else None
-    except Exception:
-        g = None
     target_region = getattr(env, 'target_region', None)
     original_step = getattr(gt, 'step_and_record', None)
     if original_step is not None:
@@ -85,27 +97,20 @@ def planning_model(env):
     finally:
         if original_step is not None:
             gt.step_and_record = original_step
-        # only what changed is restored: resetting an untouched resting body (its pose with dynamics,
-        # or its dynamic flag, which resets the dynamic object) changes how it settles afterwards
         for n, o in bodies.items():
             try:
-                if max(abs(a - b) for a, b in zip(o.get_pose(), poses[n])) > 1e-9:
-                    o.set_pose(poses[n], reset_dynamics=True)
                 if n in dynamic and bool(o.is_dynamic()) != dynamic[n]:
                     o.set_dynamic(dynamic[n])
             except Exception:
                 pass
-        robot.set_joint_positions(q)
-        if q_target is not None:
-            try:
-                robot.set_joint_target_positions(q_target)
-            except Exception:
-                pass
-        if g is not None:
-            try:
-                gripper.set_joint_positions(g)
-            except Exception:
-                pass
+        for k, v in saved.items():
+            getattr(d, k)[...] = v
+        d.time = saved_time
+        for h, fields in joints.items():
+            for k, v in fields.items():
+                setattr(world.objs[h].jstate, k, v)
+        mujoco.mj_forward(m, d)
+        world._dirty = True
         try:
             env.target_region = target_region
         except Exception:
@@ -119,6 +124,7 @@ def planning_model(env):
                 pass
         try:
             deviation = max(deviation, max(abs(a - b) for a, b in zip(robot.get_joint_positions(), q)))
+            deviation = max(deviation, float(np.abs(d.qpos - saved['qpos']).max()))
         except Exception:
             pass
         RESTORE_DEVIATIONS.append(deviation)
