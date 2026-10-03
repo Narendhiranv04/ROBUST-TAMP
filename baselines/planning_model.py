@@ -85,10 +85,13 @@ def planning_model(env):
     finally:
         if original_step is not None:
             gt.step_and_record = original_step
+        # only what changed is restored: resetting an untouched resting body (its pose with dynamics,
+        # or its dynamic flag, which resets the dynamic object) changes how it settles afterwards
         for n, o in bodies.items():
             try:
-                o.set_pose(poses[n], reset_dynamics=True)
-                if n in dynamic:
+                if max(abs(a - b) for a, b in zip(o.get_pose(), poses[n])) > 1e-9:
+                    o.set_pose(poses[n], reset_dynamics=True)
+                if n in dynamic and bool(o.is_dynamic()) != dynamic[n]:
                     o.set_dynamic(dynamic[n])
             except Exception:
                 pass
