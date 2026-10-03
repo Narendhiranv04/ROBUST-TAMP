@@ -106,6 +106,8 @@ def test_resolve_prompt_parsing_and_rule_based_agent():
     assert from_func_string('Pick(4, 2)', ids) == pick('phone', 'inside_box')
     assert from_func_string('Open(2)', ids).action_type == ActionType.Open
     assert from_func_string('Put(3, 2)', ids) is None and from_func_string('Pick(99, 2)', ids) is None
+    assert from_func_string('Place(3,2)', ids) == place('mug1', 'inside_box')      # spacing tolerated
+    assert from_func_string(' Open( 2 ) ', ids).action_type == ActionType.Open
     assert parse_action_seq('{"steps": [], "final_answer": [{"action": "Pick(4, 2)"}]}') == ['Pick(4, 2)']
     assert parse_action_seq('{"final_answer": []}') is None and parse_action_seq('not json') is None
 
@@ -242,3 +244,11 @@ def test_resolve_calls_carry_the_latest_image():
     # the first resolve is planned from the initial observation; later calls see the updated scene
     assert images[0] == {'mug1': 'table', 'phone': 'box_lid_top'}
     assert pipeline.obs.objects == world.observation().objects
+
+
+def test_resolve_schema_requires_the_fields_the_authors_validator_requires():
+    from baselines.epog import RESOLVE_SCHEMA
+
+    schema = RESOLVE_SCHEMA['schema']['properties']
+    assert schema['steps']['items']['required'] == ['explanation', 'output']
+    assert schema['final_answer']['items']['required'] == ['action']

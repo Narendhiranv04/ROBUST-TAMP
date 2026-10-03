@@ -362,7 +362,11 @@ def resolve_user_message(error: MotionError, ids: NodeIds) -> str:
 
 
 def _step_schema():
+    # 'required' added: the authors' pydantic Step requires both fields, but their JSON schema does not
+    # say so, and constrained decoding then lets a model leave out the explanation -- an answer their
+    # own validator rejects (a retry that uses the budget; 161 of 808 fix answers in our first run)
     return {'type': 'object', 'properties': {'explanation': {'type': 'string'}, 'output': {'type': 'string'}},
+            'required': ['explanation', 'output'],
             'description': 'Step-by-step analysis of the action.', 'additionalProperties': False}
 
 
@@ -370,7 +374,7 @@ RESOLVE_SCHEMA = {'name': 'probability_analysis', 'schema': {
     'strict': False, 'type': 'object',
     'properties': {'steps': {'type': 'array', 'items': _step_schema()},
                    'final_answer': {'type': 'array', 'items': {
-                       'type': 'object', 'properties': {'action': {'type': 'string'}},
+                       'type': 'object', 'properties': {'action': {'type': 'string'}}, 'required': ['action'],
                        'description': 'Action to resolve the error.', 'additionalProperties': False},
                        'description': 'action sequence to resolve the error.'}},
     'additionalProperties': False, 'required': ['steps', 'final_answer']}}
@@ -393,9 +397,12 @@ def parse_action_seq(text: str) -> Optional[List[str]]:
 
 
 def from_func_string(text: str, ids: NodeIds) -> Optional[Action]:
-    """``Action.from_func_string`` (the authors' patterns), node ids mapped back to names."""
-    place, pick = re.match(r'Place\((\d+), (\d+)\)', text), re.match(r'Pick\((\d+), (\d+)\)', text)
-    opened, closed = re.match(r'Open\((\d+)\)', text), re.match(r'Close\((\d+)\)', text)
+    """``Action.from_func_string`` (the authors' patterns, whitespace inside the parentheses allowed:
+    the authors' patterns need exactly "Place(1, 2)" and dropped "Place(1,2)"), node ids mapped back
+    to names."""
+    text = text.strip()
+    place, pick = re.match(r'Place\(\s*(\d+)\s*,\s*(\d+)\s*\)', text), re.match(r'Pick\(\s*(\d+)\s*,\s*(\d+)\s*\)', text)
+    opened, closed = re.match(r'Open\(\s*(\d+)\s*\)', text), re.match(r'Close\(\s*(\d+)\s*\)', text)
     if place or pick:
         m = place or pick
         child, parent = ids.name(int(m.group(1))), ids.name(int(m.group(2)))
