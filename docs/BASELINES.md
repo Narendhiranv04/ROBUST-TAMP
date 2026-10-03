@@ -8,7 +8,7 @@ The baselines are **re-implemented** as planner policies inside our pipeline: th
 | OWL-TAMP | Kumar et al., "Open-World Task and Motion Planning via Vision-Language Model Inferred Constraints" | `baselines/owl_tamp.py` | `--baseline owl_tamp` |
 | LLM-Planner | Song et al., ICCV 2023 | `baselines/llm_planner.py` | `--baseline llm_planner` (`llm_planner_refprompt`: the reference prompt verbatim) |
 | Inner Monologue | Huang et al., CoRL 2022 | `baselines/inner_monologue.py` | `--baseline inner_monologue` |
-| EPoG | Yang et al., ICRA 2026 (arXiv 2602.04419) | not yet | |
+| EPoG | Yang et al., ICRA 2026 (arXiv 2602.04419) | `baselines/epog.py` | `--baseline epog` |
 
 `python -m baselines.run_baseline_trial --baseline <name> ...` runs one trial; `server/run_baseline_comparison.sh "<names>"` runs every variant x seed. With `--mock`, a trial gets ground-truth answers instead of the model (a plumbing test, not a result). Every baseline runs with our replanning components off (memory, IF rule, discovery trigger, corrective blocks, parallel planning; `run_baseline_trial.BASELINE_FLAGS`), zero-shot (no in-context examples), with the selected planner model (`qwen3-vl-8b-thinking`, card sampling, 24,576 output tokens) and the same camera image our planner receives.
 
@@ -59,7 +59,32 @@ The baselines are **re-implemented** as planner policies inside our pipeline: th
 
 ## EPoG
 
-Next, after the LLM-Planner and Inner Monologue runs. The plan for the adaptation: a goal graph from the language goal and the visible objects only (revealed objects added on observation, "lost node" estimation off), EPoG's global planner over our scene graph without walk actions, a global replan on contradicting observations or new objects, our executor in place of `FakeMotionPlanner` with our failures mapped to its `MotionErrorType`, and its resolve-action prompt (`action_replaner.py`) with our model. Grill gets only the final-state goal: EPoG's goal graph cannot express the cooking procedure.
+**Original:** Yang et al., "EPoG: Integrated Exploration and Sequential Manipulation on Scene Graph with LLM-based Situated Replanning", ICRA 2026 (arXiv 2602.04419). **Reference code:** https://github.com/buaa-colalab/EPoG, Apache-2.0, commit `1e7ed52` (local clone in `external/EPoG`): `epog/algorithm/epog/EPoG.py`, `planner_dynamic.py`, `problem_dynamic.py`, `fake_simulator.py`, `llm_prompt/action_replaner.py`, and the POG planner in `pog/planning/` (`ged.py`, `action.py`, `searchNode.py`, `planner.py`). Implemented in `baselines/epog.py`.
+
+**Kept:**
+- **Scene graphs.** A belief graph and a goal (task) graph of parent -> child edges: an object on or in a location, or on another object (the meat on the plate).
+- **Global planner.** EPoG's graph-edit sequence between belief and goal (`ged_seq`: a delete/add edge pair for each object whose parent differs, an add for an object in the hand); the pick-place action set and partial-order constraints (`Planner.pick_place_constraints`: a pick before its place, an object already in the hand placed first); the POG search (`SearchNode` / `Searcher`: depth-first over the unordered actions under the constraints, a pick followed by a place, at most 10,000 expansions). A unit test checks the edit pairs against networkx's optimal edit path, which the authors' `ged` uses, on random scene trees.
+- **Local planner.** Each global step is simulated on the belief graph with `FakeMotionPlanner.simulate_step`'s checks, in its order (accessibility, collision, stability, block). A failed check builds the authors' `MotionError` (reason text, error type, involved nodes, observation, parking place), and the LLM resolve call returns actions that are simulated recursively.
+- **Resolve call.** `get_resolve_action_seq`: the authors' system and user messages verbatim (numeric node ids, the worked example), the same JSON schema as `response_format` (`steps`, `final_answer`), retry on invalid output, and `Action.from_func_string` parsing.
+- **Global replanning.** After every executed step the observation is compared with the belief graph (`update_belief_graph`). An object seen where the belief does not have it, or an object not seen before, sets the replan flag, and the global plan is recomputed. As in the authors' main loop, the rest of the current local sequence is still executed before the replan.
+- **Obstacles.** Objects outside the goal graph are EPoG's obstacle ("virtual") nodes. The graph edit ignores them, so once moved aside they stay where they were put.
+
+**Adapted, and why:**
+- **Goal graph from the language goal, visible objects only.** EPoG's tasks are given as goal graphs, and our variants give a sentence. One query of our planner model (`GOAL_PROMPT`, JSON schema of EPoG's `Relationship` triples) turns the goal and the visible objects into goal relations. Objects observed later get theirs from the same query, as they appear; hidden objects are never given. Relations naming unknown objects or locations are dropped (logged), and `plate_top` is the plate node.
+- **No "lost node" estimation.** EPoG asks the LLM for the most likely room and receptacle of goal objects not yet seen. Here the goal graph names only observed objects, our scenes have one room, and where a hidden object is is exactly what the robot has to discover. No walk actions, exploration actions or visited maps: the robot is a fixed arm.
+- **The checks read our facts** instead of the authors' scene annotations:
+  - AccessError: the source or target is a closed container (a lid's inside region; involved: the container).
+  - CollisionError: the target region's placement area is occupied, from the system geometry our IF rule uses (an object's footprint intersects it; involved: the occupants). Objects whose goal is that region do not count.
+  - StabilityError: objects on the object being picked (the plate).
+  - BlockError: objects on a lid's top surface block opening it. The lid is the grasped part; this is our pre-action check `box_lid_obstructed`.
+  - The steps are then executed by our executor with its pre-action checks. A pre-action failure of one of these kinds is caught by the same checks once the belief is updated; any other execution failure contradicts the belief and triggers a global replan (EPoG's simulator has no execution failures).
+- **Resolution effects carry over.** The authors plan a resolution on a copy of the graph and continue the remaining actions on the unchanged graph. With a nested error, such as the resolution's own open blocked by an object on the lid, their version simulates the rest of the resolution with the lid still closed and repeats the access error until the budget runs out. Here the resolution's effects carry over. Their simulator never blocks an open, so the case does not arise in their domain.
+- **Model and parking place.** The resolve call goes to our planner model through the OpenAI-compatible vLLM endpoint, with the same `response_format`. The parking place is the staging area: `table_center_area` in the kitchen and `grill_side_area` (the grill's prep area) for the grill.
+- **Budget.** Resolve calls (including the authors' retries on invalid output) are capped by `max_replans` (10), and so are global replans. The authors have no cap.
+- **Action order.** The authors order the action set as `list(set(actions))`, an arbitrary order that changes with the interpreter's hash seed. Here it is a shuffle seeded by the trial seed. Without navigation every plan has the same cost, so the first plan found is used (`find_min_path` has nothing to choose between).
+- **Execution.** A pick and the place of the same object are simulated one at a time and executed as one executor call. `Close` of the kitchen box is skipped: our executor cannot close it, and no kitchen goal needs it closed.
+- **Grill.** The goal graph is the final state only: the meats on the plate, the plate in the serving area. EPoG's goal graph cannot express the cooking procedure (raw meat into the grill, close, reopen). No workaround is added, so EPoG is not expected to complete grill tasks that need cooking.
+- **Mock trials** answer the goal query with the variant's ground-truth final regions. Resolves are answered as the authors' prompt example reasons (the held object parked first); `rule_based_replanner` is kept as `rule_based_resolution`, but it ignores the gripper, which the authors' simulator never checks.
 
 ## VLM-TAMP and OWL-TAMP: history
 

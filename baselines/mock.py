@@ -8,6 +8,7 @@ only after they have been seen. Mock trials are plumbing tests, not results.
 
 from __future__ import annotations
 
+import json
 from typing import List, Tuple
 
 from baselines.common import observe, parse_action_text
@@ -167,6 +168,29 @@ def inner_monologue_responder(pipeline):
     return respond
 
 
+def epog_responder(pipeline):
+    """Goal relations: each observed object's last GT placement; resolve: as the authors' prompt example reasons."""
+    from baselines.epog import SURFACE_OBJECT, example_resolution
+
+    def respond(purpose: str, turns) -> str:
+        if purpose == 'epog_resolve':
+            actions = example_resolution(pipeline._last_motion_error, pipeline.ids)
+            return json.dumps({'steps': [{'explanation': 'rule-based', 'output': a} for a in actions],
+                               'final_answer': [{'action': a} for a in actions]})
+        prompt = turns[-1][1]
+        wanted = prompt.rsplit('child is one of these objects: ', 1)[1].split(', relationType', 1)[0].split(', ')
+        final = {}
+        for a in _remaining_gt(pipeline):
+            if a[0] == 'place':
+                final[a[1]] = planner_region_name(a[2])
+        relations = [{'children': o, 'relationType': 'on', 'parent': SURFACE_OBJECT.get(final[o], final[o])}
+                     for o in wanted if o in final]
+        return json.dumps({'relations': relations})
+
+    return respond
+
+
 RESPONDERS = {'vlm_tamp': vlm_tamp_responder, 'owl_tamp': owl_tamp_responder,
               'llm_planner': llm_planner_responder,
-              'llm_planner_refprompt': llm_planner_responder, 'inner_monologue': inner_monologue_responder}
+              'llm_planner_refprompt': llm_planner_responder, 'inner_monologue': inner_monologue_responder,
+              'epog': epog_responder}

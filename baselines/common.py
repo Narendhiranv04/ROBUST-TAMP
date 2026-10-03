@@ -263,8 +263,10 @@ class ModelChat:
         png = base64.b64decode(b64)
         return b64, png, hashlib.sha256(png).hexdigest()
 
-    def complete(self, turns: Sequence[Tuple[str, str]], image=None, purpose: str = '', system: str = '') -> dict:
-        """``turns``: [(role, text)], the last one a user turn; the image goes with the first user turn."""
+    def complete(self, turns: Sequence[Tuple[str, str]], image=None, purpose: str = '', system: str = '',
+                 response_format: Optional[dict] = None) -> dict:
+        """``turns``: [(role, text)], the last one a user turn; the image goes with the first user turn.
+        ``response_format``: an OpenAI response format (JSON schema), for a baseline whose method sets one."""
         planner = self.planner
         text_only = getattr(planner, 'model_type', 'vlm') == 'llm'
         image_b64 = png = sha = None
@@ -287,13 +289,13 @@ class ModelChat:
                    'completion_tokens': None, 'exchange': {'mock': True, 'purpose': purpose}, 'image_png': png,
                    'sampling_preset': None, 'settings_fingerprint': None}
         else:
-            out = self._post(messages, png, sha)
+            out = self._post(messages, png, sha, response_format)
         latency = time.monotonic() - started
         record = self._log(purpose, system, turns, out, latency, image_present=png is not None)
         self.calls.append(record)
         return out
 
-    def _post(self, messages, png, sha) -> dict:
+    def _post(self, messages, png, sha, response_format=None) -> dict:
         import requests
 
         planner = self.planner
@@ -308,6 +310,8 @@ class ModelChat:
                 **dict(planner.sampling_presets.get(preset) or {})}
         if planner.chat_template_kwargs:
             body['chat_template_kwargs'] = dict(planner.chat_template_kwargs)
+        if response_format is not None:
+            body['response_format'] = response_format
         started = time.monotonic()
         try:
             response = requests.post(f'{planner.server_url}/v1/chat/completions', json=body,

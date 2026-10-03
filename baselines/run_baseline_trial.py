@@ -58,9 +58,15 @@ def _inner_monologue():
     return InnerMonologuePipeline
 
 
+def _epog():
+    from baselines.epog import EPoGPipeline
+    return EPoGPipeline
+
+
 # baseline name (--baseline) -> its pipeline class
 PIPELINES = {'vlm_tamp': _vlm_tamp, 'owl_tamp': _owl_tamp, 'llm_planner': _llm_planner,
-             'llm_planner_refprompt': _llm_planner_refprompt, 'inner_monologue': _inner_monologue}
+             'llm_planner_refprompt': _llm_planner_refprompt, 'inner_monologue': _inner_monologue,
+             'epog': _epog}
 
 
 def pipeline_class(baseline: str, mock: bool, gt_exec: bool = False):
