@@ -200,3 +200,24 @@ def test_epog_resolve_calls_are_capped_by_the_budget():
     reason = pipeline.run_baseline('put the mug in the box')
     assert 'replan budget exhausted' in reason and pipeline.termination_reason == 'replan_budget_exhausted'
     assert sum(1 for p, _ in prompts if p == 'epog_resolve') == 3
+
+
+def test_unresolved_regions_hang_off_the_root_and_are_still_planned():
+    from baselines.epog import ROOT, graph_from_observation
+
+    obs = Observation(objects={'mug1': None, 'mug2': 'table'}, lids={'box_lid': True}, holding=None,
+                      regions=['table', 'inside_box'])
+    belief = graph_from_observation(obs, {})
+    assert belief.parent == {'mug1': ROOT, 'mug2': 'table'}
+    assert ged_seq(belief, SceneGraph(parent={'mug1': 'inside_box'})) == [((ROOT, 'mug1'), ('inside_box', 'mug1'))]
+
+
+def test_resolve_calls_carry_the_latest_image():
+    world = EPoGWorld({'mug1': 'table', 'spam': 'box_lid_top'})
+    pipeline, prompts = make_epog(world, {'mug1': 'inside_box'})
+    images = []
+    pipeline.query_image = lambda obs: images.append(dict(obs.objects)) or None
+    assert pipeline.run_baseline('put the mug in the box') is None
+    # the first resolve is planned from the initial observation; later calls see the updated scene
+    assert images[0] == {'mug1': 'table', 'spam': 'box_lid_top'}
+    assert pipeline.obs.objects == world.observation().objects

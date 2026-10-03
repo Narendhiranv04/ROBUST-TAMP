@@ -149,11 +149,17 @@ def node_of_region(region: Optional[str]) -> Optional[str]:
     return SURFACE_OBJECT.get(region, region) if region else None
 
 
+def object_parent(region: Optional[str]) -> str:
+    """An object's parent node; an object whose region perception does not resolve (set down
+    between two regions) hangs off the root, as every node of the authors' graphs does."""
+    return node_of_region(region) or ROOT
+
+
 def graph_from_observation(obs, overlaps: Dict[str, Sequence[str]]) -> SceneGraph:
     g = SceneGraph()
     for obj, region in obs.objects.items():
-        if obj != obs.holding and region:
-            g.parent[obj] = node_of_region(region)
+        if obj != obs.holding:
+            g.parent[obj] = object_parent(region)
     g.hand = obs.holding
     g.closed = {c for c, lid in CONTAINER_LID.items() if lid in obs.lids and not obs.lids[lid]}
     g.overlaps = {o: tuple(v) for o, v in overlaps.items()}
@@ -591,8 +597,8 @@ class EPoGPipeline(StepLoopPipeline):
                     flag = obj in self.seen or flag
                 self.belief.parent.pop(obj, None)
                 continue
-            parent = node_of_region(region)
-            if parent and self.belief.parent.get(obj) != parent:
+            parent = object_parent(region)
+            if self.belief.parent.get(obj) != parent:
                 flag = flag or obj in self.seen
                 self.belief.parent[obj] = parent
         if self.belief.hand and self.belief.hand != obs.holding:
@@ -605,6 +611,7 @@ class EPoGPipeline(StepLoopPipeline):
             self.seen.update(new)
             self.goal.parent.update(self.ground_goal(obs, new))
             flag = True
+        self.obs = obs
         return obs, flag
 
     def placement_overlaps(self, obj: str) -> List[str]:
@@ -641,7 +648,7 @@ class EPoGPipeline(StepLoopPipeline):
         trace.update({'goal_queries': [], 'global_plans': [], 'resolves': [], 'steps': [], 'max_replans': self.budget})
         self.goal_text, self.ids, self.resolve_calls, self.global_replans = goal_text, NodeIds(), 0, 0
         self.rng = random.Random(int(self.config.seed or 0))
-        obs = self.observe_scene()
+        obs = self.obs = self.observe_scene()
         scene = 'grill' if any('grill' in r for r in obs.regions) else 'kitchen'
         self.parking = PARKING[scene]
         for region in [ROOT] + list(obs.regions):
@@ -670,7 +677,7 @@ class EPoGPipeline(StepLoopPipeline):
                 for obj in self.seen:
                     self.ids[obj]
                 self.local_action_seq = []
-                self.local_plan(self.belief.copy(), pair, obs)
+                self.local_plan(self.belief.copy(), pair, self.obs)      # the latest observation
                 flag, failed = self.roll_out(self.local_action_seq)
                 self.record_cycle(self.global_replans > 0, [a.render(self.ids) for a in self.local_action_seq], '',
                                   0.0, failed is None, error=(failed or {}).get('failure'))
