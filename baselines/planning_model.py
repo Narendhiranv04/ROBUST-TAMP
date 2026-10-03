@@ -55,6 +55,20 @@ def _shapes(env):
     return out
 
 
+OBJECT_STATE_FIELDS = ('mode', 'follow_rel', 'hinge_rel', 'static', 'respondable', 'resp_mask', 'parent')
+
+
+def _copied(value):
+    """A copy deep enough for the shim's state (arrays, dicts of arrays, scalars)."""
+    import copy
+
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    return copy.deepcopy(value)
+
+
 JOINT_STATE_FIELDS = ('target_pos', 'target_vel', 'lock_q', 'ref', 'mode', 'ctrl', 'motor', 'vlock', 'kp', 'kvd')
 MUJOCO_STATE_FIELDS = ('qpos', 'qvel', 'act', 'ctrl', 'qacc_warmstart', 'mocap_pos', 'mocap_quat', 'qfrc_applied',
                        'xfrc_applied')
@@ -64,9 +78,11 @@ MUJOCO_STATE_FIELDS = ('qpos', 'qvel', 'act', 'ctrl', 'qacc_warmstart', 'mocap_p
 def planning_model(env):
     """The trial's scene, restored exactly on exit; no simulation step is taken inside.
 
-    The snapshot is the simulator's state (MuJoCo's qpos, qvel, controls, warm start, applied forces
-    and time; the model's body poses, which place kinematic bodies such as the IK target) and every
-    joint's control state in the shim (targets, lock position, mode, gains), so the
+    The snapshot is the simulator's state (MuJoCo's qpos, qvel, controls, warm start, applied forces,
+    equality activations and time; the model's body poses and equality data, which place kinematic
+    bodies such as the IK target and anchor the hinge welds), the shim's per-object state that a
+    set_pose updates (follow / hinge anchors, mode, static and respondable flags, the followers' last
+    poses) and every joint's control state in the shim (targets, lock position, mode, gains), so the
     arm and the gripper's fingers go back to exactly where they were and keep the same targets; shape
     dynamic flags the planning changed are set back. Nothing else is touched."""
     import mujoco
@@ -75,8 +91,17 @@ def planning_model(env):
     gt = _gt_module()
     world = sim._w()
     m, d = world.m, world.d
-    saved = {k: getattr(d, k).copy() for k in MUJOCO_STATE_FIELDS}
-    saved_model = {k: getattr(m, k).copy() for k in ('body_pos', 'body_quat')}   # kinematic bodies (IK target)
+    saved = {k: getattr(d, k).copy() for k in MUJOCO_STATE_FIELDS if hasattr(d, k)}
+    if hasattr(d, 'eq_active'):
+        saved['eq_active'] = d.eq_active.copy()
+    # the model's kinematic bodies (the IK target) and hinge welds (eq_data, re-anchored by set_pose)
+    saved_model = {k: getattr(m, k).copy() for k in ('body_pos', 'body_quat', 'eq_data') if hasattr(m, k)}
+    if hasattr(m, 'eq_active0'):
+        saved_model['eq_active0'] = m.eq_active0.copy()
+    # the shim's own per-object state that set_pose updates: follow / hinge anchors, flags
+    objects = {h: {k: _copied(getattr(o, k)) for k in OBJECT_STATE_FIELDS if hasattr(o, k)}
+               for h, o in world.objs.items()}
+    follow_prev = _copied(getattr(world, '_follow_prev', None))
     saved_time = float(d.time)
     joints = {h: {k: getattr(o.jstate, k) for k in JOINT_STATE_FIELDS}
               for h, o in world.objs.items() if getattr(o, 'jstate', None) is not None}
@@ -109,6 +134,11 @@ def planning_model(env):
             getattr(d, k)[...] = v
         for k, v in saved_model.items():
             getattr(m, k)[...] = v
+        for h, fields in objects.items():
+            for k, v in fields.items():
+                setattr(world.objs[h], k, _copied(v))
+        if follow_prev is not None:
+            world._follow_prev = _copied(follow_prev)
         d.time = saved_time
         for h, fields in joints.items():
             for k, v in fields.items():
