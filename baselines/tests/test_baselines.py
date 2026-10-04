@@ -150,3 +150,22 @@ def test_vlm_tamp_object_support_and_parking_order():
     subgoals, skipped = parse_subgoals("['on(raw_meat_1, plate)']", obs)
     assert subgoals == [('on', 'raw_meat_1', 'plate_top')] and not skipped
     assert SymbolicDomain(obs.objects, obs.regions, obs.lids).regions[-1] == 'table'
+
+
+def test_vlm_tamp_world_model_keeps_observed_objects():
+    from types import SimpleNamespace
+
+    import baselines.vlm_tamp as vt
+
+    frames = [Observation(objects={'mug1': 'table', 'can': 'inside_box'}, lids={'box_lid': True}, holding=None,
+                          regions=['table', 'inside_box']),
+              Observation(objects={'mug1': 'table'}, lids={'box_lid': True}, holding=None, regions=['table', 'inside_box'])]
+    pipeline = object.__new__(vt.VLMTAMPPipeline)
+    original = vt.observe
+    vt.observe = lambda p: frames.pop(0)
+    try:
+        assert pipeline.observe_known().objects == {'mug1': 'table', 'can': 'inside_box'}
+        later = pipeline.observe_known()                    # the can is occluded now
+        assert later.objects == {'mug1': 'table', 'can': 'inside_box'} and later.visible == {'mug1'}
+    finally:
+        vt.observe = original

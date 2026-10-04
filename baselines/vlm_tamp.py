@@ -310,6 +310,21 @@ def subgoal_test(subgoal: Tuple[str, ...]):
 class VLMTAMPPipeline(BaselinePipeline):
     baseline_name = 'vlm_tamp'
 
+    def observe_known(self):
+        """The observation with every object observed earlier in the trial: one the cameras miss now
+        (occluded) stays at the region it was last observed in, as objects stay in the authors' world
+        model once known (and as the executor lets a baseline pick an object it has observed)."""
+        obs = observe(self)
+        obs.visible = set(obs.objects)              # what the cameras see now
+        last = self.__dict__.setdefault('_last_regions', {})
+        for name, region in obs.objects.items():
+            if region is not None:
+                last[name] = region
+        for name, region in last.items():
+            if name not in obs.objects:
+                obs.objects[name] = region
+        return obs
+
     @property
     def scene(self) -> str:
         return 'grill' if (self.config.task_family or '').lower() == 'grill' else 'kitchen'
@@ -388,7 +403,7 @@ class VLMTAMPPipeline(BaselinePipeline):
         index = 0
         while index < len(subgoals):
             subgoal = subgoals[index]
-            obs = observe(self)
+            obs = self.observe_known()
             test = subgoal_test(subgoal)
             if test is None:
                 failed = subgoal_text(subgoal)
@@ -434,7 +449,7 @@ class VLMTAMPPipeline(BaselinePipeline):
                 outcome = self.execute(plan)
             execution_collisions = collision_bodies(hits, exclude=[a[1] for a in plan if a[0] == 'pick'])
             done = len(getattr(self.executor, 'completed_primitive_actions', []) or []) - done_before
-            after = observe(self)
+            after = self.observe_known()
             steps = [(subgoal, actions, test)] + ([(pair[0], pair[1], subgoal_test(pair[0]))] if pair else [])
             end = 0
             for k, (goal_k, actions_k, test_k) in enumerate(steps):
@@ -446,7 +461,7 @@ class VLMTAMPPipeline(BaselinePipeline):
                     # the target relation must be observed; an object perception no longer sees after
                     # its place counts only if the executor's post-place check confirmed it in the
                     # target region (outcome.success includes that check)
-                    invisible = goal_k[0] in ('in', 'on') and goal_k[1] not in after.objects
+                    invisible = goal_k[0] in ('in', 'on') and goal_k[1] not in after.visible
                     ok = bool(outcome.success) and executed_k and (holds or invisible)
                     confirmed_by = 'perception' if holds else ('executor_post_place_check' if ok else None)
                 else:
@@ -474,7 +489,7 @@ class VLMTAMPPipeline(BaselinePipeline):
         succeeded: List[str] = []
         history = ''
         for round_index in range(MAX_REPROMPTS + 1):
-            obs = observe(self)
+            obs = self.observe_known()
             subgoals, round_trace = self.query_subgoals(goal_text, obs, history)
             round_trace['subgoal_results'] = []
             trace['rounds'].append(round_trace)

@@ -229,3 +229,12 @@ def test_llm_planner_a_wrong_pick_source_fails_the_step():
     steps = pipeline._baseline_trace['steps']
     assert steps[0]['failure_code'] == 'wrong_pick_source' and 'mug1 is in table, not cupboard_shelf' in steps[0]['failure']
     assert world.executed == ['pick(mug1)', 'place(mug1, inside_box)', 'pick(meat)', 'place(meat, table)']  # plate = plate_top
+
+
+def test_a_step_may_name_an_object_observed_earlier_but_occluded_now():
+    from baselines.llm_planner import unknown_names
+
+    obs = Observation(objects={'mug1': 'table'}, lids={}, holding=None, regions=['table', 'inside_box'])
+    bundle = [('pick', 'mug2'), ('place', 'mug2', 'inside_box')]
+    assert unknown_names(bundle, obs, ('pick', 'place')) == ['mug2', 'mug2']
+    assert unknown_names(bundle, obs, ('pick', 'place'), seen={'mug2'}) == []

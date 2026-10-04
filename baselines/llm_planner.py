@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from baselines.common import BaselinePipeline, action_text, observe, strip_reasoning, surface_region_of
 from llm_pipeline.failures import TerminationReason
@@ -147,13 +147,17 @@ def split_bundles(actions: Sequence[Tuple[str, ...]]) -> List[List[Tuple[str, ..
     return out
 
 
-def unknown_names(bundle: Sequence[Tuple[str, ...]], obs, actions_available: Sequence[str]) -> List[str]:
-    """Names in the bundle that are not in the scene (the step is skipped by the environment)."""
+def unknown_names(bundle: Sequence[Tuple[str, ...]], obs, actions_available: Sequence[str],
+                  seen: Iterable[str] = ()) -> List[str]:
+    """Names in the bundle that are not in the scene (the step is skipped by the environment). An
+    object observed earlier in the trial is known even when the cameras miss it now (occluded): the
+    executor's pre-pick check allows it for a baseline, the allowance our memory gives our system."""
     bad = []
+    known = set(obs.objects) | set(seen)
     for a in bundle:
         if a[0] not in actions_available:
             bad.append(a[0])
-        elif a[0] in ('pick', 'place') and a[1] not in obs.objects:
+        elif a[0] in ('pick', 'place') and a[1] not in known:
             bad.append(a[1])
         elif a[0] == 'place' and a[2] not in obs.regions:
             bad.append(a[2])
@@ -234,7 +238,7 @@ class StepLoopPipeline(BaselinePipeline):
         bundle = resolve_supports(bundle, obs, containers=self.ground_containers)
         wrong = wrong_sources(bundle, obs)
         bundle = [a[:2] if a[0] == 'pick' else a for a in bundle]       # our pick takes the object
-        bad = unknown_names(bundle, obs, self.available_actions())
+        bad = unknown_names(bundle, obs, self.available_actions(), seen)
         step = {'bundle': [action_text(a) for a in bundle]}
         if wrong:
             step.update(success=False, failure='wrong pick source: ' + '; '.join(wrong), failure_code='wrong_pick_source',
