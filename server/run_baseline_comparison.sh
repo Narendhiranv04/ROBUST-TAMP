@@ -15,6 +15,7 @@
 # BASELINE_RERUN_VARIANTS="<variants>" BASELINE_RERUN_TAG=<tag>: every trial of these variants is
 # moved to seed_XX.<tag> and re-run (code changed for them).
 # BASELINE_RERUN_FILE=<file of "<variant> <seed>" lines> BASELINE_RERUN_TAG=<tag>: those trials likewise.
+# BASELINE_REUSE_VLLM=1: use the vLLM server already serving the profile's model (two queues on one machine).
 set -uo pipefail
 INFER=${QUEUE_INFER:-$HOME/robust_tamp_infer}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -41,8 +42,13 @@ if [ ! -f "$HF_HOME/hub/models--${MODEL_REPO//\//--}/snapshots/$MODEL_REVISION/c
   (unset HF_HUB_OFFLINE; eval "$INFER/.venv/bin/hf" $(python3 llm_pipeline/model_profiles.py download "$MODEL")) \
     > "$OUT/download.log" 2>&1 || { log "download failed"; exit 1; }
 fi
-"$REPO/server/stop_vllm.sh" >/dev/null 2>&1; sleep 10
-VLLM_MODEL=$MODEL "$REPO/server/start_vllm.sh" > "$OUT/start_vllm.out" 2>&1 || { log "vLLM did not start"; exit 1; }
+if [ -n "${BASELINE_REUSE_VLLM:-}" ] && curl -s --max-time 30 http://127.0.0.1:8000/v1/models | grep -q "\"id\":\"$MODEL\""; then
+  # another queue on this machine started the server: share it (no restart)
+  log "reusing the running vLLM server ($MODEL)"; echo "reused" > "$OUT/start_vllm.out"
+else
+  "$REPO/server/stop_vllm.sh" >/dev/null 2>&1; sleep 10
+  VLLM_MODEL=$MODEL "$REPO/server/start_vllm.sh" > "$OUT/start_vllm.out" 2>&1 || { log "vLLM did not start"; exit 1; }
+fi
 python3 - "$OUT" "$REPO" "$INFER" "$MODEL" "$BASELINES" "$SEEDS" "$VARIANTS" "$JOBS" <<'PY'
 import json, subprocess, sys, socket, datetime, urllib.request
 out, repo, infer, model, baselines, seeds, variants, jobs = sys.argv[1:9]
