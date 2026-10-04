@@ -14,8 +14,8 @@ Protocol:
 3. Continuous constraints: first the goal (``achieve_goal``) constraints with the helper codebook
    and the three few-shot examples (an answer with no valid goal function is a constraint-generation
    failure), then, for each sketch operator with a VLM pose constraint (every ``place``), constraints
-   conditioned on its description and the goal constraints, every safe generated function applied
-   as generated.
+   conditioned on its description and the goal constraints; a generated function applies to the
+   operator only if it reads the placed object's pose (the operator's parameter, Sec. 5.2).
 4. Search-then-sample: A* for a plan that contains the sketch as a subsequence (Executed(i)); then,
    for each place, up to 500 poses from the scene's own placement sampler on the predicted state, each
    accepted only if the operator's constraints hold and our planner refines the operator's
@@ -679,12 +679,14 @@ class OWLTAMPPipeline(BaselinePipeline):
                 description=description, placed=op[1], helper_functions=HELPER_DOCS, few_shot=GOAL_FEW_SHOT))],
                 image=obs.image, purpose='owl_tamp_action_constraints')
             functions, bad = extract_functions(reply['content'])
-            # every safe generated function is applied as generated (a function that does not constrain
-            # the placed object is the model's error, which the method has to live with)
-            sketch_constraints[op] = functions
+            # An operator's constraints restrict that operator's continuous parameter, the placed object's
+            # pose (Sec. 5.2): a generated function that never reads the placed object (typically a copied
+            # final-goal check about other objects, unsatisfiable before they are placed) does not constrain
+            # this operator and is not applied to it
+            used = [f for f in functions if mentions(f, op[1])]
+            sketch_constraints[op] = used
             trace.setdefault('action_functions', {})[action_text(op)] = {
-                'functions': functions, 'not_about_placed_object': [f for f in functions if not mentions(f, op[1])],
-                'rejected': bad}
+                'functions': used, 'not_about_placed_object': [f for f in functions if f not in used], 'rejected': bad}
 
         rng = random.Random(self.config.seed or 0)
         skeletons = []
