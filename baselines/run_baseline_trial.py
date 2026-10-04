@@ -98,14 +98,15 @@ def pipeline_class(baseline: str, mock: bool, gt_exec: bool = False):
 
 
 def run(baseline: str, variant: str, output_dir: Path, seed: int, mock: bool, model: str, remote_url: str,
-        max_new_tokens: int, headless: bool = True, attempt: int = 1, gt_exec: bool = False) -> dict:
+        max_new_tokens: int, headless: bool = True, attempt: int = 1, gt_exec: bool = False,
+        icl_mode: str = 'zero_shot') -> dict:
     flags = PipelineFlags.from_assignments(list(BASELINE_FLAGS))
     mock = mock or gt_exec
     original = trial_runner.LLMOnlyReplanningPipeline
     trial_runner.LLMOnlyReplanningPipeline = pipeline_class(baseline, mock, gt_exec)
     try:
         return trial_runner.run_trial(
-            variant_id=variant, model_alias='mock_gt' if mock else model, icl_mode='zero_shot',
+            variant_id=variant, model_alias='mock_gt' if mock else model, icl_mode=icl_mode,
             headless=headless, output_dir=output_dir, live_masks=False, flags=flags, seed=seed,
             trial_index=seed + 1, real_model=not mock, remote=not mock, remote_url=remote_url, remote_api='openai',
             vision=True, model_type='vlm', planner_max_new_tokens=max_new_tokens, attempt=attempt,
@@ -127,11 +128,14 @@ def main() -> None:
     parser.add_argument('--remote-url', default='http://127.0.0.1:8000')
     parser.add_argument('--planner-max-new-tokens', type=int, default=24576)
     parser.add_argument('--attempt', type=int, default=1)
+    parser.add_argument('--icl-mode', default='zero_shot', choices=('zero_shot', 'examples_v2'),
+                        help='examples_v2: the in-context examples of our ICL condition, in the baseline\'s format '
+                             '(grill scene; baselines/icl_examples.py)')
     parser.add_argument('--gui', action='store_true')
     args = parser.parse_args()
     record = run(args.baseline, args.variant, Path(args.output_dir), args.seed, args.mock, args.model,
                  args.remote_url, args.planner_max_new_tokens, headless=not args.gui, attempt=args.attempt,
-                 gt_exec=args.gt_exec)
+                 gt_exec=args.gt_exec, icl_mode=args.icl_mode)
     print(json.dumps({key: record.get(key) for key in (
         'variant_id', 'episode_success', 'partial_goal_completion', 'planner_invocations', 'completed_actions',
         'failure_reason')}, indent=2))

@@ -61,6 +61,7 @@ from pprint import pformat
 from typing import Dict, List, Optional, Tuple
 
 from baselines.common import BaselinePipeline, SymbolicDomain, action_text, observe, region_closed_by, surface_region_of
+from baselines.icl_examples import examples_for
 from llm_pipeline.failures import TerminationReason
 
 # --- the authors' prompts (prompts_gpt4v.py), verbatim ------------------------------------------
@@ -335,6 +336,9 @@ class VLMTAMPPipeline(BaselinePipeline):
         prompt = PROMPT_SUBGOALS_ENGLISH.format(goal=goal_text, objects=object_names,
                                                 observed=',\n'.join(observed_descriptions(obs)),
                                                 history=history, n_arms=N_ARMS)
+        examples = examples_for(self)                            # ICL condition, grill scene only
+        if examples:
+            prompt += '\n' + examples + '\n'
         prompt += COMPOSED_ANNOTATED_IMAGE_DESCRIPTION           # vlm_api.ask: prompt += image_description
         image = query_image(self, obs)
         english = chat.complete([('user', prompt)], image=image, purpose='vlm_tamp_subgoals_english')

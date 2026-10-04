@@ -51,6 +51,7 @@ from baselines.common import (UNCLOSABLE_LIDS, BaselinePipeline, SymState, Symbo
                               observe, parse_action_text, strip_reasoning)
 from baselines.owl_constraints import (GOAL_FEW_SHOT, HELPER_DOCS, Geometry, RavenPose, evaluate, extract_functions,
                                        raven_pose)
+from baselines.icl_examples import examples_for
 from llm_pipeline.failures import TerminationReason
 
 SAMPLES_PER_OPERATOR = 500            # Sec. 6
@@ -639,6 +640,9 @@ class OWLTAMPPipeline(BaselinePipeline):
             task_str=goal_text, initial_preds='\n'.join(initial_predicates(obs)),
             nsrts_description=NSRTS_DESCRIPTION,
             ground_operators='\n'.join(action_text(a) for a in domain.ground_actions()))
+        examples = examples_for(self)                            # ICL condition, grill scene only
+        if examples:
+            prompt += '\n\n' + examples
         answer = chat.complete([('user', prompt)], image=obs.image, purpose='owl_tamp_discrete')
         sketch, achieve, rejected = parse_sketch(answer['content'], grounded)
         trace.update({'sketch': [f'{action_text(op)}; {d}' for op, d in sketch],

@@ -31,6 +31,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 from baselines.common import parse_action_text, strip_reasoning
+from baselines.icl_examples import examples_for
 from baselines.llm_planner import StepLoopPipeline, split_bundles
 from llm_pipeline.failures import TerminationReason
 from llm_pipeline.prompt_v2 import state_section, system_prompt
@@ -98,6 +99,9 @@ class InnerMonologuePipeline(StepLoopPipeline):
 
     def query(self, goal_text: str, obs, monologue: Sequence[str], purpose: str):
         system = system_prompt(self.available_actions())
+        examples = examples_for(self)                            # ICL condition, grill scene only
+        if examples:
+            system += '\n\n' + examples
         user = '\n\n'.join([
             '## Goal\n' + goal_text,
             '## Inner monologue so far\n' + '\n'.join(monologue),

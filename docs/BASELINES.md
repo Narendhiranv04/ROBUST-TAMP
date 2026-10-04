@@ -13,7 +13,20 @@ The baselines are **re-implemented** as planner policies inside our pipeline: th
 
 The names in the first column are the names to use in the paper: each says how the baseline differs from the original.
 
-`python -m baselines.run_baseline_trial --baseline <name> ...` runs one trial; `server/run_baseline_comparison.sh "<names>"` runs every variant x seed. With `--mock`, a trial gets ground-truth answers instead of the model (a plumbing test, not a result). Every baseline runs with our replanning components off (memory, IF rule, discovery trigger, corrective blocks, parallel planning; `run_baseline_trial.BASELINE_FLAGS`), zero-shot (no in-context examples), with the selected planner model (`qwen3-vl-8b-thinking`, card sampling, 24,576 output tokens) and the same camera image our planner receives.
+`python -m baselines.run_baseline_trial --baseline <name> ...` runs one trial; `server/run_baseline_comparison.sh "<names>"` runs every variant x seed. With `--mock`, a trial gets ground-truth answers instead of the model (a plumbing test, not a result). Every baseline runs with our replanning components off (memory, IF rule, discovery trigger, corrective blocks, parallel planning; `run_baseline_trial.BASELINE_FLAGS`), zero-shot (no in-context examples; the ICL rows: next section), with the selected planner model (`qwen3-vl-8b-thinking`, card sampling, 24,576 output tokens) and the same camera image our planner receives.
+
+## ICL condition (`--icl-mode examples_v2`)
+
+The baselines' ICL rows give each baseline the in-context examples of our ICL condition (`llm_pipeline/icl_examples.py`, `examples_v2`): the laundry-dryer scene, where a wet towel dries only inside the dryer while its door is closed and opened again, and a dry towel inside during another close / open is scorched. Example 1 asks for a full plan; Example 2 comes after the dryer is opened and an already dry towel is found inside. Each example shows a good and a bad answer with what happened afterwards. No rule is stated, and nothing of the grill scene is named. As for our planner, the examples go only to the grill scene. Kitchen prompts are byte-identical to zero-shot, so an ICL row's kitchen columns are the zero-shot run's, and only the five grill variants are run (`BASELINE_ICL_MODE=examples_v2 BASELINE_VARIANTS="FINAL.G0 FINAL.G1 FINAL.G2 FINAL.G3 FINAL.G1-n1"`).
+
+`baselines/icl_examples.py` renders the same examples in each baseline's own input and answer format, so they show the answer that baseline is asked for:
+
+- **LLM-Planner:** its state description and JSON `"Plan"` with `Pick(x, y)` sources, appended to its system prompt.
+- **Inner Monologue:** the monologue, the current-state section and `FINAL ACTIONS:`, appended to its system prompt.
+- **VLM-TAMP:** its observed-object facts, its formal action history and English intermediate goals, at the end of query 1 (before the image description). Query 2, the translation, is unchanged.
+- **OWL-TAMP:** the initial predicate state and a plan of ground operators with descriptions, ending in `achieve_goal`, at the end of the discrete-constraint prompt. The continuous-constraint prompts are unchanged.
+
+Our Example 2 is a corrective block, a format only our planner has. For each baseline it becomes that baseline's own query at the same point: a replan after new objects are observed (LLM-Planner), the next monologue step (Inner Monologue), a query with the history (VLM-TAMP), or a planning problem from that state (OWL-TAMP). The operator descriptions in the OWL-TAMP example only name the action ("close dryer_door"), so they state no rule. **EPoG gets no examples:** the model only resolves motion errors, and its plan comes from the goal graph, which cannot express the close / open cycle. Its ICL row is its zero-shot row.
 
 ## Shared adaptations (all baselines)
 

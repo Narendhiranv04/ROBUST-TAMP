@@ -16,6 +16,8 @@
 # moved to seed_XX.<tag> and re-run (code changed for them).
 # BASELINE_RERUN_FILE=<file of "<variant> <seed>" lines> BASELINE_RERUN_TAG=<tag>: those trials likewise.
 # BASELINE_REUSE_VLLM=1: use the vLLM server already serving the profile's model (two queues on one machine).
+# BASELINE_ICL_MODE=examples_v2: the in-context examples of our ICL condition, in each baseline's format (grill
+# scene only, baselines/icl_examples.py); run it with BASELINE_VARIANTS set to the grill variants.
 set -uo pipefail
 INFER=${QUEUE_INFER:-$HOME/robust_tamp_infer}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -26,6 +28,7 @@ OUT=$(realpath -m "${BASELINE_OUT:?set BASELINE_OUT}")
 ARCHIVE=${BASELINE_ARCHIVE:-$OUT/archive}
 MODEL=${BASELINE_MODEL:-qwen3-vl-8b-thinking}
 JOBS=${BASELINE_JOBS:-6}
+ICL_MODE=${BASELINE_ICL_MODE:-zero_shot}
 BASELINES=${1:-"vlm_tamp owl_tamp"}
 SEEDS=${2:-"0 1 2 3 4 5 6 7 8 9"}
 VARIANTS=${BASELINE_VARIANTS:-"FINAL.K0 FINAL.G0 FINAL.K1 FINAL.K2 FINAL.K3 FINAL.K4 FINAL.G1 FINAL.G2 FINAL.G3 FINAL.K3-n2 FINAL.K3-n3 FINAL.G1-n1 FINAL.K1-w1 FINAL.K1-w2"}
@@ -49,15 +52,15 @@ else
   "$REPO/server/stop_vllm.sh" >/dev/null 2>&1; sleep 10
   VLLM_MODEL=$MODEL "$REPO/server/start_vllm.sh" > "$OUT/start_vllm.out" 2>&1 || { log "vLLM did not start"; exit 1; }
 fi
-python3 - "$OUT" "$REPO" "$INFER" "$MODEL" "$BASELINES" "$SEEDS" "$VARIANTS" "$JOBS" <<'PY'
+python3 - "$OUT" "$REPO" "$INFER" "$MODEL" "$BASELINES" "$SEEDS" "$VARIANTS" "$JOBS" "$ICL_MODE" <<'PY'
 import json, subprocess, sys, socket, datetime, urllib.request
-out, repo, infer, model, baselines, seeds, variants, jobs = sys.argv[1:9]
+out, repo, infer, model, baselines, seeds, variants, jobs, icl_mode = sys.argv[1:10]
 sh = lambda c: subprocess.run(c, shell=True, capture_output=True, text=True).stdout.strip()
 def get(p):
     try:
         with urllib.request.urlopen('http://127.0.0.1:8000' + p, timeout=30) as f: return json.load(f)
     except Exception as e: return {'error': str(e)}
-json.dump({'baselines': baselines.split(), 'variants': variants.split(), 'seeds': seeds.split(), 'jobs': int(jobs),
+json.dump({'baselines': baselines.split(), 'icl_mode': icl_mode, 'variants': variants.split(), 'seeds': seeds.split(), 'jobs': int(jobs),
            'model_profile': json.loads(sh(f'python3 {repo}/llm_pipeline/model_profiles.py json {model}')),
            'v1_models': get('/v1/models'), 'version': get('/version'), 'serve_command': sh(f'cat {infer}/logs/serve_command.txt'),
            'gpu': sh('nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader'),
@@ -81,7 +84,7 @@ trial() {
     # writes temp/ under the working directory, shared by the parallel trials otherwise
     cwd=$(mktemp -d "${TMPDIR:-/tmp}/baseline_${b}_${v}_${s}_XXXXXX")
     (cd "$cwd" && nice -n 5 timeout 14400 python3 -m baselines.run_baseline_trial --baseline "$b" --variant "$v" \
-      --seed "$s" --output-dir "$dir" --model "$MODEL" --remote-url http://127.0.0.1:8000 --attempt "$attempt") \
+      --seed "$s" --output-dir "$dir" --model "$MODEL" --remote-url http://127.0.0.1:8000 --attempt "$attempt" --icl-mode "$ICL_MODE") \
       > "$dir/stdout.log" 2>&1
     rm -rf "$cwd"
     end=$(grep '"event": "trial_end"' "$dir/trial_log.jsonl" 2>/dev/null | tail -1)
@@ -90,7 +93,7 @@ trial() {
   done
 }
 export -f trial log
-export OUT MODEL
+export OUT MODEL ICL_MODE
 
 for b in $BASELINES; do
   if [ -n "${BASELINE_RERUN_EXECUTION_FAILURES:-}" ] && [ -d "$OUT/$b" ]; then

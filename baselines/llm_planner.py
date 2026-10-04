@@ -38,6 +38,7 @@ import re
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 from baselines.common import BaselinePipeline, action_text, observe, strip_reasoning, surface_region_of
+from baselines.icl_examples import examples_for
 from llm_pipeline.failures import TerminationReason
 from llm_pipeline.prompt_v2 import ACTION_DEFINITIONS, LID_REGIONS, LID_TOP_REGIONS
 from llm_pipeline.region_aliases import planner_region_name
@@ -273,6 +274,9 @@ class LLMPlannerPipeline(StepLoopPipeline):
                                       action_lines='\n'.join(ACTION_LINES[n] for n in names))
         if self.domain_definitions:
             system += DOMAIN_DEFINITIONS + '\n'.join(ACTION_DEFINITIONS[n] for n in names) + '\n'
+        examples = examples_for(self)                            # ICL condition, grill scene only
+        if examples:
+            system += '\n' + examples + '\n'
         return system
 
     def query_plan(self, goal_text: str, obs, purpose: str) -> Tuple[Optional[List[Tuple[str, ...]]], dict]:
