@@ -13,8 +13,9 @@ monologue and FINAL ACTIONS; VLM-TAMP its observed-object facts, its formal hist
 intermediate goals; OWL-TAMP the initial predicate state and a plan of ground operators ending in
 achieve_goal. Our Example 2 is a corrective block (a format only our planner has); here it is the
 baseline's own query at that point (a replan after new objects became visible, the next step of
-the monologue, a query with the history). EPoG gets none: the model only resolves motion errors, and
-its plan comes from the goal graph, which cannot express the close / open cycle.
+the monologue, a query with the history). EPoG's model only resolves motion errors (its plan comes
+from the goal graph, which cannot express the close / open cycle), so its examples are resolve-call
+examples: a failed place into the dryer, resolved with or without the close / open cycle.
 
 Placement: appended to the baseline's system prompt where it has one (LLM-Planner, Inner
 Monologue), as our planner's are; VLM-TAMP and OWL-TAMP send one user message, so the examples go
@@ -184,7 +185,37 @@ def owl_tamp_examples() -> str:
         example('Example 2', CORR_STATE, True, _CORR_GOOD, two, CORR_GOOD_OUTCOME, _CORR_BAD, two, CORR_BAD_OUTCOME)])
 
 
-EXAMPLES = {'llm_planner': llm_planner_examples, 'inner_monologue': inner_monologue_examples,
+# --- EPoG: the resolve call's worked-example format (numeric node ids, step analysis, action sequence) --
+
+def epog_examples() -> str:
+    """The examples as resolve-call examples, with what each node id is (the authors' example has bare ids).
+    Example 1: placing the wet towel into the closed dryer fails (access); Example 2: placing it fails
+    because the dry towel is inside (collision)."""
+    key = ('In these examples, 0 is the parking place (counter), 1 is wet_towel_1, 2 is inside_dryer, 3 is '
+           'dryer_door, 4 is dry_towel_2, 5 is basket_top (in the basket, in the laundry area).')
+
+    def seq(actions):
+        return 'action sequence: [' + ', '.join(f'"{a}"' for a in actions) + ']'
+    one = '\n'.join([
+        'Example 1', 'error: "place 1 on 2 is failure and object 2 is in closed container 3"',
+        'Good answer:', seq(['Place(1, 0)', 'Open(3)', 'Pick(1, 0)', 'Place(1, 2)', 'Close(3)', 'Open(3)',
+                             'Pick(1, 2)', 'Place(1, 5)']),
+        FULL_GOOD_OUTCOME,
+        'Bad answer:', seq(['Place(1, 0)', 'Open(3)', 'Pick(1, 0)', 'Place(1, 2)', 'Pick(1, 2)', 'Place(1, 5)']),
+        'Outcome: the towel is still wet. Goal not met.'])
+    two = '\n'.join([
+        'Example 2', 'error: "place 1 on 2 is failure and object 1 will be collision with [4]"',
+        'Good answer:', seq(['Place(1, 0)', 'Pick(4, 2)', 'Place(4, 5)', 'Pick(1, 0)', 'Place(1, 2)', 'Close(3)',
+                             'Open(3)', 'Pick(1, 2)', 'Place(1, 5)']),
+        CORR_GOOD_OUTCOME,
+        'Bad answer:', seq(['Place(1, 0)', 'Close(3)', 'Open(3)', 'Pick(4, 2)', 'Place(4, 5)', 'Pick(1, 0)',
+                            'Place(1, 2)', 'Pick(1, 2)', 'Place(1, 5)']),
+        'Outcome: object 4 was still inside during Close(3) and Open(3) and came out scorched, and object 1 is still '
+        'wet. Goal not met.'])
+    return '\n'.join(['More examples, from a different scene (a laundry dryer: ' + GOAL + ')', key, one, two])
+
+
+EXAMPLES = {'epog': epog_examples, 'llm_planner': llm_planner_examples, 'inner_monologue': inner_monologue_examples,
             'vlm_tamp': vlm_tamp_examples, 'owl_tamp': owl_tamp_examples}
 
 
@@ -200,5 +231,5 @@ def examples_for(pipeline, baseline: Optional[str] = None) -> str:
     return render() if render else ''
 
 
-__all__ = ['examples_for', 'EXAMPLES', 'ICL_MODES', 'llm_planner_examples', 'inner_monologue_examples',
+__all__ = ['examples_for', 'EXAMPLES', 'ICL_MODES', 'epog_examples', 'llm_planner_examples', 'inner_monologue_examples',
            'vlm_tamp_examples', 'owl_tamp_examples']

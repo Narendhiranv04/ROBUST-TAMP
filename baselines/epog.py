@@ -61,11 +61,13 @@ from __future__ import annotations
 import json
 import random
 import re
+import textwrap
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from baselines.common import action_text, strip_reasoning
+from baselines.icl_examples import examples_for
 from baselines.llm_planner import StepLoopPipeline, belief_description
 from llm_pipeline.failures import TerminationReason
 from llm_pipeline.prompt_v2 import LID_REGIONS, LID_TOP_REGIONS
@@ -341,7 +343,8 @@ RESOLVE_SYSTEM = ('You are a robot, and you need to insert some action to resolv
                   'the task planning process.')
 
 
-def resolve_user_message(error: MotionError, ids: NodeIds) -> str:
+def resolve_user_message(error: MotionError, ids: NodeIds, examples: str = '') -> str:
+    """The authors' message; ``examples`` (the ICL condition) follow the authors' worked example."""
     return f"""
         You are going to resolve the error that occurs during the task planning process.
         The primitives are: Pick(x, y): Pick x from y, Place(x, y): Place x on y, Open(x): Open x, Close(x): Close x
@@ -357,7 +360,7 @@ def resolve_user_message(error: MotionError, ids: NodeIds) -> str:
             Fifth Step: I need to replay the failed action, place object 1 on object 2, Place(1, 2)
             then I summarize the action sequence below:
         action sequence: ["Place(1, 0)", "Pick(3, 2)", "Place(3, 0)", "Pick(1, 0)", "Place(1, 2)"]
-        Your robot is trying to {error.failure_action.render(ids)} but it failed. The error is {error.render(ids)}.
+{examples}        Your robot is trying to {error.failure_action.render(ids)} but it failed. The error is {error.render(ids)}.
     """
 
 
@@ -565,7 +568,8 @@ class EPoGPipeline(StepLoopPipeline):
         """``generate_reslove_actions`` with the LLM agent; retries on invalid output, capped."""
         error.parking_place = self.ids[self.parking]
         self._last_motion_error = error                 # read by the mock (rule-based) resolver
-        user = resolve_user_message(error, self.ids)
+        examples = examples_for(self)                  # ICL condition, grill scene only
+        user = resolve_user_message(error, self.ids, textwrap.indent(examples, ' ' * 8) + '\n' if examples else '')
         while True:
             if self.resolve_calls >= self.budget:
                 raise BudgetExhausted(f'{self.resolve_calls} resolve calls')
