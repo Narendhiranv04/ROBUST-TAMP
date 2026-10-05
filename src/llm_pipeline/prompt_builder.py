@@ -1,0 +1,342 @@
+"""Text-only prompt bundle and prompt rendering."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Iterable, List, Optional
+
+from llm_pipeline.executable_symbols import RuntimeSymbolRegistry, build_runtime_symbol_registry
+from llm_pipeline.pipeline_types import (
+    BaseContextBuilder,
+    ICLMode,
+    PromptBundle,
+    SceneState,
+    SegmentationSnapshot,
+    TextPromptBundle,
+)
+from llm_pipeline.grill_geometry import grill_meat_status_from_facts
+from llm_pipeline.region_aliases import PLANNER_HIDDEN_REGIONS, normalize_region_name, region_semantics
+
+
+PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts'
+
+
+class TextOnlyContextBuilder(BaseContextBuilder):
+    """Builds text-only prompts from segmentation-derived observation state."""
+
+    def __init__(self, env=None, symbol_registry: Optional[RuntimeSymbolRegistry] = None):
+        self.env = env
+        self.symbol_registry = symbol_registry or build_runtime_symbol_registry(env=env)
+
+    def set_env(self, env) -> None:
+        self.env = env
+
+    def set_symbol_registry(self, symbol_registry: RuntimeSymbolRegistry) -> None:
+        self.symbol_registry = symbol_registry
+
+    def build_bundle(
+        self,
+        state: SceneState,
+        goal_text: str,
+        failure_event: Optional[Any] = None,
+        previous_actions: Optional[Iterable[str]] = None,
+        icl_mode: str = ICLMode.ZERO_SHOT.value,
+    ) -> PromptBundle:
+        # 1. Reconstruct snapshot-like data from SceneState for the text builder logic
+        # In a more refined version, we would refactor _build_observation_text to take SceneState.
+        # For now, we use the fact that SceneState was built from a snapshot in pipeline.py.
+        snapshot = getattr(state, '_original_snapshot', None)
+        held_object = state.gripper_state.get('holding')
+
+        object_region_map = getattr(state, 'object_region_map', {}) or getattr(snapshot, 'object_region_map', {}) or {}
+        object_region_descriptions = (
+            getattr(state, 'object_region_descriptions', {})
+            or getattr(snapshot, 'object_region_descriptions', {})
+            or {}
+        )
+        semantic_facts = list(getattr(state, 'pddl_state', []) or ())
+
+        observation_text = self._build_observation_text(
+            snapshot=snapshot,
+            held_object=held_object,
+            object_region_map=object_region_map,
+            object_region_descriptions=object_region_descriptions,
+            semantic_facts=semantic_facts,
+        )
+        visible_text = self._build_visible_text(
+            snapshot=snapshot,
+            object_region_map=object_region_map,
+            semantic_facts=semantic_facts,
+        )
+
+        # 2. Create the intermediate text bundle
+        text_bundle = TextPromptBundle(
+            goal_text=goal_text,
+            observation_text=observation_text,
+            visible_objects_text=visible_text,
+            failure_context=failure_event.message if failure_event else None,
+            icl_mode=icl_mode,
+            previous_actions=tuple(previous_actions or ()),
+        )
+
+        # 3. Render final prompts
+        system_prompt = self.build_system_prompt(text_bundle)
+        user_prompt = self.build_user_prompt(text_bundle)
+
+        return PromptBundle(
+            goal_text=goal_text,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            visible_objects=state.visible_objects,
+            valid_regions=state.valid_regions,
+            icl_mode=icl_mode,
+            previous_actions=text_bundle.previous_actions,
+            failure_context=text_bundle.failure_context,
+            metadata={'held_object': held_object},
+        )
+
+    def build_system_prompt(self, bundle: TextPromptBundle) -> str:
+        base = (PROMPTS_DIR / 'system_prompt.txt').read_text(encoding='utf-8').strip()
+        if bundle.icl_mode == ICLMode.FEW_SHOT_SHARED_1.value:
+            example = (PROMPTS_DIR / 'shared_exemplar.txt').read_text(encoding='utf-8').strip()
+            return f"{base}\n\nSHARED FEW-SHOT EXEMPLAR:\n{example}\n"
+        return f"{base}\n"
+
+    def build_user_prompt(self, bundle: TextPromptBundle) -> str:
+        parts: List[str] = [
+            bundle.observation_text,
+            '',
+            bundle.visible_objects_text,
+            '',
+            "GOAL:",
+            bundle.goal_text,
+        ]
+        if bundle.previous_actions:
+            actions = [str(a) for a in bundle.previous_actions]
+            parts.extend(['', 'PREVIOUS ACTIONS (already executed, do not repeat):', *actions])
+        if bundle.failure_context:
+            parts.extend(['', 'FAILURE CONTEXT:', bundle.failure_context])
+        parts.extend(['', *self._build_action_contract_lines()])
+        return '\n'.join(parts).strip()
+
+    def _build_action_contract_lines(self) -> List[str]:
+        lines = ['OUTPUT CONTRACT:']
+        if self.symbol_registry.actions:
+            lines.append('available_actions=' + ', '.join(self.symbol_registry.actions))
+        lines.append('Use only object and region names that appear in the observation above.')
+        lines.append('Respect ACCESS CONSTRAINTS: do not place into a blocked container region until its lid has been opened.')
+        if 'grill_lid' in getattr(self.symbol_registry, 'objects', ()):
+            lines.append('For grill tasks, keep object names unchanged; use raw(object) and cooked(object) facts from Domain Semantic State for each listed meat object, such as chicken, steak, or steak1. Multiple raw meats can be cooked together by placing all of them inside_grill before one close(grill_lid) and one open(grill_lid).')
+            lines.append('Cooking status and serving location are separate: cooked meat still must be physically placed on the serving target named by the goal.')
+        lines.append('Executable action formats for this run:')
+        for action_name in self.symbol_registry.actions:
+            lines.append(self._action_format_line(action_name))
+        lines.append('Start the response with exactly two short checks, then FINAL ACTIONS:.')
+        lines.append('CHECK 1 must map goal object categories to target regions using the visible object names.')
+        lines.append('CHECK 2 must identify blockers, access constraints, or already-satisfied objects.')
+        lines.append('Do not write additional reasoning, analysis, alternatives, prose, markdown, bullets, numbering, or commentary.')
+        lines.append('Inside FINAL ACTIONS, return executable action lines only, using lowercase action names.')
+        lines.append('Do not include any text after the action lines.')
+        lines.append('If the goal is already fully satisfied in the current state, put exactly NO_ACTIONS inside FINAL ACTIONS.')
+        return lines
+
+    def _action_format_line(self, action_name: str) -> str:
+
+        if action_name == 'pick':
+            return 'pick(object_name)'
+        if action_name == 'place':
+            return 'place(object_name, region_name)'
+        if action_name == 'open':
+            if 'box_lid' in self.symbol_registry.objects:
+                return 'open(box_lid)'
+            return 'open(object_name)'
+        return f'{action_name}(...)'
+
+    def _build_observation_text(
+        self,
+        snapshot: Optional[SegmentationSnapshot],
+        held_object: Optional[str],
+        object_region_map: Optional[dict] = None,
+        object_region_descriptions: Optional[dict] = None,
+        semantic_facts: Optional[Iterable[str]] = None,
+    ) -> str:
+        visible_objects = list(snapshot.visible_objects) if snapshot is not None else []
+        visible_regions = self._planner_visible_regions(snapshot.visible_regions) if snapshot is not None else []
+        supported_regions = self._planner_visible_regions(snapshot.supported_regions) if snapshot is not None else self._planner_visible_regions(self.symbol_registry.regions)
+        semantic_lines = list(semantic_facts or ())
+        cook_status_by_object = grill_meat_status_from_facts(semantic_lines)
+
+        lines = ['CURRENT SEGMENTATION SNAPSHOT:', '']
+        lines.append(f'- frame_index: {snapshot.frame_index if snapshot is not None else 0}')
+        lines.append(f'- held_object: {held_object or "none"}')
+        lines.append(f'- visible_objects: {", ".join(visible_objects) if visible_objects else "(none)"}')
+        lines.append('- newly_visible_objects: ' + (', '.join(snapshot.newly_visible_objects) if snapshot is not None and snapshot.newly_visible_objects else '(none)'))
+        lines.append(f'- visible_regions: {", ".join(visible_regions) if visible_regions else "(none)"}')
+        lines.append(f'- supported_regions: {", ".join(supported_regions) if supported_regions else "(none)"}')
+        if supported_regions:
+            lines.extend(['', 'REGION MEANINGS:'])
+            for region in supported_regions:
+                meaning = region_semantics(region)
+                if meaning:
+                    lines.append(f'- {region}: {meaning}')
+        if snapshot is not None:
+            gripper_visible = bool(snapshot.gripper_evidence.get('visible'))
+            lines.append(f'- gripper_mask_visible: {str(gripper_visible).lower()}')
+        access_constraints = self._build_access_constraints(snapshot)
+        if access_constraints:
+            lines.extend(['', 'ACCESS CONSTRAINTS:'])
+            lines.extend(f'- {constraint}' for constraint in access_constraints)
+
+        lines.extend(['', 'VISIBLE OBJECT EVIDENCE:'])
+        if not visible_objects:
+            lines.append('- (none)')
+            return '\n'.join(lines)
+
+        for name in visible_objects:
+            evidence = snapshot.object_evidence.get(name) if snapshot is not None else None
+            if evidence is None:
+                facts = []
+                region_name = (object_region_map or {}).get(name)
+                if region_name and normalize_region_name(region_name) not in set(PLANNER_HIDDEN_REGIONS):
+                    facts.append(f'region={region_name}')
+                    cook_status = cook_status_by_object.get(self._object_status_key(name))
+                    if cook_status:
+                        facts.append(f'cook_status={cook_status}')
+                    description = (object_region_descriptions or {}).get(name)
+                    if description:
+                        facts.append(f'region_description={description}')
+                lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
+                continue
+            facts = []
+            region_name = (object_region_map or {}).get(name)
+            if region_name and normalize_region_name(region_name) not in set(PLANNER_HIDDEN_REGIONS):
+                facts.append(f'region={region_name}')
+                cook_status = cook_status_by_object.get(self._object_status_key(name))
+                if cook_status:
+                    facts.append(f'cook_status={cook_status}')
+                description = (object_region_descriptions or {}).get(name)
+                if description:
+                    facts.append(f'region_description={description}')
+            if evidence.camera_hits:
+                facts.append(f'camera_hits={"|".join(evidence.camera_hits)}')
+            if evidence.camera_pixels:
+                facts.append(f'camera_pixels={self._format_camera_pixels(evidence.camera_pixels)}')
+            if evidence.pixel_count:
+                facts.append(f'pixel_count={evidence.pixel_count}')
+            mask_regions = self._planner_visible_regions(evidence.mask_regions)
+            if mask_regions:
+                facts.append(f'visual_mask_regions={"|".join(mask_regions)}')
+            if evidence.centroid:
+                facts.append(f'centroids={self._format_point_map(evidence.centroid)}')
+            if evidence.bbox:
+                facts.append(f'bboxes={self._format_bbox_map(evidence.bbox)}')
+            if evidence.newly_visible:
+                facts.append('newly_visible=true')
+            if evidence.gripper_proximity is not None:
+                facts.append(f'gripper_proximity={evidence.gripper_proximity:.4f}')
+            lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
+
+        if semantic_lines:
+            lines.extend(['', 'DOMAIN SEMANTIC STATE:'])
+            lines.extend(f'- {fact}' for fact in semantic_lines)
+
+        return '\n'.join(lines)
+
+    def _build_visible_text(
+        self,
+        snapshot: Optional[SegmentationSnapshot],
+        object_region_map: Optional[dict] = None,
+        semantic_facts: Optional[Iterable[str]] = None,
+    ) -> str:
+        visible_objects = list(snapshot.visible_objects) if snapshot is not None else []
+        newly_visible = list(snapshot.newly_visible_objects) if snapshot is not None else []
+        visible_regions = self._planner_visible_regions(snapshot.visible_regions) if snapshot is not None else []
+        semantic_lines = list(semantic_facts or ())
+        cook_status_by_object = grill_meat_status_from_facts(semantic_lines)
+        lines = ['COMPACT SEGMENTATION SUMMARY:', '']
+        lines.append('visible_objects=' + (', '.join(visible_objects) if visible_objects else '(none)'))
+        lines.append('newly_visible_objects=' + (', '.join(newly_visible) if newly_visible else '(none)'))
+        lines.append('visible_regions=' + (', '.join(visible_regions) if visible_regions else '(none)'))
+        if snapshot is None:
+            return '\n'.join(lines)
+        for name in visible_objects:
+            evidence = snapshot.object_evidence.get(name)
+            if evidence is None:
+                continue
+            facts = []
+            region_name = (object_region_map or {}).get(name)
+            if region_name and normalize_region_name(region_name) not in set(PLANNER_HIDDEN_REGIONS):
+                facts.append(f'region={region_name}')
+                cook_status = cook_status_by_object.get(self._object_status_key(name))
+                if cook_status:
+                    facts.append(f'cook_status={cook_status}')
+            mask_regions = self._planner_visible_regions(evidence.mask_regions)
+            if mask_regions:
+                facts.append(f'visual_mask_regions={"|".join(mask_regions)}')
+            if evidence.camera_hits:
+                facts.append(f'camera_hits={"|".join(evidence.camera_hits)}')
+            if evidence.pixel_count:
+                facts.append(f'pixel_count={evidence.pixel_count}')
+            if evidence.gripper_proximity is not None:
+                facts.append(f'gripper_proximity={evidence.gripper_proximity:.4f}')
+            lines.append(f'- {name}: {", ".join(facts) if facts else "visible=true"}')
+        if semantic_lines:
+            lines.append('domain_semantic_state=' + ' | '.join(semantic_lines))
+        return '\n'.join(lines)
+
+    def _build_access_constraints(self, snapshot: Optional[SegmentationSnapshot]) -> List[str]:
+        if snapshot is None:
+            return []
+        constraints = []
+        object_region_map = getattr(snapshot, 'object_region_map', {}) or {}
+        if 'box_lid' in snapshot.visible_objects:
+            evidence = snapshot.object_evidence.get('box_lid')
+            if evidence is not None and 'box_lid_top' in set(evidence.mask_regions):
+                constraints.append('inside_box is BLOCKED until open(box_lid) is completed')
+                blockers = sorted(
+                    obj_name
+                    for obj_name, region_name in object_region_map.items()
+                    if normalize_region_name(region_name) == 'box_lid_top'
+                )
+                if blockers:
+                    joined = ', '.join(blockers)
+                    constraints.append(
+                        f'box_lid is OBSTRUCTED by {joined}; before open(box_lid), move '
+                        f'{joined} to table_staging_area'
+                    )
+        if 'grill_lid' in snapshot.visible_objects:
+            evidence = snapshot.object_evidence.get('grill_lid')
+            if evidence is not None and 'inside_grill' in set(evidence.mask_regions):
+                constraints.append('inside_grill is BLOCKED until open(grill_lid) is completed')
+        return constraints
+
+    @staticmethod
+    def _planner_visible_regions(regions: Iterable[str]) -> List[str]:
+        hidden = set(PLANNER_HIDDEN_REGIONS)
+        return [
+            region
+            for region in regions
+            if normalize_region_name(region) not in hidden
+        ]
+
+    @staticmethod
+    def _object_status_key(object_name: str) -> str:
+        return str(object_name or '').strip().lower().replace(' ', '_').replace('-', '_')
+
+    @staticmethod
+    def _format_camera_pixels(camera_pixels) -> str:
+        return '|'.join(f'{name}:{int(count)}' for name, count in sorted(camera_pixels.items()))
+
+    @staticmethod
+    def _format_point_map(points) -> str:
+        return '|'.join(
+            f'{name}:({coords[0]:.4f},{coords[1]:.4f})'
+            for name, coords in sorted(points.items())
+        )
+
+    @staticmethod
+    def _format_bbox_map(boxes) -> str:
+        return '|'.join(
+            f'{name}:({coords[0]:.4f},{coords[1]:.4f},{coords[2]:.4f},{coords[3]:.4f})'
+            for name, coords in sorted(boxes.items())
+        )

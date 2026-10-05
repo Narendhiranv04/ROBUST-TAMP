@@ -1,0 +1,131 @@
+% S3 Implementation Details
+\subsection{Perception and Scene Memory}
+\label{sec:supp-perception}
+\noindent\textbf{Observation in simulation.} After every execution bundle and before every FM request, the
+system renders segmentation masks from the scene cameras. An object is counted in a view if its mask there
+covers at least 10 pixels (at least 50 in the grill scene), and $V_t$ contains the objects counted in at least
+one view. The remaining facts come from the simulator: the region of each visible object is assigned by testing
+its pose against the region bounding boxes, lid states are read from the lid joints, and placement-area overlap
+is computed from the object's footprint when it was last visible. Gripper state is maintained by the executor.
+
+\noindent\textbf{Identities and memory.} $K_t$ records \emph{which} objects have been observed, and $m_t$ stores
+\emph{what} was last observed about each of them: its region $r_t(o)$ and the step $t$ of the observation.
+After each observation,
+\begin{equation}
+m_t(o)=\begin{cases}
+\big(r_t(o),\,t\big) & o\in V_t,\\
+m_{t-1}(o) & o\in K_{t-1}\setminus V_t,
+\end{cases}
+\label{eq:supp-memory}
+\end{equation}
+so an occluded or removed-from-view object keeps its last region and observation time, and no entry is ever
+deleted. The prompt lists such objects separately from the visible ones, with their last region and the number
+of steps since they were seen. An object $o\notin K_t$ has no entry, never appears in a prompt, and a plan that
+names it is rejected with the same message as for a non-existent name, so the planner cannot distinguish a
+hidden object from an invalid one. A remembered object can be picked only if its last region is not closed off
+by a closed lid. Without memory ($-$Memory), only $V_t$ is available.
+
+\subsection{Replanning and Execution}
+\label{sec:supp-replanning}
+\noindent\textbf{\textit{IF}.} After each bundle, every $o\in K_t$ other than the lids and the held object is
+assessed with its current region if visible and its remembered region otherwise. Let $C_d$ be the task-relevant
+categories of the domain, $\mathit{cat}(o)$ the category of $o$ (mugs and groceries; raw and cooked meat), $r^\star(o)$ the goal region of $o$'s category
+and $\mathcal{A}(\pi_t)$ the placement areas of the regions that some pending \texttt{place} in $\pi_t$ targets.
+The trigger set is
+\begin{equation}
+\begin{aligned}
+O_e=\big\{\,o \;\big|\;& \neg\,\mathit{cov}(o) \wedge \big[\big(\mathit{cat}(o)\in C_d \wedge \neg\,\mathit{done}(o)\big)\\
+&\vee \big(\mathit{cat}(o)\notin C_d \wedge \mathit{fp}(o)\cap\mathcal{A}(\pi_t)\neq\emptyset\big)\big]\big\},
+\end{aligned}
+\label{eq:supp-trigger}
+\end{equation}
+where $\mathit{cov}(o)$ holds if a pending \texttt{pick} or \texttt{place} names $o$, or if the FM answered
+\texttt{NO\_ACTIONS} for $o$ and its recorded region has not changed since; $\mathit{done}(o)$ holds if $o$'s
+region is $r^\star(o)$ and, for meat, $h_t$ shows it cooked; and $\mathit{fp}(o)$ is its footprint. Coverage checks
+only that a pending action names the object, not its destination or position. Obstruction is tested against
+every pending placement regardless of its position in $\pi_t$, so the plate, which is not a goal category, triggers
+only when it obstructs. Overcooking and serving raw are left to the evaluator and do not trigger. If
+$O_e=\emptyset$, execution continues without an FM call.
+
+\noindent\textbf{\textit{WHEN}.} A trigger request is sent to the FM while the robot executes the bundles of
+$\pi_t$ that cannot interfere with the correction. The \emph{affected set} contains the objects of $O_e$, their
+goal regions, the staging region $S$ (the area where a correction may set objects aside), the container of a
+trigger object whose placement area it overlaps, and the lids that close off an affected region or a trigger
+object's container (closing it would change the object's state, e.g.\ cook a cooked meat again). For bundle
+$b$, let $\mathit{obj}(b)$ be its objects, $\mathit{src}(b)$ the region its pick takes from (projected along the
+plan, so a second pick of the same object uses the region the first placement put it in) and $\mathit{dst}(b)$
+its placement region or, for a lid action, the regions the lid closes off. Bundles are scanned in plan order
+with blocked sets initialized to $B_o$ = affected objects, $B_d$ = affected regions and $B_s=B_d\setminus S$:
+\begin{equation}
+b \text{ eligible} \iff \mathit{obj}(b)\cap B_o=\emptyset \;\wedge\; \mathit{dst}(b)\cap B_d=\emptyset
+\;\wedge\; \mathit{src}(b)\cap B_s=\emptyset .
+\label{eq:supp-eligible}
+\end{equation}
+A withheld bundle propagates its dependencies to later bundles:
+$B_o\!\leftarrow\!B_o\cup\mathit{obj}(b)$, $B_d\!\leftarrow\!B_d\cup\mathit{dst}(b)\cup\mathit{src}(b)$ and
+$B_s\!\leftarrow\!B_s\cup\mathit{dst}(b)$. Later bundles that use its objects, place into or take from its
+destination, or place into the region it would vacate are therefore also withheld. Because $S\in B_d$ but
+$S\notin B_s$, placements into the staging region wait, while removing an object from it remains allowed.
+Eligible bundles run in their original relative order and may precede an earlier withheld bundle. The FM request
+lists them as scheduled and excludes them from the remaining plan shown, and the scene description is not
+advanced by their effects. Execution checks for the response only between bundles; if no eligible bundle is
+left, the robot waits. Trigger checks are suspended during the wait and resume after the merge. Without
+concurrency ($-$WHEN), execution stops during inference.
+
+\noindent\textbf{\textit{WHERE}.} A trigger request returns corrective blocks for the objects of $O_e$, not a
+new task plan. Each block lists the objects it handles, an urgency, an insertion position (front, after a named
+pending action, or end), a one-sentence reason and its actions; a block with \texttt{NO\_ACTIONS} states that
+its objects need none. Let $\pi_{t'}$ be the remaining plan after the actions completed during inference are
+removed. Only actions of $\pi_{t'}$ that were not scheduled for concurrent execution are eligible anchors; an
+anchor on a scheduled action is rejected even if that action has not yet run. With urgent blocks
+$U_1,\dots,U_k$ in the order returned and deferred blocks $D_j$ placed directly after their anchor or appended,
+\begin{equation}
+\widehat{\pi}=U_1\cdots U_k\;\cdot\;\mathrm{ins}\big(\pi_{t'},\{D_j\}\big),
+\qquad \pi_{t'}\ \text{is a subsequence of}\ \widehat{\pi},
+\label{eq:supp-merge}
+\end{equation}
+so corrective actions are added while the pending actions keep their relative order and identifiers. The
+planner's urgency and position are used as returned; urgent blocks must be placed at the front.
+
+\noindent\textbf{Validation and recovery.} A correction is rejected if its blocks are malformed, handle an
+object outside $O_e$, leave an object of $O_e$ unhandled, act on objects other than those they list, contain an
+incomplete pick--place sequence, or anchor on an ineligible action; if the merged plan fails the plan check
+(unknown or never-observed names, inconsistent pick--place order, an inaccessible remembered object); or if it
+places into a region before an overlapping trigger object has been removed from that region's placement area
+(insertion too late, using the overlap recorded at the trigger). No check tests whether a correction is
+inserted too early or whether its urgency respects a procedure such as cooking; those remain FM decisions. A
+rejected correction is re-queried as the same corrective request with the failure code and the offending
+element added, and the remaining plan is kept. An execution failure (a failed grasp, placement or motion plan,
+or a violated precondition such as a closed lid) instead requests a full replacement of the remaining plan from
+the updated scene and history; a failure of a concurrently executed bundle discards the pending correction and
+is handled the same way. There are no task-level local retries. An inconsistent executor state, such as placing
+an object that is not held, ends the trial.
+
+\noindent\textbf{Termination.} At most $N=11$ FM calls are made per trial (the initial request and ten
+replanning calls, re-queries included). A trial also ends when the plan is exhausted with no pending trigger,
+when a full-plan request returns \texttt{NO\_ACTIONS}, on a terminal failure, or when the planner repeats an
+earlier answer for the same state and failure a second time (the first repetition is re-queried with a note). Termination is not
+success: success is evaluated afterwards from the final state and execution history with $G_\tau$, and no
+runtime goal check was used in the reported runs.
+
+\subsection{Simulation Controllers}
+\label{sec:supp-controllers}
+A Franka Panda executes the primitives in MuJoCo. Inverse kinematics uses batched damped least squares and
+collision-free paths use RRT-Connect. In the kitchen, each pick--place bundle is planned with PDDLStream (grasp,
+inverse-kinematics and motion streams; at most 60\,s per solve), with placement poses sampled inside the
+target region's placement area; the mug stored in the cupboard is picked with a scripted motion, and the box lid
+is opened by replaying a prerecorded trajectory. In the grill, transfers are executed in stages that are planned
+as the robot moves, every meat is placed at the fixed pose of the grill placement area, and the grill-lid and
+plate motions replay prerecorded trajectories. Pre- and post-action checks classify failures such as a closed lid
+at a placement, a failed grasp or a placement outside the target region.
+
+\subsection{Real-Robot Execution}
+\label{sec:supp-real}
+The physical system uses an xArm manipulator and three Intel RealSense D435 cameras. SAM2.1 provides object
+segmentation masks, observed objects are associated with predefined placement regions, and these object--region
+observations update the same memory layer as in simulation. Point clouds from the cameras support grasp
+generation.
+
+\medskip
+\noindent\fbox{\parbox{\dimexpr\columnwidth-2\fboxsep-2\fboxrule}{\todo{Real-robot details to be added:
+the five settings, region definitions, perception and grasping pipeline, and the trials performed.}}}
