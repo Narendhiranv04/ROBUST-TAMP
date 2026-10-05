@@ -338,8 +338,3 @@ tests/        Unit/integration checks and deterministic fixtures
 
 [Variant specifications](experiments/docs/VARIANTS.md) · [Technical appendix](assets/supplementary/supplementary_latex/supplementary.pdf)
 
-## Limitations and acknowledgments
-
-The CPU simulation suite, scene loading, oracle execution and preserved-record aggregation are tested. GPU-backed framework, ablation and baseline inference require configured compute; a full fresh experimental reproduction has not been performed. Seven final planner-comparison conditions and final Table 5 per-call latency records are unavailable. The working implementation postdates some reported runs; [evidence notes](experiments/docs/evidence.md) describe that boundary. Real-robot experiments are outside this release.
-
-The simulator uses MuJoCo with a PyRep-compatible API; task/motion planning uses PDDLStream and FastDownward. Original baseline sources are linked in the comparison table. [Third-party notices](THIRD_PARTY_NOTICES.md) retain their licenses and scientific attribution. Project licensing and redistribution rights for original scene assets and reproduced prompt material remain unresolved.
