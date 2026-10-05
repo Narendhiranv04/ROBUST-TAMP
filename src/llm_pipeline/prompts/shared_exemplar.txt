@@ -1,0 +1,388 @@
+These examples show the expected planning style. They use neutral toy names on purpose. For the real task, use only the objects, regions, actions, and constraints in the current user prompt; do not copy names from these examples.
+
+EXAMPLE 1: correct visible-only object planning
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: initial_planning
+visible_objects: token_a
+newly_visible_objects: (none)
+
+### Goal
+Move all visible tokens to the target zone.
+
+### Visible-Object Relational State
+- token_a: region=staging_zone, visibility=visible, description=on the staging zone
+
+### Valid Target Regions
+- staging_zone: temporary placement area
+- target_zone: final target area
+
+### Articulation State
+- (none)
+
+### Access Constraints
+- (none)
+
+### Completed Actions
+- (none)
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+
+GOOD OUTPUT:
+CHECK 1: visible tokens must end in target_zone.
+CHECK 2: token_a is the only visible token.
+FINAL ACTIONS:
+pick(token_a)
+place(token_a, target_zone)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(hidden_token)
+place(hidden_token, target_zone)
+
+WHY BAD:
+hidden_token is not listed as visible. Do not invent or use hidden objects.
+
+
+EXAMPLE 2: correct held-object consistency
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(token_a)
+place(token_b, container_core)
+
+WHY BAD:
+The placed object must be the same object that was picked. After pick(token_a), the matching placement is place(token_a, region).
+
+GOOD OUTPUT:
+CHECK 1: token_a must be placed in the target region.
+CHECK 2: the object picked must be the same object placed.
+FINAL ACTIONS:
+pick(token_a)
+place(token_a, container_core)
+
+
+EXAMPLE 3: correct clearing before opening an obstructed lid
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: initial_planning
+visible_objects: token_a, panel_lid
+newly_visible_objects: (none)
+
+### Goal
+Open the container and put the token inside.
+
+### Visible-Object Relational State
+- token_a: region=lid_surface, visibility=visible, description=on top of the lid
+
+### Valid Target Regions
+- staging_zone: temporary placement area
+- container_core: interior storage area
+
+### Articulation State
+- panel_lid: CLOSED
+
+### Access Constraints
+- container_core is BLOCKED until open(panel_lid) is completed
+- panel_lid is OBSTRUCTED by token_a; before open(panel_lid), move token_a to staging_zone
+
+### Completed Actions
+- (none)
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(panel_lid)
+
+GOOD OUTPUT:
+CHECK 1: token_a must end in container_core.
+CHECK 2: token_a is on lid_surface, so clear it before opening panel_lid.
+FINAL ACTIONS:
+pick(token_a)
+place(token_a, staging_zone)
+open(panel_lid)
+pick(token_a)
+place(token_a, container_core)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+open(panel_lid)
+pick(token_a)
+place(token_a, container_core)
+
+WHY BAD:
+The lid is obstructed by token_a, so opening the lid first violates the access constraint.
+
+
+EXAMPLE 4: correct replanning after discovery
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: replanning
+visible_objects: panel_lid, token_a, token_b
+newly_visible_objects: token_b
+
+### Goal
+Move all visible tokens into the container.
+
+### Visible-Object Relational State
+- token_a: region=container_core, visibility=visible, description=inside the container
+- token_b: region=staging_zone, visibility=visible, description=on the staging zone
+
+### Valid Target Regions
+- staging_zone: temporary placement area
+- container_core: interior storage area
+
+### Articulation State
+- panel_lid: OPEN
+
+### Access Constraints
+- (none)
+
+### Completed Actions
+- open(panel_lid)
+- pick(token_a)
+- place(token_a, container_core)
+
+### Replanning Event
+event_type: discovery
+event_id: new_object_discovered
+interrupted_after_successful_action: open(panel_lid)
+event_message: Newly visible objects require replanning: token_b
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(panel_lid)
+
+GOOD OUTPUT:
+CHECK 1: visible tokens must end in container_core.
+CHECK 2: token_a is already in container_core and completed actions must not repeat.
+FINAL ACTIONS:
+pick(token_b)
+place(token_b, container_core)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+open(panel_lid)
+pick(token_a)
+place(token_a, container_core)
+pick(token_b)
+place(token_b, container_core)
+
+WHY BAD:
+Completed actions must not be repeated during replanning.
+
+
+EXAMPLE 5: correct implicit handling of a visible non-target object
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: replanning
+visible_objects: processor_lid, stray_tool, part_a, tray
+newly_visible_objects: stray_tool
+
+### Goal
+Process all raw parts and place all processed parts on the tray in the delivery zone.
+
+### Visible-Object Relational State
+- stray_tool: region=processing_chamber, visibility=visible, description=inside the processing chamber
+- part_a: region=input_zone, cook_status=raw, visibility=visible, description=raw part in the input zone
+- tray: region=delivery_zone, visibility=visible, description=tray in the delivery zone
+
+### Valid Target Regions
+- safe_zone: area for non-target objects
+- input_zone: source area for raw parts
+- processing_chamber: enclosed processing area
+- tray_surface: top surface of the tray
+- delivery_zone: destination area for the tray
+
+### Articulation State
+- processor_lid: OPEN
+
+### Access Constraints
+- (none)
+
+### Domain Semantic State
+- processor_lid_open
+- in_input_zone(part_a)
+- raw(part_a)
+- tray_at_delivery_zone
+
+### Completed Actions
+- open(processor_lid)
+
+### Replanning Event
+event_type: discovery
+event_id: new_object_discovered
+interrupted_after_successful_action: open(processor_lid)
+event_message: Newly visible objects require replanning: stray_tool
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(processor_lid)
+- close(processor_lid)
+
+GOOD OUTPUT:
+CHECK 1: raw part_a must be processed then placed on tray_surface; stray_tool belongs in safe_zone.
+CHECK 2: processor_lid is open and stray_tool is blocking processing_chamber.
+FINAL ACTIONS:
+pick(stray_tool)
+place(stray_tool, safe_zone)
+pick(part_a)
+place(part_a, processing_chamber)
+close(processor_lid)
+open(processor_lid)
+pick(part_a)
+place(part_a, tray_surface)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(part_a)
+place(part_a, processing_chamber)
+close(processor_lid)
+
+WHY BAD:
+The stray_tool is visible inside the processing chamber and does not belong there. It should be moved to safe_zone before processing proceeds. The plan also stops before reopening the processor and placing part_a on tray_surface.
+
+
+EXAMPLE 6: correct batch processing and serving
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: initial_planning
+visible_objects: processor_lid, part_a, part_b, part_c, tray
+newly_visible_objects: (none)
+
+### Goal
+Process all raw parts and place all processed parts on the tray in the delivery zone.
+
+### Visible-Object Relational State
+- part_a: region=processing_chamber, cook_status=cooked, visibility=visible, description=inside the processing chamber
+- part_b: region=input_zone, cook_status=raw, visibility=visible, description=raw part in the input zone
+- part_c: region=input_zone, cook_status=raw, visibility=visible, description=raw part in the input zone
+- tray: region=rack_zone, visibility=visible, description=tray at rack zone
+
+### Valid Target Regions
+- input_zone: source area for raw parts
+- processing_chamber: enclosed processing area
+- tray_surface: top surface of the tray
+- delivery_zone: destination area for the tray
+- rack_zone: source area for the tray
+
+### Articulation State
+- processor_lid: OPEN
+
+### Access Constraints
+- (none)
+
+### Domain Semantic State
+- processor_lid_open
+- in_processing_chamber(part_a)
+- cooked(part_a)
+- in_input_zone(part_b)
+- raw(part_b)
+- in_input_zone(part_c)
+- raw(part_c)
+- tray_at_rack_zone
+
+### Completed Actions
+- (none)
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(processor_lid)
+- close(processor_lid)
+
+GOOD OUTPUT:
+CHECK 1: cooked part_a goes to tray_surface; raw part_b and part_c need the process cycle then tray_surface; tray goes to delivery_zone.
+CHECK 2: processor_lid is open, so move part_a out before batch-processing the raw parts.
+FINAL ACTIONS:
+pick(tray)
+place(tray, delivery_zone)
+pick(part_a)
+place(part_a, tray_surface)
+pick(part_b)
+place(part_b, processing_chamber)
+pick(part_c)
+place(part_c, processing_chamber)
+close(processor_lid)
+open(processor_lid)
+pick(part_b)
+place(part_b, tray_surface)
+pick(part_c)
+place(part_c, tray_surface)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(part_b)
+place(part_b, tray_surface)
+pick(part_c)
+place(part_c, tray_surface)
+
+WHY BAD:
+Raw parts are not processed by being placed directly on tray_surface. Raw parts outside the processor need the ordered cycle: place processing_chamber, close(processor_lid), open(processor_lid), then place on tray_surface. The tray also still needs to be moved to delivery_zone.
+
+
+EXAMPLE 7: correct sorting across two target categories
+
+INPUT:
+### Planning Checkpoint
+checkpoint_type: initial_planning
+visible_objects: token_a, supply_a, supply_b, panel_lid
+newly_visible_objects: (none)
+
+### Goal
+Put all tokens in the container and all supplies on the storage shelf.
+
+### Visible-Object Relational State
+- token_a: region=staging_zone, visibility=visible, description=on the staging zone
+- supply_a: region=supply_zone, visibility=visible, description=on the supply zone
+- supply_b: region=supply_zone, visibility=visible, description=on the supply zone
+
+### Valid Target Regions
+- staging_zone: temporary placement area
+- supply_zone: source area for supplies
+- shelf_zone: storage shelf for supplies
+- container_core: interior storage area
+
+### Articulation State
+- panel_lid: OPEN
+
+### Access Constraints
+- (none)
+
+### Completed Actions
+- open(panel_lid)
+
+### Executable Interface
+- pick(object)
+- place(object, region)
+- open(panel_lid)
+
+GOOD OUTPUT:
+CHECK 1: token_a belongs in container_core; supply_a and supply_b belong in shelf_zone.
+CHECK 2: panel_lid is already open and no completed action needs repeating.
+FINAL ACTIONS:
+pick(supply_a)
+place(supply_a, shelf_zone)
+pick(supply_b)
+place(supply_b, shelf_zone)
+pick(token_a)
+place(token_a, container_core)
+
+BAD OUTPUT:
+FINAL ACTIONS:
+pick(supply_a)
+place(supply_a, container_core)
+pick(token_a)
+place(token_a, shelf_zone)
+
+WHY BAD:
+Supplies belong on shelf_zone and tokens belong in container_core. Do not swap target regions between object categories.
