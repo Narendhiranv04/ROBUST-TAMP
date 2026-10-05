@@ -1,0 +1,32 @@
+% Algorithm 1, as implemented (llm_pipeline/pipeline.py run(), _trigger_check, _plan_in_parallel,
+% _merge_corrective, _repeated_output; if_rule.py, memory.py, parallel.py, corrective.py).
+% Needs \usepackage{algorithm} and \usepackage[noend]{algpseudocode}.
+\begin{algorithm}[t]
+\caption{Robust TAMP. $\mathrm{IF}(o,\pi)$: $o$ is not handled by $\pi$ and is either relevant and not
+in its goal state, or irrelevant and in the placement area of a region $\pi$ places into.}
+\label{alg:robust-tamp}
+\small
+\begin{algorithmic}[1]
+\Require goal $g$, actions $\mathcal{A}_d$, execution layer $E_d$, budget $N$
+\State $h, M, \pi, e \gets \emptyset$ \Comment{history, memory, remaining plan, event}
+\For{$k = 0, \dots, N$}
+  \State \textbf{if} $e$ is not a plan-check error \textbf{then} observe $s^{\mathrm{vis}}_k$, update $M$
+  \State $c_k \gets (s^{\mathrm{vis}}_k, M, h, \pi, e, g)$
+  \If{$e$ is a trigger on objects $O_e$} \Comment{corrective replan}
+    \State $B \gets \Call{Query}{c_k}$ \ $\|$ \ execute $\Call{Independent}{\pi, O_e}$ \Comment{WHEN}
+    \State $\alpha_k \gets \Call{Insert}{\pi, B}$ \Comment{WHERE}
+  \Else
+    \State $\alpha_k \gets \Call{Query}{c_k}$ \Comment{initial plan or full replan}
+  \EndIf
+  \State \textbf{if} $\neg\Call{Validate}{\alpha_k, \mathcal{A}_d, c_k}$ \textbf{then} $e \gets$ plan-check error; \textbf{continue}
+  \State $e \gets \emptyset$
+  \For{each bundle $b \in \alpha_k$}
+    \State execute $b$ with $E_d$; $h \gets h \cup \{b\}$; observe $s^{\mathrm{vis}}$, update $M$
+    \State \textbf{if} $b$ failed \textbf{then} $e \gets \mathit{fail}_E$; \textbf{break} \Comment{full replan}
+    \State \textbf{if} gripper empty $\wedge$ $O_{\mathrm{IF}} = \{o \in s^{\mathrm{vis}} \cup M : \mathrm{IF}(o, \pi)\} \neq \emptyset$
+      \textbf{then} $e \gets$ trigger on $O_{\mathrm{IF}}$; \textbf{break}
+  \EndFor
+  \State \textbf{if} $e = \emptyset$ \textbf{then return} \Comment{plan completed}
+\EndFor
+\end{algorithmic}
+\end{algorithm}

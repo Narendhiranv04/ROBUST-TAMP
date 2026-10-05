@@ -1,0 +1,43 @@
+% ---------------------------------------------------------------------------------------------
+% Baseline comparison (single column). Needs: booktabs, multirow.
+% All rows: 14 variants x 10 seeds (kitchen 90 trials, grill 50), Qwen3-VL-8B-Thinking via vLLM,
+% one RTX 5090. Zero-shot rows: final runs of 2026-10-04 (deploy 0b180eb). The in-context examples
+% reach only the grill prompt (kitchen prompts are identical), so SR_K is one value per method and
+% the "+ ICL" rows combine the zero-shot kitchen trials with the grill trials run with the examples
+% (baselines_final_icl). Pending cells: \pend. Citation keys are placeholders: adjust to the .bib.
+% ---------------------------------------------------------------------------------------------
+\newcommand{\pend}{--}
+\newcommand{\icl}{\hspace{0.6em}\textit{+\,ICL}}
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{2.2pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{Comparison with external baselines (14 variants, 10 trials each; same planner model,
+executor, perception and GPU). \textit{+\,ICL}: with in-context examples, which reach only the grill
+prompt, so SR$_K$ is shared. Success in \%; Plan., Lat., Time in seconds. Bold: best; underlined: best
+zero-shot. $^\dagger$Goal graph cannot represent cooking.}
+\label{tab:baselines}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}l cccc cccc@{}}
+\toprule
+& \multicolumn{4}{c}{Success (\%) $\uparrow$} & \multicolumn{4}{c}{Cost $\downarrow$} \\
+\cmidrule(lr){2-5}\cmidrule(l){6-9}
+Method & SR$_K$ & SR$_G$ & SR & PGC & Calls & Plan. & Lat. & Time \\
+\midrule
+VLM-TAMP~\cite{vlmtamp}               & \multirow{2}{*}{23.3} & 6.0 & 17.1 & 71.4 & 2.1 & 77 & 31.8 & 176 \\
+\icl                                   & & 10.0 & 18.6 & 71.9 & 2.1 & 85 & 35.9 & 183 \\
+\addlinespace[2pt]
+OWL-TAMP~\cite{owltamp}               & \multirow{2}{*}{17.8} & 2.0 & 12.1 & 49.1 & 6.3 & 730 & 115.3 & 790 \\
+\icl                                   & & 8.0 & 14.3 & 53.3 & 6.4 & 740 & 114.6 & 803 \\
+\addlinespace[2pt]
+Inner Monologue~\cite{innermonologue} & \multirow{2}{*}{64.4} & 6.0 & 43.6 & 76.5 & 14.4 & 956 & 62.3 & 1114 \\
+\icl                                   & & \pend & \pend & \pend & \pend & \pend & \pend & \pend \\
+\addlinespace[2pt]
+EPoG$^\dagger$~\cite{epog}            & \multirow{2}{*}{44.4} & 0.0 & 28.6 & 48.9 & 5.1 & 159 & 25.4 & 216 \\
+\icl                                   & & \pend & \pend & \pend & \pend & \pend & \pend & \pend \\
+\midrule
+\textbf{Ours}                          & \multirow{2}{*}{\textbf{94.4}} & \underline{22.0} & \underline{68.6} & \underline{86.5} & 5.1 & 540 & 103.4 & 643 \\
+\icl                                   & & \textbf{88.0} & \textbf{92.1} & \textbf{97.8} & 3.8 & 355 & 91.6 & 449 \\
+\bottomrule
+\end{tabular*}
+\end{table}

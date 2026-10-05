@@ -42,6 +42,11 @@ OBJECT_PALETTE = [(230, 57, 70), (29, 120, 200), (46, 170, 90), (255, 170, 0), (
                   (240, 110, 170), (150, 200, 40)]
 REGION_PALETTE = [(106, 61, 154), (140, 86, 75), (190, 0, 120), (0, 70, 130), (120, 120, 0),
                   (70, 70, 70), (0, 120, 110), (160, 60, 0)]
+# The isometric figure colours by role, not by item: every task object one colour, every region
+# another, and every leader line in one dark ink.
+ISO_OBJECT_COLOR = (36, 104, 196)      # movable / articulated objects: solid pills, filled masks
+ISO_REGION_COLOR = (214, 128, 0)       # placement regions: outlined pills, wireframe boxes
+LEADER_INK = (24, 27, 32)
 BACKGROUND = (246, 246, 244)
 INK = (40, 40, 40)
 MUTED = (120, 120, 120)
@@ -87,13 +92,14 @@ def load_env(variant):
     return env
 
 
-def isometric(env, out: Path, size=ISO_SIZE, focus=None, render_scale=ISO_RENDER, output_scale=ISO_OUTPUT):
+def isometric(env, out: Path, size=ISO_SIZE, focus=None, render_scale=ISO_RENDER, output_scale=ISO_OUTPUT, hide=()):
     """Isometric view from behind and to the side of the robot, looking over its base.
 
     focus: world points (task objects, region corners) the view is framed on: the camera
     looks at their centre from a distance at which they fill the frame. The view is
     rendered at ``render_scale`` x ``size`` with 8x multisampling; isometric.png is saved at
-    ``output_scale`` x ``size``. Returns the full-resolution image, handles and projector."""
+    ``output_scale`` x ``size``. hide: body names left out of the render (marker geoms of regions
+    the scene does not use). Returns the full-resolution image, handles and projector."""
     import mujoco
     from PIL import Image
     world = env.pr._world
@@ -102,6 +108,28 @@ def isometric(env, out: Path, size=ISO_SIZE, focus=None, render_scale=ISO_RENDER
     world.m.vis.global_.offheight = max(int(world.m.vis.global_.offheight), size[1])
     world.m.vis.quality.offsamples = max(int(world.m.vis.quality.offsamples), 8)
     renderer = mujoco.Renderer(world.m, size[1], size[0])
+    hidden = [g for g in range(world.m.ngeom)
+              if mujoco.mj_id2name(world.m, mujoco.mjtObj.mjOBJ_BODY, int(world.m.geom_bodyid[g])) in set(hide)]
+    saved_groups = {g: int(world.m.geom_group[g]) for g in hidden}
+    for g in hidden:
+        world.m.geom_group[g] = 5              # a group the scene option does not draw
+    # Region marker tiles (group 2) are drawn lying on the surface below them: some float at their
+    # region's height and would cast a shadow a little away from themselves.
+    # (only tiles above the tabletop: a tile over a grate would fall through it)
+    saved_xpos = {}
+    for g in range(world.m.ngeom):
+        if int(world.m.geom_group[g]) != 2:
+            continue
+        centre = np.array(world.d.geom_xpos[g], dtype=float)
+        hit = np.zeros(1, dtype=np.int32)
+        groups = np.array([1, 1, 0, 0, 0, 0], dtype=np.uint8)      # visual and collision geoms only
+        depth = mujoco.mj_ray(world.m, world.d, centre, np.array([0.0, 0.0, -1.0]), groups, 1,
+                              int(world.m.geom_bodyid[g]), hit)
+        below = (mujoco.mj_id2name(world.m, mujoco.mjtObj.mjOBJ_BODY, int(world.m.geom_bodyid[hit[0]]))
+                 if hit[0] >= 0 else '') or ''
+        if depth > 0.01 and below.startswith('diningTable'):
+            saved_xpos[g] = centre.copy()
+            world.d.geom_xpos[g][2] = centre[2] - depth + 0.002
     opt = mujoco.MjvOption()
     opt.geomgroup[:] = 0
     opt.geomgroup[1] = 1
@@ -133,6 +161,10 @@ def isometric(env, out: Path, size=ISO_SIZE, focus=None, render_scale=ISO_RENDER
     handles = np.full(geom_ids.shape, -1, dtype=np.int64)
     is_geom = (types == int(mujoco.mjtObj.mjOBJ_GEOM)) & (geom_ids >= 0)
     handles[is_geom] = world.geom_handle[geom_ids[is_geom]]
+    for g, group in saved_groups.items():
+        world.m.geom_group[g] = group
+    for g, xpos in saved_xpos.items():
+        world.d.geom_xpos[g] = xpos
     return rgb, handles, project_fn
 
 
@@ -375,14 +407,23 @@ def draw_callouts_gutter(image, items, font, margin=28, gap=14, scale=1, clean=F
             edge = (rect[2], y + h / 2) if side == 'left' else (rect[0], y + h / 2)
             layout.append((item, rect, edge, top))
     if clean:
+        paths = []
         for item, rect, edge, _ in layout:
             ax, ay = item['anchor']
-            color = tuple(item['color'])
-            draw.line([(ax, ay), edge], fill=(255, 255, 255, 200), width=int(round(5.5 * scale)))
-            draw.line([(ax, ay), edge], fill=color + (255,), width=int(round(2.2 * scale)))
-            ring, dot = 7.5 * scale, 4.8 * scale
-            draw.ellipse([ax - ring, ay - ring, ax + ring, ay + ring], fill=(255, 255, 255, 255))
-            draw.ellipse([ax - dot, ay - dot, ax + dot, ay + dot], fill=color + (255,))
+            ex, ey = edge
+            rise = abs(ay - ey)
+            if abs(ax - ex) > rise:            # horizontal from the label, then 45 degrees to the anchor
+                kx = ax - rise if ax > ex else ax + rise
+                paths.append((item, [(ex, ey), (kx, ey), (ax, ay)]))
+            else:
+                paths.append((item, [(ex, ey), (ax, ay)]))
+        for _, path in paths:                  # solid dark leaders, no halo
+            draw.line(path, fill=LEADER_INK + (255,), width=int(round(3.4 * scale)), joint='curve')
+        for item, path in paths:               # anchor: a role-coloured dot in a dark ring
+            ax, ay = path[-1]
+            ring, dot = 8.0 * scale, 5.2 * scale
+            draw.ellipse([ax - ring, ay - ring, ax + ring, ay + ring], fill=LEADER_INK + (255,))
+            draw.ellipse([ax - dot, ay - dot, ax + dot, ay + dot], fill=tuple(item['color']) + (255,))
         _draw_pills(image, layout, font, scale)
         return
     for item, rect, edge, _ in layout:
@@ -397,10 +438,13 @@ def draw_callouts_gutter(image, items, font, margin=28, gap=14, scale=1, clean=F
 
 
 def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxes, region_colors, table_handles,
-             region_name, font, line=4, layout='radial', scale=1, clean=False):
+             region_name, font, line=4, layout='radial', scale=1, clean=False, region_handles=None):
     """Object masks (fill, contour, box), region boxes (top face, wireframe; the table as its
     segmentation pixels) and callout labels on an RGB image. mask: per-pixel object handle.
-    Returns (image, shown_regions, pixel counts per object)."""
+    Returns (image, shown_regions, pixel counts per object). ``clean`` (with region_handles: the
+    scene geometry of each region): a region is painted on its own geometry where the view sees it
+    (a mat, the rack), as a flat footprint where it does not, and not at all when its geometry is a
+    task object (the plate's top: the object is already marked)."""
     from PIL import Image, ImageDraw
     from scipy import ndimage
     base = base.convert('RGBA')
@@ -419,15 +463,29 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
             if not tmask.any():
                 continue
             layer = np.zeros(tmask.shape + (4,), dtype=np.uint8)
-            layer[tmask] = color + (50,)
-            edge = ndimage.binary_dilation(outline(tmask), iterations=2 * scale) & tmask
-            layer[edge] = color + (230,)
+            if not clean:
+                layer[tmask] = color + (50,)
+            edge = ndimage.binary_dilation(outline(tmask), iterations=(1 if clean else 2) * scale) & tmask
+            layer[edge] = color + ((150,) if clean else (230,))
             overlay = Image.alpha_composite(Image.fromarray(layer, 'RGBA'), overlay)
             table_mask = tmask       # its label anchor is chosen once everything else is drawn
             region_items.append({'anchor': None, 'text': region_name(region), 'color': color, 'kind': 'region',
                                  'table': True})
             shown.append(region)
             continue
+        if clean and region_handles is not None:
+            handles = region_handles.get(region, [])
+            on_object = any(handle_to_label.get(h) in object_colors for h in handles)
+            seen = np.isin(mask, handles) if handles else np.zeros(mask.shape, bool)
+            if seen.sum() > 400 * scale * scale and not on_object:
+                layer = np.zeros(seen.shape + (4,), dtype=np.uint8)
+                layer[seen] = color + (85,)
+                layer[ndimage.binary_dilation(outline(seen), iterations=max(1, int(1.5 * scale))) & seen] = color + (255,)
+                overlay = Image.alpha_composite(overlay, Image.fromarray(layer, 'RGBA'))
+                region_items.append({'anchor': _interior_point(seen), 'text': region_name(region), 'color': color,
+                                     'kind': 'region'})
+                shown.append(region)
+                continue
         corners = np.array([[x, y, z] for z in (lo[2], hi[2]) for x, y in
                             ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))])
         uv, in_front = project_fn(corners)
@@ -437,11 +495,18 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
             continue
         odraw = ImageDraw.Draw(overlay)
         bottom, top = [tuple(map(float, q)) for q in uv[:4]], [tuple(map(float, q)) for q in uv[4:]]
-        odraw.polygon(top, fill=color + (60,))
-        for ring in (bottom, top):
-            odraw.line(ring + [ring[0]], fill=color + (220,), width=line)
-        for a, b in zip(bottom, top):
-            odraw.line([a, b], fill=color + (220,), width=line)
+        on_object = clean and region_handles is not None and any(
+            handle_to_label.get(h) in object_colors for h in region_handles.get(region, []))
+        if clean:                              # a flat footprint (nothing over an object that is marked)
+            if not on_object:
+                odraw.polygon(top, fill=color + (70,))
+                odraw.line(top + [top[0]], fill=color + (255,), width=line, joint='curve')
+        else:
+            odraw.polygon(top, fill=color + (60,))
+            for ring in (bottom, top):
+                odraw.line(ring + [ring[0]], fill=color + (220,), width=line)
+            for a, b in zip(bottom, top):
+                odraw.line([a, b], fill=color + (220,), width=line)
         cx = float(np.clip(np.mean([q[0] for q in top]), 10, base.width - 10))
         cy = float(np.clip(np.mean([q[1] for q in top]), 10, base.height - 10))
         region_items.append({'anchor': (cx, cy), 'text': region_name(region), 'color': color, 'kind': 'region'})
@@ -454,8 +519,9 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
         fill[ndimage.binary_dilation(outline(hit), iterations=scale) & hit] = color + (255,)
         overlay = Image.alpha_composite(overlay, Image.fromarray(fill, 'RGBA'))
         box = main_blob_box(hit, margin=3 * scale)
-        ImageDraw.Draw(overlay).rounded_rectangle(box, radius=6 * scale, outline=color + (255,),
-                                                  width=max(2, line - scale))
+        if not clean:                          # the clean figure marks objects by their masks alone
+            ImageDraw.Draw(overlay).rounded_rectangle(box, radius=6 * scale, outline=color + (255,),
+                                                      width=max(2, line - scale))
         boxes.append(box)
         object_items.append({'anchor': _interior_point(hit), 'text': obj, 'color': color, 'kind': 'object'})
         pixels[obj] = int(hit.sum())
@@ -465,6 +531,9 @@ def annotate(base, mask, project_fn, handle_to_label, object_colors, region_boxe
             occupied = np.array(overlay)[:, :, 3] > 80
             free = (ndimage.binary_erosion(table_mask, iterations=3 * scale)
                     & ~ndimage.binary_dilation(occupied, iterations=25 * scale))
+            if clean:                          # the central part of the table, clear of the label gutters
+                columns = np.arange(free.shape[1])
+                free &= ((columns > 0.25 * free.shape[1]) & (columns < 0.65 * free.shape[1]))[None, :]
             if free.any():
                 depth = ndimage.distance_transform_edt(free)
                 y, x = np.unravel_index(int(np.argmax(depth)), depth.shape)
@@ -585,15 +654,28 @@ def main():
             focus.append(np.array(sim.simGetObjectPosition(int(handle), -1)))
         except Exception:
             pass
-    iso_rgb, iso_handles, iso_project = isometric(env, out, focus=focus)
-    iso_colors = dict(object_colors)
+    region_objects = {scene_object_for_region(r) for r in region_boxes}
+    hide = [name for name in ('cupboard_boundary', 'box_boundary', 'placement_boundary', 'groceries_boundary',
+                              'plate_boundary', 'prep_area', 'grill_boundary')
+            if name not in region_objects]
+    iso_rgb, iso_handles, iso_project = isometric(env, out, focus=focus, hide=hide)
+    region_handles = {}
+    for region in region_boxes:
+        try:
+            obj = env.get_object(scene_object_for_region(region))
+            region_handles[region] = [int(obj.get_handle())] + [int(o.get_handle()) for o in obj.get_objects_in_tree()]
+        except Exception:
+            region_handles[region] = []
+    iso_colors = {name: ISO_OBJECT_COLOR for name in object_colors}
     for label in sorted({handle_to_label[h] for h in np.unique(iso_handles).tolist() if h in handle_to_label}):
         if label not in iso_colors and label in detector.task_objects:
-            iso_colors[label] = OBJECT_PALETTE[len(iso_colors) % len(OBJECT_PALETTE)]
+            iso_colors[label] = ISO_OBJECT_COLOR
+    iso_region_colors = {name: ISO_REGION_COLOR for name in region_boxes}
     k = ISO_RENDER
     iso_image, _, _ = annotate(Image.fromarray(iso_rgb), iso_handles, iso_project, handle_to_label, iso_colors,
-                               region_boxes, region_colors, table_handles, planner_region_name,
-                               _font(32 * k, weight='SemiBold'), line=3 * k, layout='gutter', scale=k, clean=True)
+                               region_boxes, iso_region_colors, table_handles, planner_region_name,
+                               _font(32 * k, weight='SemiBold'), line=3 * k, layout='gutter', scale=k, clean=True,
+                               region_handles=region_handles)
     final = (ISO_SIZE[0] * ISO_OUTPUT, ISO_SIZE[1] * ISO_OUTPUT)
     iso_image.resize(final, Image.LANCZOS).save(out / 'isometric_labeled.png', optimize=True)
     if args.only_isometric:

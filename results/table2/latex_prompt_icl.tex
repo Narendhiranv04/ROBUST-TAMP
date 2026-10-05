@@ -1,0 +1,111 @@
+% =============================================================================================
+% In-context examples of the grill scene (icl_mode examples_v2), exactly as sent to the model.
+% Needs latex_prompt_style.tex.
+% =============================================================================================
+\subsection*{In-context examples (grill scene)}
+In the ICL condition, the following text is appended to the unchanged system prompt of the grill
+scene; every other part of the prompt is identical to the zero-shot condition. The examples come
+from an unrelated scene (a laundry dryer) with the same kind of mechanism: a towel dries only while
+it is inside the dryer as the door is closed and opened again, and a dry towel inside the dryer
+during another cycle is scorched. No rule is stated; each example shows a good and a bad answer
+in the prompt's own format and what happened afterwards. They name no object, lid or region of
+the grill scene.
+
+\begin{promptbox}{pbBlue}{Header}
+Examples (from a different scene; its objects, lids and regions are not in your scene):
+\end{promptbox}
+
+\begin{promptbox}{pbTeal}{Example 1: a request for a full plan}
+## Goal
+DRY all wet towels using the dryer and PUT all dry towels in the BASKET in the laundry area.
+## Current state
+Visible objects and the region each one is in:
+- basket: shelf
+- wet_towel_1: counter
+Lids:
+- dryer_door: closed (closes off inside_dryer)
+Gripper: empty
+Regions: counter, shelf, inside_dryer, basket_top, laundry_area
+\end{promptbox}
+
+\begin{tcbraster}[raster columns=2, raster equal height=rows, raster column skip=2mm, raster before skip=1mm]
+\begin{promptbox}[unbreakable]{pbGreen}{Good answer}
+FINAL ACTIONS:
+pick(basket)
+place(basket, laundry_area)
+open(dryer_door)
+pick(wet_towel_1)
+place(wet_towel_1, inside_dryer)
+close(dryer_door)
+open(dryer_door)
+pick(wet_towel_1)
+place(wet_towel_1, basket_top)
+Outcome: the towel came out dry and is in the basket in the laundry area. Goal met.
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbRed}{Bad answer}
+FINAL ACTIONS:
+open(dryer_door)
+pick(wet_towel_1)
+place(wet_towel_1, inside_dryer)
+pick(wet_towel_1)
+place(wet_towel_1, basket_top)
+Outcome: the towel is still wet, and the basket is still on the shelf. Goal not met.
+\end{promptbox}
+\end{tcbraster}
+
+\begin{promptbox}{pbTeal}{Example 2: a corrective request}
+## Goal
+DRY all wet towels using the dryer and PUT all dry towels in the BASKET in the laundry area.
+## Current state
+Visible objects and the region each one is in:
+- basket: laundry_area
+- wet_towel_1: counter
+- dry_towel_2: inside_dryer
+Lids:
+- dryer_door: open (closes off inside_dryer)
+Gripper: empty
+Regions: counter, shelf, inside_dryer, basket_top, laundry_area
+## Completed actions
+- a1: pick(basket)
+- a2: place(basket, laundry_area)
+- a3: open(dryer_door)
+## Remaining plan (not executed yet)
+- a4: pick(wet_towel_1)
+- a5: place(wet_towel_1, inside_dryer)
+- a6: close(dryer_door)
+- a7: open(dryer_door)
+- a8: pick(wet_towel_1)
+- a9: place(wet_towel_1, basket_top)
+## Why a new plan is requested
+- After open(dryer_door), these observed objects are not handled by the remaining plan:
+  - dry_towel_2 (in inside_dryer): relevant to the goal, not in its goal state
+\end{promptbox}
+
+\begin{tcbraster}[raster columns=2, raster equal height=rows, raster column skip=2mm, raster before skip=1mm]
+\begin{promptbox}[unbreakable]{pbGreen}{Good answer}
+FINAL BLOCKS:
+BLOCK
+objects: dry_towel_2
+urgency: urgent
+insert: front
+reason: dry_towel_2 is already dry.
+actions:
+pick(dry_towel_2)
+place(dry_towel_2, basket_top)
+END BLOCK
+Outcome: both towels are dry and in the basket. Goal met.
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbRed}{Bad answer}
+FINAL BLOCKS:
+BLOCK
+objects: dry_towel_2
+urgency: deferred
+insert: end
+reason: dry_towel_2 can be moved at the end.
+actions:
+pick(dry_towel_2)
+place(dry_towel_2, basket_top)
+END BLOCK
+Outcome: dry_towel_2 was still inside during a6 and a7 and came out scorched. Goal not met.
+\end{promptbox}
+\end{tcbraster}
