@@ -1,0 +1,63 @@
+% S2 Task Details
+The simulation evaluation uses 14 MuJoCo variants: nine in the kitchen domain and five in the grill
+domain. Every trial of a domain receives the same natural-language goal $g$:
+\begin{itemize}
+\item Kitchen: \emph{``move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box''}.
+\item Grill: \emph{``COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.''}
+\end{itemize}
+
+\noindent\textbf{Goal evaluation.} The required relations $\mathcal{R}_\tau$ place each mug in the box,
+each grocery on the cupboard shelf, the plate in the serving area and each meat on the plate; a phone
+that overlaps a placement area must end outside every placement area. In the grill, $\mathcal{P}_\tau$
+requires every meat to be cooked, not cooked again once cooked, and not served raw. Cooking is
+determined from $h_T$: a meat completes one cooking cycle when it is inside the grill as the lid closes
+and is still inside when the lid next opens; meat discovered already cooked starts with one completed
+cycle. Ordering constraints (obstructing objects leave a placement area before the next placement into
+it; cooked meat leaves the grill before the next close; raw meat completes a cycle before plating) are
+reported as insertion violations and do not change SR or PGC.
+
+\noindent\textbf{Placement areas.} Overlap is evaluated against fixed areas that the executor uses for
+placement: the robot-side half of the box interior and the grill slot nearest the robot, where every
+meat is placed. Hidden objects that are meant not to obstruct lie in the far half of the box or in the
+far grill slots. The areas are used only by the system and never appear in a prompt.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\caption{Hidden contents and reference decisions. Ovl.: the hidden object overlaps the placement area
+of a pending placement. The reference decisions are used only for evaluation and are never given to the
+planner. Grill urgency follows the cooking procedure rather than overlap.}
+\label{tab:supp-variants}
+\begin{tabularx}{\columnwidth}{@{}l>{\raggedright\arraybackslash}Yc>{\raggedright\arraybackslash}p{2.9cm}@{}}
+\toprule
+ID & Hidden objects (location) & Ovl. & Reference decision \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{Kitchen}} \\
+K0 & none & -- & no correction \\
+K1 & phone (box) & \checkmark & correct; urgent \\
+K2 & phone (box) & $\times$ & no correction \\
+K3 & 1 grocery (box) & \checkmark & correct; urgent \\
+K3-n2 & 2 groceries (box) & \checkmark & correct; urgent \\
+K3-n3 & 3 groceries (box) & \checkmark & correct; urgent \\
+K4 & 1 grocery (box) & $\times$ & correct; deferred \\
+K1-w1 & phone (box); +1 grocery on the table & \checkmark & correct; urgent \\
+K1-w2 & phone (box); +2 groceries on the table & \checkmark & correct; urgent \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{Grill}} \\
+G0 & none & -- & no correction \\
+G1 & 2 cooked meats (grill) & $\times$ & correct; urgent \\
+G1-n1 & 1 cooked meat (grill) & $\times$ & correct; urgent \\
+G2 & 1 cooked + 1 raw meat (grill) & $\times$ & correct; cooked: urgent, raw: deferred \\
+G3 & 2 raw meats (grill) & $\times$ & correct; deferred \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textbf{Trial randomization.} Seeds 0--9 perturb the initial pose of each variant's free objects
+by up to $\pm 3$\,cm in $x$ and $y$ and $\pm 20^\circ$ in yaw. A sample is rejected if the object touches
+another movable object or its height changes by more than 1\,cm after settling; after 30 rejected samples
+the object keeps its nominal pose. Objects whose pose the executor or the variant depends on stay fixed:
+the plate, the lids and containers, the mug stored in the cupboard, objects inside the cupboard, and the
+hidden contents of the box and the grill.

@@ -1,0 +1,378 @@
+ROBUST TAMP - final variants and their ground-truth (GT) action sequences
+==============================================================================
+Source: evaluation/final_variants.py (FinalVariant.gt_actions), commit 42b8d206 (branch phase-7c-fixes).
+Execution check: GT oracle planner on MuJoCo, seeds 0-9 with pose jitter, run twice at the same commit
+(results/phase7c/phase3/oracle_ceiling and results/phase7c_repeat/phase3/oracle_ceiling).
+"Executed exactly" = the successful actions of the trial are exactly this sequence, in this order.
+Hidden objects are revealed when the lid opens; the oracle plans their actions only after that.
+Region names are the internal ones; the planner prompt shows table_staging_area as table_center_area,
+pantry_area as table_right_area and prep_area as grill_side_area.
+
+------------------------------------------------------------------------------
+FINAL.K0   [family A, scene kitchen]
+Point it proves: Kitchen reference: nothing hidden, no replan.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: none (the container opens empty)
+Expected IF decision: no replan
+Expected urgency: -
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 82 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 85 s
+GT action sequence (15 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(spam)
+   7. place(spam, cupboard_shelf)
+   8. pick(sugar)
+   9. place(sugar, cupboard_shelf)
+  10. pick(mug1)
+  11. place(mug1, inside_box)
+  12. pick(mug2)
+  13. place(mug2, inside_box)
+  14. pick(mug3)
+  15. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.G0   [family A, scene grill]
+Point it proves: Grill reference: normal cook-and-serve, no replan.
+Goal: COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+Hidden: none (the container opens empty)
+Expected IF decision: no replan
+Expected urgency: -
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 78 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 83 s
+GT action sequence (9 actions):
+   1. open(grill_lid)
+   2. pick(plate)
+   3. place(plate, serving_area)
+   4. pick(raw_meat_1)
+   5. place(raw_meat_1, inside_grill)
+   6. close(grill_lid)
+   7. open(grill_lid)
+   8. pick(raw_meat_1)
+   9. place(raw_meat_1, plate_top)
+
+------------------------------------------------------------------------------
+FINAL.K1   [family B, scene kitchen]
+Point it proves: Irrelevant object triggers a replan only when overlapping; cleared before any mug goes in.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: phone in inside_box, overlapping the placement area
+Expected IF decision: {'phone': 'irrelevant_overlapping'}
+Expected urgency: {'phone': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 97 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 101 s
+GT action sequence (17 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(phone)
+   7. place(phone, table)
+   8. pick(spam)
+   9. place(spam, cupboard_shelf)
+  10. pick(sugar)
+  11. place(sugar, cupboard_shelf)
+  12. pick(mug1)
+  13. place(mug1, inside_box)
+  14. pick(mug2)
+  15. place(mug2, inside_box)
+  16. pick(mug3)
+  17. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.K2   [family B, scene kitchen]
+Point it proves: Non-overlapping irrelevant object is ignored: no replan, no manipulation.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: phone in inside_box, non-overlapping the placement area
+Expected IF decision: {'phone': 'ignore'}
+Expected urgency: -
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 85 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 89 s
+GT action sequence (15 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(spam)
+   7. place(spam, cupboard_shelf)
+   8. pick(sugar)
+   9. place(sugar, cupboard_shelf)
+  10. pick(mug1)
+  11. place(mug1, inside_box)
+  12. pick(mug2)
+  13. place(mug2, inside_box)
+  14. pick(mug3)
+  15. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.K3   [family B, scene kitchen]
+Point it proves: Overlapping relevant object handled before anything else goes into the box.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: can_of_beans in inside_box, overlapping the placement area
+Expected IF decision: {'can_of_beans': 'relevant_not_goal_attained'}
+Expected urgency: {'can_of_beans': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 103 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 108 s
+GT action sequence (17 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(can_of_beans)
+   7. place(can_of_beans, cupboard_shelf)
+   8. pick(spam)
+   9. place(spam, cupboard_shelf)
+  10. pick(sugar)
+  11. place(sugar, cupboard_shelf)
+  12. pick(mug1)
+  13. place(mug1, inside_box)
+  14. pick(mug2)
+  15. place(mug2, inside_box)
+  16. pick(mug3)
+  17. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.K4   [family B, scene kitchen]
+Point it proves: Non-overlapping relevant object still handled, without urgency.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: can_of_beans in inside_box, non-overlapping the placement area
+Expected IF decision: {'can_of_beans': 'relevant_not_goal_attained'}
+Expected urgency: {'can_of_beans': 'deferred'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 108 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 114 s
+GT action sequence (17 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(spam)
+   7. place(spam, cupboard_shelf)
+   8. pick(sugar)
+   9. place(sugar, cupboard_shelf)
+  10. pick(mug1)
+  11. place(mug1, inside_box)
+  12. pick(mug2)
+  13. place(mug2, inside_box)
+  14. pick(mug3)
+  15. place(mug3, inside_box)
+  16. pick(can_of_beans)
+  17. place(can_of_beans, cupboard_shelf)
+
+------------------------------------------------------------------------------
+FINAL.G1   [family B, scene grill]
+Point it proves: All corrective actions urgent: both cooked meats out before continuing.
+Goal: COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+Hidden: cooked_meat_1 in inside_grill, non-overlapping the placement area
+Hidden: cooked_meat_2 in inside_grill, non-overlapping the placement area
+Expected IF decision: {'cooked_meat_1': 'relevant_not_goal_attained', 'cooked_meat_2': 'relevant_not_goal_attained'}
+Expected urgency: {'cooked_meat_1': 'urgent', 'cooked_meat_2': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 101 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 107 s
+GT action sequence (13 actions):
+   1. open(grill_lid)
+   2. pick(plate)
+   3. place(plate, serving_area)
+   4. pick(cooked_meat_1)
+   5. place(cooked_meat_1, plate_top)
+   6. pick(cooked_meat_2)
+   7. place(cooked_meat_2, plate_top)
+   8. pick(raw_meat_1)
+   9. place(raw_meat_1, inside_grill)
+  10. close(grill_lid)
+  11. open(grill_lid)
+  12. pick(raw_meat_1)
+  13. place(raw_meat_1, plate_top)
+
+------------------------------------------------------------------------------
+FINAL.G2   [family B, scene grill]
+Point it proves: Split urgency: cooked meat out now, raw meat stays to be cooked.
+Goal: COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+Hidden: raw_meat_2 in inside_grill, non-overlapping the placement area
+Hidden: cooked_meat_1 in inside_grill, non-overlapping the placement area
+Expected IF decision: {'raw_meat_2': 'relevant_not_goal_attained', 'cooked_meat_1': 'relevant_not_goal_attained'}
+Expected urgency: {'raw_meat_2': 'deferred', 'cooked_meat_1': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 102 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 107 s
+GT action sequence (13 actions):
+   1. open(grill_lid)
+   2. pick(plate)
+   3. place(plate, serving_area)
+   4. pick(cooked_meat_1)
+   5. place(cooked_meat_1, plate_top)
+   6. pick(raw_meat_1)
+   7. place(raw_meat_1, inside_grill)
+   8. close(grill_lid)
+   9. open(grill_lid)
+  10. pick(raw_meat_1)
+  11. place(raw_meat_1, plate_top)
+  12. pick(raw_meat_2)
+  13. place(raw_meat_2, plate_top)
+
+------------------------------------------------------------------------------
+FINAL.G3   [family B, scene grill]
+Point it proves: No urgency: raw meat stays, is cooked in the normal cycle and served later.
+Goal: COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+Hidden: raw_meat_2 in inside_grill, non-overlapping the placement area
+Hidden: raw_meat_3 in inside_grill, non-overlapping the placement area
+Expected IF decision: {'raw_meat_2': 'relevant_not_goal_attained', 'raw_meat_3': 'relevant_not_goal_attained'}
+Expected urgency: {'raw_meat_2': 'deferred', 'raw_meat_3': 'deferred'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 104 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 108 s
+GT action sequence (13 actions):
+   1. open(grill_lid)
+   2. pick(plate)
+   3. place(plate, serving_area)
+   4. pick(raw_meat_1)
+   5. place(raw_meat_1, inside_grill)
+   6. close(grill_lid)
+   7. open(grill_lid)
+   8. pick(raw_meat_1)
+   9. place(raw_meat_1, plate_top)
+  10. pick(raw_meat_2)
+  11. place(raw_meat_2, plate_top)
+  12. pick(raw_meat_3)
+  13. place(raw_meat_3, plate_top)
+
+------------------------------------------------------------------------------
+FINAL.K3-n2   [family C1, scene kitchen]
+Point it proves: C1 sweep, n = 2.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: can_of_beans in inside_box, overlapping the placement area
+Hidden: can_of_beans_2 in inside_box, overlapping the placement area
+Expected IF decision: {'can_of_beans': 'relevant_not_goal_attained', 'can_of_beans_2': 'relevant_not_goal_attained'}
+Expected urgency: {'can_of_beans': 'urgent', 'can_of_beans_2': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 125 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 128 s
+GT action sequence (19 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(can_of_beans)
+   7. place(can_of_beans, cupboard_shelf)
+   8. pick(can_of_beans_2)
+   9. place(can_of_beans_2, cupboard_shelf)
+  10. pick(spam)
+  11. place(spam, cupboard_shelf)
+  12. pick(sugar)
+  13. place(sugar, cupboard_shelf)
+  14. pick(mug1)
+  15. place(mug1, inside_box)
+  16. pick(mug2)
+  17. place(mug2, inside_box)
+  18. pick(mug3)
+  19. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.K3-n3   [family C1, scene kitchen]
+Point it proves: C1 sweep, n = 3.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: can_of_beans in inside_box, overlapping the placement area
+Hidden: can_of_beans_2 in inside_box, overlapping the placement area
+Hidden: can_of_beans_3 in inside_box, overlapping the placement area
+Expected IF decision: {'can_of_beans': 'relevant_not_goal_attained', 'can_of_beans_2': 'relevant_not_goal_attained', 'can_of_beans_3': 'relevant_not_goal_attained'}
+Expected urgency: {'can_of_beans': 'urgent', 'can_of_beans_2': 'urgent', 'can_of_beans_3': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 150 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 155 s
+GT action sequence (21 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(can_of_beans)
+   7. place(can_of_beans, cupboard_shelf)
+   8. pick(can_of_beans_2)
+   9. place(can_of_beans_2, cupboard_shelf)
+  10. pick(can_of_beans_3)
+  11. place(can_of_beans_3, cupboard_shelf)
+  12. pick(spam)
+  13. place(spam, cupboard_shelf)
+  14. pick(sugar)
+  15. place(sugar, cupboard_shelf)
+  16. pick(mug1)
+  17. place(mug1, inside_box)
+  18. pick(mug2)
+  19. place(mug2, inside_box)
+  20. pick(mug3)
+  21. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.G1-n1   [family C1, scene grill]
+Point it proves: C1 sweep, n = 1.
+Goal: COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+Hidden: cooked_meat_1 in inside_grill, non-overlapping the placement area
+Expected IF decision: {'cooked_meat_1': 'relevant_not_goal_attained'}
+Expected urgency: {'cooked_meat_1': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 91 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 95 s
+GT action sequence (11 actions):
+   1. open(grill_lid)
+   2. pick(plate)
+   3. place(plate, serving_area)
+   4. pick(cooked_meat_1)
+   5. place(cooked_meat_1, plate_top)
+   6. pick(raw_meat_1)
+   7. place(raw_meat_1, inside_grill)
+   8. close(grill_lid)
+   9. open(grill_lid)
+  10. pick(raw_meat_1)
+  11. place(raw_meat_1, plate_top)
+
+------------------------------------------------------------------------------
+FINAL.K1-w1   [family C2, scene kitchen]
+Point it proves: C2 sweep, w = 1 extra groceries on the table.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: phone in inside_box, overlapping the placement area
+Expected IF decision: {'phone': 'irrelevant_overlapping'}
+Expected urgency: {'phone': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 120 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 126 s
+GT action sequence (19 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(phone)
+   7. place(phone, table)
+   8. pick(spam)
+   9. place(spam, cupboard_shelf)
+  10. pick(sugar)
+  11. place(sugar, cupboard_shelf)
+  12. pick(can_of_beans)
+  13. place(can_of_beans, cupboard_shelf)
+  14. pick(mug1)
+  15. place(mug1, inside_box)
+  16. pick(mug2)
+  17. place(mug2, inside_box)
+  18. pick(mug3)
+  19. place(mug3, inside_box)
+
+------------------------------------------------------------------------------
+FINAL.K1-w2   [family C2, scene kitchen]
+Point it proves: C2 sweep, w = 2 extra groceries on the table.
+Goal: move ALL THE GROCERIES inside the cupboard and ALL THE MUGS inside the box
+Hidden: phone in inside_box, overlapping the placement area
+Expected IF decision: {'phone': 'irrelevant_overlapping'}
+Expected urgency: {'phone': 'urgent'}
+GT execution: run 1: 10/10 succeeded, 10/10 executed exactly this sequence, mean 146 s; run 2: 10/10 succeeded, 10/10 executed exactly this sequence, mean 152 s
+GT action sequence (21 actions):
+   1. pick(mug3)
+   2. place(mug3, table_staging_area)
+   3. pick(mug2)
+   4. place(mug2, table_staging_area)
+   5. open(box_lid)
+   6. pick(phone)
+   7. place(phone, table)
+   8. pick(spam)
+   9. place(spam, cupboard_shelf)
+  10. pick(sugar)
+  11. place(sugar, cupboard_shelf)
+  12. pick(can_of_beans)
+  13. place(can_of_beans, cupboard_shelf)
+  14. pick(can_of_beans_2)
+  15. place(can_of_beans_2, cupboard_shelf)
+  16. pick(mug1)
+  17. place(mug1, inside_box)
+  18. pick(mug2)
+  19. place(mug2, inside_box)
+  20. pick(mug3)
+  21. place(mug3, inside_box)
+
+==============================================================================
+Total: 14 variants; 280/280 GT-oracle trials succeeded (seeds 0-9, two runs).
