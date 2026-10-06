@@ -1,0 +1,27 @@
+% S5 Baseline Details
+The four external baselines are re-implemented as planning policies within the same pipeline: the same robot,
+executor and action checks, variants, seeds, planner model and evaluator, with only the planning and replanning
+logic replaced. None of them uses our memory, \textit{IF} trigger, concurrent execution or corrective insertion.
+Each receives the visible objects with their regions, the lid and gripper states and the camera image; an
+object enters its state only once observed and remains known afterwards. The original methods were evaluated
+with GPT-class models; here all use the selected planner. Planning-call budgets follow each method's own
+replanning structure, so planner calls per trial are reported rather than equalized.
+
+The distinctions that matter when reading the comparison are the following. \emph{VLM-TAMP} refines each
+subgoal before executing it and re-prompts, with its history, only after a subgoal fails, at most twice; objects
+revealed later therefore enter only through such a failure. \emph{OWL-TAMP} plans once from the initial scene
+and executes the plan without re-querying the model, so objects hidden at planning time never enter its plan.
+\emph{Inner Monologue} queries the model after every executed step with success and scene feedback, which makes
+it the most expensive baseline in calls and time; its running dialogue is embedded in our zero-shot prompt
+structure in place of the original few-shot task prompts. \emph{EPoG} plans from a goal scene graph built from
+the goal specification for observed objects, without the original method's estimation of objects that have not
+been seen, and calls the model only to resolve simulated motion errors. Its goal graph encodes final
+object--region relations only, so it cannot represent the cooking procedure; its grill results reflect this
+representation rather than a planning failure.
+
+\noindent\textbf{ICL rows.} The baselines received Examples~1 and~2 of Section~\ref{sec:supp-icl} (the laundry
+examples) in their own input and answer format, in grill requests only: as a full plan or a replan after a new
+observation for VLM-TAMP, OWL-TAMP and Inner Monologue, and as error-resolution examples in EPoG's resolve
+request. Because EPoG's model is used only for error resolution and its goal graph has no cooking procedure,
+the examples cannot change its grill behavior. Kitchen prompts are unchanged, so each baseline's kitchen results
+are shared between its zero-shot and ICL rows, as for our method.

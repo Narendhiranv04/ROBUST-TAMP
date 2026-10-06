@@ -1,0 +1,325 @@
+% S4 Prompts and In-Context Examples: exactly three single-column pages.
+% Panels: blue = prompt given to the FM (INPUT), green = FM answer (OUTPUT),
+% red = validator feedback, grey = system-side result. Text in panels is copied from
+% recorded prompts and trial logs unless a panel title says "summary".
+\newcommand{\paneltitle}[2]{\textsc{#1}\,\textperiodcentered\,#2}
+\tcbset{notebox/.style={enhanced, unbreakable, colback=pbGray!4!white, colframe=pbGray!70!black, boxrule=0.5pt,
+  arc=1.5mm, left=1.5mm, right=1.5mm, top=1.2mm, bottom=1.2mm, fontupper=\footnotesize,
+  fonttitle=\sffamily\bfseries\footnotesize, coltitle=white,
+  attach boxed title to top left={yshift=-2.2mm, xshift=3mm},
+  boxed title style={colback=pbGray!70!black, arc=1mm, boxrule=0pt, left=1.5mm, right=1.5mm}}}
+
+\noindent The planner receives the same prompt structure in every variant; only the scene's actions, objects,
+lids and regions change. All panels are copied from the prompts and trial logs of one evaluated run of our
+planner (Qwen3-VL-8B-Thinking, ICL condition) unless their title says \emph{summary}.
+
+\subsection{Planning Without In-Context Examples}
+\label{sec:supp-prompt-zs}
+The zero-shot condition is the shared prompt below: role, the scene's actions with their preconditions and
+effects, and the response format, followed by the goal and the scene state. The ICL condition differs only by
+the examples of Section~\ref{sec:supp-icl}, which are appended after this system prompt in grill requests. The
+panels come from the initial request of a grill trial (G2, seed~0) run with ICL; the appended examples are
+omitted here, so the text shown is the prompt both conditions share. The kitchen prompt lists only
+\texttt{pick}, \texttt{place} and \texttt{open}.
+
+\begin{promptbox}[unbreakable, listing options={style=promptstyle, basicstyle=\ttfamily\footnotesize}]{pbBlue}{\paneltitle{Input}{System prompt (grill; shared by both conditions, ICL examples omitted)}}
+You are the task planner for a robot arm. Given a goal and the current state of a scene, you output the ordered list of actions that achieves the goal.
+
+Actions available in this scene:
+pick(o): grasp object o.
+  Preconditions: the gripper is empty; o is a listed object; o is not in a region closed off by a closed lid.
+  Effects: the gripper holds o.
+place(o, r): put the held object o into region r.
+  Preconditions: the gripper holds o; r is a listed region; r is not closed off by a closed lid.
+  Effects: o is in r; the gripper is empty.
+open(l): open lid l.
+  Preconditions: the gripper is empty; l is closed; no object is on the top surface of l.
+  Effects: l is open; the regions l closes off become reachable and their contents can become visible.
+close(l): close lid l.
+  Preconditions: the gripper is empty; l is open.
+  Effects: l is closed; the regions l closes off become unreachable and their contents are no longer visible.
+
+Output format:
+Reasoning is allowed. End your answer with a line containing only FINAL ACTIONS: followed by one action per line, in execution order, in this form:
+FINAL ACTIONS:
+pick(o)
+place(o, r)
+Use only the action names available in this scene and the object, lid and region names given in the state. Write nothing after the last action line. If the goal is already satisfied, write NO_ACTIONS as the only line after FINAL ACTIONS:.
+\end{promptbox}
+
+\begin{tcbraster}[raster columns=2, raster equal height=rows, raster column skip=3mm, raster before skip=2mm, raster after skip=2mm]
+\begin{promptbox}[unbreakable, listing options={style=promptstyle, basicstyle=\ttfamily\footnotesize}]{pbBlue}{\paneltitle{Input}{User prompt: initial request (G2)}}
+## Goal
+COOK all raw meat using the grill and SERVE all cooked meat on the PLATE in the serving area.
+
+## Current state
+Visible objects and the region each one is in:
+- plate: dish_rack
+- raw_meat_1: grill_side_area
+Remembered objects (not currently visible): last region, steps since last seen:
+- (none)
+Lids:
+- grill_lid: closed (closes off inside_grill)
+Gripper: empty
+Regions: table, grill_side_area, inside_grill, plate_top, serving_area, dish_rack
+\end{promptbox}
+\begin{tcolorbox}[notebox, title={Information supplied with each request}]
+\begin{itemize}\setlength{\itemsep}{1pt}
+\item The goal $g$ and the observed scene $s_t^{\mathrm{vis}}$: visible objects with their regions, lids and the
+regions they close off, gripper state and the available regions.
+\item Remembered objects from $m_t$, with last region and steps since they were seen (none at the start).
+\item VLM planners also receive a composite camera image of the scene; LLM planners receive the same text.
+\item Replanning requests add the completed actions and the remaining plan with action identifiers, the
+actions scheduled during inference, and the reason for the request; corrective requests replace the
+output-format paragraph with the block format of Section~\ref{sec:supp-correction}.
+\end{itemize}
+\end{tcolorbox}
+\end{tcbraster}
+
+\noindent The planner's answer may contain reasoning; only the actions after the last \texttt{FINAL ACTIONS:}
+line are parsed and checked before execution.
+
+\newpage
+\subsection{In-Context Examples}
+\label{sec:supp-icl}
+In the ICL condition, three examples are appended after the unchanged system prompt of every grill request;
+kitchen prompts are identical in both conditions. The examples come from unrelated scenes (a laundry dryer and
+a germination chamber), name no object, lid or region of the evaluated scenes, and state no rule: each shows a
+successful and an unsuccessful answer and the resulting outcome. They mirror the procedural decisions of the
+grill without giving grill actions: completing a close--open processing cycle before the final placement,
+removing an object that is already processed before another cycle, and leaving an unprocessed object in place
+during a cycle that is already scheduled. The baselines' ICL rows used Examples~1 and~2 only, rewritten in each
+baseline's own input and answer format (Section~\ref{sec:supp-baselines}).
+
+\newcommand{\exrow}[1]{\par\smallskip\noindent{\sffamily\bfseries\small #1}\par\nobreak\smallskip}
+\tcbset{raster equal height=rows}
+
+\exrow{Example 1 (laundry): complete the processing cycle before the final placement}
+\begin{tcbraster}[raster columns=3, raster equal height=rows, raster column skip=2.5mm, raster before skip=0mm, raster after skip=1mm]
+\begin{promptbox}[unbreakable]{pbBlue}{Request (summary)}
+Full-plan request.
+## Goal
+DRY all wet towels using the dryer and PUT all dry towels in the BASKET in the laundry area.
+## Current state
+- basket: shelf
+- wet_towel_1: counter
+- dryer_door: closed (closes off inside_dryer)
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbGreen}{Good answer}
+FINAL ACTIONS:
+pick(basket)
+place(basket, laundry_area)
+open(dryer_door)
+pick(wet_towel_1)
+place(wet_towel_1, inside_dryer)
+close(dryer_door)
+open(dryer_door)
+pick(wet_towel_1)
+place(wet_towel_1, basket_top)
+Outcome: the towel came out dry and is in the basket in the laundry area. Goal met.
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbRed}{Bad answer}
+FINAL ACTIONS:
+open(dryer_door)
+pick(wet_towel_1)
+place(wet_towel_1, inside_dryer)
+pick(wet_towel_1)
+place(wet_towel_1, basket_top)
+Outcome: the towel is still wet, and the basket is still on the shelf. Goal not met.
+\end{promptbox}
+\end{tcbraster}
+
+\exrow{Example 2 (laundry): remove an already processed object before another cycle}
+\begin{tcbraster}[raster columns=3, raster equal height=rows, raster column skip=2.5mm, raster before skip=0mm, raster after skip=1mm]
+\begin{promptbox}[unbreakable]{pbBlue}{Request (summary)}
+Corrective request; same goal.
+## Completed actions
+a1-a3: basket to laundry_area; open(dryer_door)
+## Remaining plan (not executed yet)
+a4-a5: wet_towel_1 into inside_dryer
+a6: close(dryer_door)   a7: open(dryer_door)
+a8-a9: wet_towel_1 to basket_top
+## Why a new plan is requested
+dry_towel_2 (in inside_dryer): relevant to the goal, not in its goal state
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbGreen}{Good answer}
+FINAL BLOCKS:
+BLOCK
+objects: dry_towel_2
+urgency: urgent
+insert: front
+reason: dry_towel_2 is already dry.
+actions:
+pick(dry_towel_2)
+place(dry_towel_2, basket_top)
+END BLOCK
+Outcome: both towels are dry and in the basket. Goal met.
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbRed}{Bad answer}
+FINAL BLOCKS:
+BLOCK
+objects: dry_towel_2
+urgency: deferred
+insert: end
+reason: dry_towel_2 can be moved at the end.
+actions:
+pick(dry_towel_2)
+place(dry_towel_2, basket_top)
+END BLOCK
+Outcome: dry_towel_2 was still inside during a6 and a7 and came out scorched. Goal not met.
+\end{promptbox}
+\end{tcbraster}
+
+\exrow{Example 3 (germination): defer the removal until the scheduled processing is complete}
+\begin{tcbraster}[raster columns=3, raster equal height=rows, raster column skip=2.5mm, raster before skip=0mm, raster after skip=1mm]
+\begin{promptbox}[unbreakable]{pbBlue}{Request (summary)}
+Corrective request.
+## Goal
+GERMINATE all seed trays using the germination chamber and PUT all sprouted trays on the NURSERY BENCH.
+## Completed actions
+a1: open(chamber_door)
+## Scheduled during planning
+a2-a3: seed_tray_1 into inside_chamber
+## Remaining plan (not executed yet)
+a4: close(chamber_door)   a5: open(chamber_door)
+a6-a7: seed_tray_1 to nursery_bench
+## Why a new plan is requested
+seed_tray_2 (in inside_chamber): relevant to the goal, not in its goal state; does not lie where the remaining plan places objects
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbGreen}{Good answer}
+FINAL BLOCKS:
+BLOCK
+objects: seed_tray_2
+urgency: deferred
+insert: after a5
+reason: seed_tray_2 has not germinated yet.
+actions:
+pick(seed_tray_2)
+place(seed_tray_2, nursery_bench)
+END BLOCK
+Outcome: both trays sprouted during a4 and a5 and are on the nursery bench. Goal met.
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbRed}{Bad answer}
+FINAL BLOCKS:
+BLOCK
+objects: seed_tray_2
+urgency: urgent
+insert: front
+reason: seed_tray_2 must be moved before the door closes.
+actions:
+pick(seed_tray_2)
+place(seed_tray_2, nursery_bench)
+END BLOCK
+Outcome: seed_tray_2 was taken out before a4 and a5 and never sprouted. Goal not met.
+\end{promptbox}
+\end{tcbraster}
+
+\noindent\emph{Summary panels} condense the request text; the full requests use the format of
+Section~\ref{sec:supp-prompt-zs} (Example~1) and Section~\ref{sec:supp-correction} (Examples~2 and~3), and the
+answers are reproduced as given in the prompt.
+
+\newpage
+\subsection{Discovery Corrections and Validation Feedback}
+\label{sec:supp-correction}
+
+\begin{promptbox}[unbreakable]{pbBlue}{\paneltitle{Input}{Corrective request: output format (replaces the paragraph of Section~\ref{sec:supp-prompt-zs}; rest unchanged)}}
+Output format for this request:
+Reasoning is allowed. End your answer with a line containing only FINAL BLOCKS: followed by one or more blocks. Each block handles some of the objects listed under "Why a new plan is requested" and has exactly this form:
+BLOCK
+objects: <names of the listed objects this block handles, comma-separated>
+urgency: urgent or deferred
+insert: front, or after <action id from the remaining plan>, or end
+reason: <one short sentence>
+actions:
+<one action per line, in execution order>
+END BLOCK
+Every listed object must be handled by at least one block. An urgent block must use insert: front. The actions of a block must end with the gripper empty. If a listed object needs no action, handle it with a block whose actions section is the single line NO_ACTIONS; such a block needs no urgency or insert line. If no listed object needs any action, write NO_ACTIONS as the only line after FINAL BLOCKS:. Write nothing after the last END BLOCK.
+\end{promptbox}
+
+\noindent\textbf{Recorded correction (G2, seed~0).} Opening the grill revealed one cooked and one raw meat; only
+\texttt{a6}--\texttt{a9} are eligible anchors.
+
+\noindent\begin{minipage}[t]{0.575\textwidth}\vspace{0pt}
+\begin{promptbox}[unbreakable]{pbBlue}{\paneltitle{Input}{User prompt (excerpt; goal, state and instructions omitted)}}
+## Completed actions
+- a1: pick(plate)
+- a2: place(plate, serving_area)
+- a3: open(grill_lid)
+
+## Scheduled to run before your corrective block is applied (not executed yet)
+- a4: pick(raw_meat_1)
+- a5: place(raw_meat_1, inside_grill)
+- These actions run while you plan. Do not repeat them, and do not use their ids as an insertion point; the Current state does not include their effects yet.
+
+## Remaining plan (not executed yet)
+- a6: close(grill_lid)
+- a7: open(grill_lid)
+- a8: pick(raw_meat_1)
+- a9: place(raw_meat_1, plate_top)
+
+## Why a new plan is requested
+- After open(grill_lid), these observed objects are not handled by the remaining plan:
+  - cooked_meat_1 (in inside_grill): relevant to the goal, not in its goal state; does not lie where the remaining plan places objects
+  - raw_meat_2 (in inside_grill): relevant to the goal, not in its goal state; does not lie where the remaining plan places objects
+\end{promptbox}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.405\textwidth}\vspace{0pt}
+\begin{promptbox}[unbreakable]{pbGreen}{\paneltitle{Output}{Recorded blocks (parsed fields; reasoning omitted)}}
+BLOCK
+objects: cooked_meat_1
+urgency: urgent
+insert: front
+reason: it is already cooked but not served on the plate.
+actions:
+pick(cooked_meat_1)
+place(cooked_meat_1, plate_top)
+END BLOCK
+BLOCK
+objects: raw_meat_2
+urgency: deferred
+insert: after a7
+reason: it needs to be cooked before serving, which occurs after the lid is opened.
+actions:
+pick(raw_meat_2)
+place(raw_meat_2, plate_top)
+END BLOCK
+\end{promptbox}
+\end{minipage}
+
+
+\begin{tcolorbox}[notebox, title={System result: accepted on the first attempt; merged remaining plan $\widehat{\pi}$}]
+{\ttfamily\footnotesize a10 pick(cooked\_meat\_1)\quad a11 place(cooked\_meat\_1, plate\_top)\quad a6 close(grill\_lid)\quad a7 open(grill\_lid)\\
+a12 pick(raw\_meat\_2)\quad a13 place(raw\_meat\_2, plate\_top)\quad a8 pick(raw\_meat\_1)\quad a9 place(raw\_meat\_1, plate\_top)}\par\smallskip
+During the 142\,s inference the robot executed the scheduled bundle \texttt{a4}--\texttt{a5} (7.5\,s). The urgent
+block enters before the next close; the deferred block follows the cooking cycle \texttt{a6}--\texttt{a7}; the
+pending actions keep their order and identifiers. The trial succeeded with three FM calls (one initial answer
+was rejected by the plan check).
+\end{tcolorbox}
+
+\noindent\textbf{Rejected correction and feedback (G1-n1, seed~2).} One cooked meat was found; \texttt{a4}--\texttt{a5}
+(raw meat into the grill) were scheduled during inference, so the anchor \texttt{a5} was rejected. Only that anchor
+of the rejected answer was recorded. The re-query repeats the corrective request with the updated completed
+actions (\texttt{a1}--\texttt{a5}), adds the feedback line and keeps the remaining plan; the revision was accepted
+and the trial succeeded.
+
+\noindent\begin{minipage}[t]{0.49\textwidth}\vspace{0pt}
+\begin{promptbox}[unbreakable]{pbGreen}{\paneltitle{Output}{Rejected answer (excerpt)}}
+insert: after a5
+\end{promptbox}
+\begin{promptbox}[unbreakable]{pbRed}{\paneltitle{Feedback}{Line added to the re-query}}
+- Your previous blocks were rejected (failure code invalid_corrective_block): block 1 inserts after a5, which is not in the remaining plan
+\end{promptbox}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.49\textwidth}\vspace{0pt}
+\begin{promptbox}[unbreakable]{pbGreen}{\paneltitle{Output}{Revised blocks (parsed fields)}}
+BLOCK
+objects: cooked_meat_1
+urgency: urgent
+insert: front
+reason: cooked_meat_1 must be served before closing the grill lid to prevent it from being inaccessible.
+actions:
+pick(cooked_meat_1)
+place(cooked_meat_1, plate_top)
+END BLOCK
+\end{promptbox}
+\end{minipage}

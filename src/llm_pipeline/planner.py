@@ -1,0 +1,451 @@
+"""Text-only Hugging Face planner with strict executable output parsing."""
+
+from __future__ import annotations
+
+import inspect
+import os
+import time
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+try:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    HAS_LLM_DEPS = True
+except ImportError:  # pragma: no cover
+    HAS_LLM_DEPS = False
+    AutoModelForCausalLM = None
+    AutoTokenizer = None
+    torch = None
+
+from llm_pipeline.strict_parser import StrictActionParser, StrictParseError
+from llm_pipeline.pipeline_types import FailureEvent, FailureLayer, FailureSource, FailureStage, GoalCheckResult, PlanResult
+from llm_pipeline.quantization import make_bnb_quantization_config, normalize_quantization
+
+
+def _qwen_thinking_mode() -> str:
+    """Thinking is on (the model's default) unless QWEN_THINKING_MODE explicitly turns it off.
+
+    ``/no_think`` is never added by default; only ``QWEN_THINKING_MODE=off`` (or the old
+    ``QWEN_NO_THINK_PROMPT=1``) adds it. The planner server reports the effective mode
+    (``/settings``) and the trial runner refuses real-model trials with thinking off.
+    """
+    legacy_no_think = os.environ.get("QWEN_NO_THINK_PROMPT", "").strip().lower() in {"1", "true", "yes", "on"}
+    mode = os.environ.get("QWEN_THINKING_MODE", "").strip().lower()
+    if mode in {"off", "no_think", "nothink", "false", "0"} or legacy_no_think:
+        return "off"
+    return "default"
+
+
+def thinking_mode_setting() -> str:
+    """``on`` or ``off``, as reported in the planner settings."""
+    return "off" if _qwen_thinking_mode() == "off" else "on"
+
+
+def model_revision(model) -> str:
+    """The Hugging Face revision (commit hash) of a loaded model, or '' when unknown."""
+    config = getattr(model, "config", None)
+    return str(getattr(config, "_commit_hash", "") or "") if config is not None else ""
+
+
+
+class PlannerRuntimeError(RuntimeError):
+    """The planner could not produce an output (model not loaded, out of memory, CUDA error).
+    Never a model failure: the planner server turns it into a job error, which the client
+    reports as ``planner_call_failed`` (infrastructure)."""
+
+class TextLLMPlanner:
+    """Text-only planner that emits directly executable action lines."""
+
+    def __init__(
+        self,
+        model_name: str,
+        model_alias: str,
+        use_4bit: bool = False,
+        quantization: str = "",
+        device: str = "cuda",
+    ):
+        self.model_name = model_name
+        self.model_alias = model_alias or model_name
+        self.quantization = normalize_quantization(quantization, use_4bit=use_4bit)
+        self.use_4bit = self.quantization == "bnb4"
+        self.device = device
+        self.tokenizer = None
+        self.model = None
+        self.loaded = False
+        self.parser = StrictActionParser()
+        self.last_request_summary: Dict[str, Any] = {}
+
+    def load_model(self) -> bool:
+        if not HAS_LLM_DEPS:
+            print("ERROR: Text LLM dependencies are not available.")
+            return False
+
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        
+        gguf_file = None
+        if "GGUF" in self.model_name.upper():
+            try:
+                from huggingface_hub import scan_cache_dir
+                for repo in scan_cache_dir().repos:
+                    if repo.repo_id == self.model_name:
+                        for rev in repo.revisions:
+                            for f in rev.files:
+                                if f.file_name.endswith('.gguf'):
+                                    gguf_file = f.file_name
+                                    break
+            except Exception as e:
+                print(f"Warning scanning cache for GGUF: {e}")
+
+        try:
+            tokenizer_kwargs = {"trust_remote_code": True, "fix_mistral_regex": True}
+            if gguf_file:
+                tokenizer_kwargs["gguf_file"] = gguf_file
+
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_name,
+                **tokenizer_kwargs
+            )
+            if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+            model_kwargs = {
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True,
+                "torch_dtype": dtype,
+            }
+            if gguf_file:
+                model_kwargs["gguf_file"] = gguf_file
+
+            if torch.cuda.is_available():
+                model_kwargs["device_map"] = "auto"
+
+            quantization_config = make_bnb_quantization_config(self.quantization, torch)
+            if quantization_config is not None:
+                print(f"Configuring quantization: {self.quantization}")
+                model_kwargs["quantization_config"] = quantization_config
+
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+            except ValueError as e:
+                if "Unrecognized configuration class" in str(e) and "AutoModelForCausalLM" in str(e):
+                    print("DEBUG: AutoModelForCausalLM failed. Attempting direct import of Mistral3ForConditionalGeneration...")
+                    from transformers.models.mistral3.modeling_mistral3 import Mistral3ForConditionalGeneration
+                    self.model = Mistral3ForConditionalGeneration.from_pretrained(self.model_name, **model_kwargs)
+                else:
+                    raise e
+            self.loaded = True
+            return True
+        except Exception as exc:  # pragma: no cover - depends on model install/runtime
+            print(f"Error loading LLM '{self.model_name}': {exc}")
+            return False
+
+    def _record_request(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        held_object: Optional[str],
+        request_type: str = "plan",
+    ) -> None:
+        self.last_request_summary = {
+            "timestamp": datetime.now().isoformat(),
+            "model_alias": self.model_alias,
+            "model_name": self.model_name,
+            "model_type": "llm",
+            "quantization": self.quantization,
+            "text_only": True,
+            "request_type": request_type,
+            "icl_mode": icl_mode,
+            "held_object": held_object,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "system_prompt_length": len(system_prompt),
+            "user_prompt_length": len(user_prompt),
+        }
+
+    def _parse_goal_check_output(self, raw_output: str) -> GoalCheckResult:
+        text = (raw_output or "").strip()
+        normalized = text.upper()
+        if normalized.startswith("GOAL_COMPLETE"):
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=True,
+                raw_output=raw_output,
+                inference_time=0.0,
+            )
+        if normalized.startswith("GOAL_INCOMPLETE"):
+            reason = text.split(":", 1)[1].strip() if ":" in text else "Goal is not complete."
+            return GoalCheckResult(
+                success=True,
+                goal_satisfied=False,
+                raw_output=raw_output,
+                inference_time=0.0,
+                reason=reason or "Goal is not complete.",
+            )
+
+        # Tolerant parsing: some reasoning models ignore the one-line contract
+        # and put the token after a short explanation or a </think> block.
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for line in lines:
+            cleaned = line.lstrip("-*0123456789. )").strip()
+            upper_line = cleaned.upper()
+            if "GOAL_INCOMPLETE" in upper_line:
+                reason = cleaned.split(":", 1)[1].strip() if ":" in cleaned else "Goal is not complete."
+                return GoalCheckResult(
+                    success=True,
+                    goal_satisfied=False,
+                    raw_output=raw_output,
+                    inference_time=0.0,
+                    reason=reason or "Goal is not complete.",
+                )
+            if "GOAL_COMPLETE" in upper_line:
+                return GoalCheckResult(
+                    success=True,
+                    goal_satisfied=True,
+                    raw_output=raw_output,
+                    inference_time=0.0,
+                )
+        return GoalCheckResult(
+            success=False,
+            goal_satisfied=False,
+            raw_output=raw_output,
+            inference_time=0.0,
+            error_message="Goal check output must include GOAL_COMPLETE or GOAL_INCOMPLETE.",
+        )
+
+    def _build_prompt_text(self, system_prompt: str, user_prompt: str, assistant_prefix: str = "") -> str:
+        thinking_mode = _qwen_thinking_mode()
+        no_think_prompt = thinking_mode == "off"
+        if no_think_prompt and "/no_think" not in user_prompt:
+            user_prompt = f"/no_think\n\n{user_prompt}"
+        self.last_request_summary.update({
+            "qwen_thinking_mode": thinking_mode,
+            "qwen_no_think_prompt": no_think_prompt,
+            "effective_user_prompt": user_prompt,
+            "effective_user_prompt_length": len(user_prompt),
+        })
+
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            template_kwargs = {
+                "tokenize": False,
+                "add_generation_prompt": True,
+            }
+            try:
+                signature = inspect.signature(self.tokenizer.apply_chat_template)
+                if no_think_prompt and "enable_thinking" in signature.parameters:
+                    template_kwargs["enable_thinking"] = False
+            except (TypeError, ValueError):
+                pass
+            try:
+                prompt_text = self.tokenizer.apply_chat_template(messages, **template_kwargs)
+            except TypeError:
+                template_kwargs.pop("enable_thinking", None)
+                prompt_text = self.tokenizer.apply_chat_template(messages, **template_kwargs)
+            return f"{prompt_text}{assistant_prefix}"
+        return f"{system_prompt}\n\n{user_prompt}\n{assistant_prefix}"
+
+    def _decode_generation(self, prompt_text: str, max_new_tokens: int, temperature: float) -> str:
+        inputs = self.tokenizer(prompt_text, return_tensors="pt", padding=True)
+        target_device = self.model.device if hasattr(self.model, "device") else self.device
+        inputs = {name: tensor.to(target_device) for name, tensor in inputs.items()}
+
+        do_sample = temperature >= 0.3
+        generate_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "do_sample": do_sample,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+        }
+        if not do_sample:
+            generate_kwargs.pop("temperature", None)
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(**inputs, **generate_kwargs)
+
+        input_len = inputs["input_ids"].shape[1]
+        trimmed = generated_ids[:, input_len:]
+        return self.tokenizer.batch_decode(
+            trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+
+    def _build_parse_failure(self, exc: StrictParseError, raw_output: str) -> FailureEvent:
+        return FailureEvent(
+            failure_id=exc.failure_id,
+            stage=FailureStage.BEFORE_EXECUTION,
+            source=FailureSource.VALIDATION,
+            action=None,
+            evidence={
+                "line_number": exc.line_number,
+                "raw_output": raw_output,
+                "fact": getattr(exc, "fact", ""),
+            },
+            failure_layer=FailureLayer.LAYER_1,
+            should_replan=True,
+            message=str(exc),
+        )
+
+    def generate_plan(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> PlanResult:
+        if not self.loaded:
+            # Not a model output: raised so the planner server reports the job as an error
+            # and the trial ends as infrastructure (Phase 7c, audit B-1).
+            raise PlannerRuntimeError('Model not loaded.')
+
+        started_at = time.time()
+        self._record_request(system_prompt, user_prompt, icl_mode, held_object)
+        try:
+            prompt_text = self._build_prompt_text(system_prompt, user_prompt)
+            raw_output = self._decode_generation(prompt_text, max_new_tokens=max_new_tokens, temperature=temperature)
+            actions = self.parser.parse(raw_output, held_object=held_object)
+            return PlanResult(
+                success=True,
+                actions=actions,
+                raw_output=raw_output,
+                inference_time=time.time() - started_at,
+            )
+        except StrictParseError as exc:
+            raw_output = raw_output if 'raw_output' in locals() else ''
+            return PlanResult(
+                success=False,
+                actions=[],
+                raw_output=raw_output,
+                inference_time=time.time() - started_at,
+                error_message=str(exc),
+                failure_event=self._build_parse_failure(exc, raw_output),
+            )
+        except Exception as exc:  # pragma: no cover - model/runtime dependent
+            # Out of memory, CUDA errors and other runtime failures are not model outputs:
+            # re-raised so they become infrastructure, never a scored planner failure.
+            raise PlannerRuntimeError(f'{type(exc).__name__}: {exc}') from exc
+
+    def check_goal_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 64,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> GoalCheckResult:
+        if not self.loaded:
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
+                raw_output="",
+                inference_time=0.0,
+                error_message="Model not loaded.",
+            )
+
+        started_at = time.time()
+        self._record_request(system_prompt, user_prompt, icl_mode, held_object, request_type="goal_check")
+        try:
+            prompt_text = self._build_prompt_text(system_prompt, user_prompt)
+            raw_output = self._decode_generation(prompt_text, max_new_tokens=max_new_tokens, temperature=temperature)
+            result = self._parse_goal_check_output(raw_output)
+            result.inference_time = time.time() - started_at
+            return result
+        except Exception as exc:  # pragma: no cover - model/runtime dependent
+            return GoalCheckResult(
+                success=False,
+                goal_satisfied=False,
+                raw_output="",
+                inference_time=time.time() - started_at,
+                error_message=str(exc),
+            )
+
+    def get_debug_info(self) -> Dict[str, Any]:
+        return {
+            "model_alias": self.model_alias,
+            "model_name": self.model_name,
+            "model_type": "llm",
+            "quantization": self.quantization,
+            "loaded": self.loaded,
+            "last_request": self.last_request_summary,
+        }
+
+    def planner_settings(self) -> Dict[str, Any]:
+        """Settings that change what the model generates (logged in trial_start)."""
+        return {
+            "planner": "local",
+            "model_name": self.model_name,
+            "model_alias": self.model_alias,
+            "model_type": "llm",
+            "model_revision": model_revision(self.model),
+            "quantization": self.quantization,
+            "thinking_mode": thinking_mode_setting(),
+            "format_repair": False,       # the text planner has no format-repair call
+        }
+
+
+class MockTextLLMPlanner(TextLLMPlanner):
+    """Scriptable test double for text-only planning."""
+
+    def __init__(self, scripted_output: str = "", goal_check_output: str = "GOAL_COMPLETE"):
+        super().__init__(model_name="mock-llm", model_alias="mock-llm")
+        self.scripted_output = scripted_output
+        self.goal_check_output = goal_check_output
+        self.loaded = True
+
+    def load_model(self) -> bool:
+        self.loaded = True
+        return True
+
+    def generate_plan(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> PlanResult:
+        self._record_request(system_prompt, user_prompt, icl_mode, held_object)
+        started_at = time.time()
+        try:
+            actions = self.parser.parse(self.scripted_output, held_object=held_object)
+            return PlanResult(
+                success=True,
+                actions=actions,
+                raw_output=self.scripted_output,
+                inference_time=time.time() - started_at,
+            )
+        except StrictParseError as exc:
+            return PlanResult(
+                success=False,
+                actions=[],
+                raw_output=self.scripted_output,
+                inference_time=time.time() - started_at,
+                error_message=str(exc),
+                failure_event=self._build_parse_failure(exc, self.scripted_output),
+            )
+
+    def check_goal_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        icl_mode: str,
+        max_new_tokens: int = 64,
+        temperature: float = 0.0,
+        held_object: Optional[str] = None,
+    ) -> GoalCheckResult:
+        del max_new_tokens, temperature
+        self._record_request(system_prompt, user_prompt, icl_mode, held_object, request_type="goal_check")
+        started_at = time.time()
+        result = self._parse_goal_check_output(self.goal_check_output)
+        result.inference_time = time.time() - started_at
+        return result
