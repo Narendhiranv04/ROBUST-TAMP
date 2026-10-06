@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<!--
+  ROBUST-TAMP project page. Anonymous version for double-blind review: no author names, affiliations or
+  identifying links. Static site; serve the folder over HTTP (e.g. `python3 -m http.server` inside website/)
+  so the embedded animations can be styled and driven by the page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROBUST-TAMP: Deciding If, When, and Where to Replan</title>
+<meta name="description" content="ROBUST-TAMP decides if, when, and where to replan as objects are discovered during long-horizon manipulation.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317181a'/%3E%3Cpath d='M8 22V10h6.5a4 4 0 0 1 0 8H8m6.5 0L21 22' stroke='%23fff' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Montserrat:ital,wght@0,500;0,600;0,700;0,800;1,500&family=Open+Sans:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#top">ROBUST-TAMP</a>
+    <a class="link" href="#abstract">Abstract</a>
+    <a class="link" href="#method">Method</a>
+    <a class="link" href="#decide">Decide</a>
+    <a class="link" href="#variants">Variants</a>
+    <a class="link" href="#comparison">Comparison</a>
+    <a class="link" href="#results">Results</a>
+    <a class="link" href="#bibtex">BibTeX</a>
+  </div>
+</nav>
+
+<aside class="toc" aria-label="Contents">
+  <div class="toc-hd">Contents</div>
+  <ol>
+    <li><a href="#abstract">Abstract</a></li>
+    <li><a href="#problem">The problem</a></li>
+    <li><a href="#method">If, when, where</a></li>
+    <li><a href="#corrections">Corrections in action</a></li>
+    <li><a href="#decide">Decide like the planner</a></li>
+    <li><a href="#variants">Scene variants</a></li>
+    <li><a href="#comparison">Method comparison</a></li>
+    <li><a href="#results">Results</a></li>
+    <li><a href="#realworld">Real world</a></li>
+    <li><a href="#bibtex">BibTeX</a></li>
+  </ol>
+</aside>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="kicker">ROBUST-TAMP</div>
+    <h1 class="title">Deciding <span class="accent-if">If</span>, <span class="accent-when">When</span>, and <span class="accent-where">Where</span> to Replan for Robust Manipulation</h1>
+    <div class="anon">Anonymous Authors<small>Under double-blind review</small></div>
+    <div class="buttons">
+      <span class="btn soon" title="Available after review">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        Paper <span class="tag">soon</span></span>
+      <a class="btn" href="https://anonymous.4open.science/r/ROBUST-TAMP" rel="noreferrer noopener" target="_blank">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
+        Code</a>
+      <a class="btn ghost" href="#comparison">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        Videos</a>
+      <a class="btn ghost" href="#bibtex">BibTeX</a>
+    </div>
+
+    <div class="stats reveal">
+      <div class="stat"><div class="num" data-count="92.1" data-dec="1">0<span class="unit">%</span></div><div class="lab">of simulated tasks completed</div></div>
+      <div class="stat"><div class="num" data-count="47.1" data-dec="1" data-prefix="+">0<span class="unit">pp</span></div><div class="lab">over the strongest of four baselines</div></div>
+      <div class="stat"><div class="num" data-count="14" data-dec="0">0</div><div class="lab">MuJoCo variants, 140 trials</div></div>
+      <div class="stat"><div class="num" data-count="5" data-dec="0">0</div><div class="lab">real-world settings</div></div>
+    </div>
+
+    <div class="teaser reveal">
+      <figure>
+        <div class="vid"><video src="static/video/kitchen_K1_ROBUST_TAMP.mp4" poster="static/poster/kitchen_K1_ROBUST_TAMP.jpg" muted loop playsinline autoplay preload="auto"></video>
+          <span class="chip-tag">K1 · kitchen</span><span class="speed-tag">×29 speed</span></div>
+        <figcaption><b>A phone hidden in the box</b> lies where the mugs will go. It is moved out of the placement area, and every mug and grocery still reaches its goal.</figcaption>
+      </figure>
+      <figure>
+        <div class="vid"><video src="static/video/grill_G2_ROBUST_TAMP.mp4" poster="static/poster/grill_G2_ROBUST_TAMP.jpg" muted loop playsinline autoplay preload="auto"></video>
+          <span class="chip-tag">G2 · grill</span><span class="speed-tag">×22 speed</span></div>
+        <figcaption><b>A cooked and a raw meat under the lid.</b> The cooked meat is served without being cooked again; the raw one only after a full cooking cycle.</figcaption>
+      </figure>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section class="block" id="abstract">
+  <div class="sec-hd"><h2>Abstract</h2></div>
+  <div class="prose reveal">
+    <p class="lead">Foundation-model (FM) based task and motion planning (TAMP) methods typically assume that the full scene is known before planning. In long-horizon manipulation, however, relevant objects may initially be hidden and only become observable as the robot interacts with the environment.</p>
+    <p>We introduce <b>ROBUST-TAMP</b>, a task and motion planning framework that first decides whether a discovery needs a replan. If replanning is needed, the robot executes unaffected actions while the FM synthesizes corrective actions. These actions are inserted into the existing plan based on urgency, either executed immediately or deferred while preserving the remaining plan. We evaluate ROBUST-TAMP on 14 MuJoCo environments with hidden objects, blocked placements, articulated containers, and multi-step tasks, and on five real-world settings. Our method completes 92.1% of simulated tasks, outperforming four baseline architectures by 47.1 percentage points under the same settings. Ablations show that each component either raises success or lowers planner calls, planning time, and robot idle time. An extensive study across model sizes, text and vision inputs, reasoning modes, and prompting further shows that in-context examples help the planner follow multi-step procedures that zero-shot prompting struggles with.</p>
+  </div>
+</section>
+
+<section class="block" id="problem">
+  <div class="sec-hd"><h2>The problem</h2><div class="sub">discoveries after successful actions</div></div>
+  <div class="two-col">
+    <div class="prose reveal">
+      <p>Consider a robot told to put <em>all the groceries in the cupboard and all the mugs inside the box</em>. Opening the box may reveal a grocery that was absent from the first observation and therefore missing from the plan. The opening succeeded, yet the remaining plan no longer covers the task.</p>
+      <p>Whether such a discovery needs replanning depends on the task and on what is still to be done: a mug already in the box needs nothing, a phone lying where a mug will be placed must be moved, and an object already named by a pending action is covered.</p>
+      <p>When a correction is needed it has to be coordinated with execution: some actions can continue while it is planned, an obstruction must be cleared before the affected placement, and other work can wait. ROBUST-TAMP makes these three decisions explicitly.</p>
+    </div>
+    <figure class="fig reveal"><img src="static/img/fig1.jpg" alt="Opening the container reveals a hidden grocery, triggering replanning despite successful execution." loading="lazy">
+      <figcaption>Opening the container reveals a hidden grocery item, triggering replanning despite successful execution.</figcaption></figure>
+  </div>
+</section>
+
+<section class="block" id="method">
+  <div class="sec-hd"><h2>If, when, where</h2><div class="sub">observe, decide, keep executing, merge</div>
+    <div class="right"><button class="pill-btn" data-replay="pipeline">REPLAY</button></div></div>
+  <div class="anim-box reveal" data-anim="pipeline" data-src="static/anim/pipeline.html" data-w="1810" data-h="828" data-top="-22" data-crop="96">
+    <div class="anim-scaler"></div><div class="anim-progress"></div>
+  </div>
+  <p class="note" style="margin-top:10px">Scene observations, memory and execution history inform the three decisions; the planner returns corrective blocks that are checked before they enter the plan.</p>
+  <div class="trio">
+    <div class="card reveal" style="--c:var(--if)"><span class="badge">IF</span><h4>Selective replanning</h4>
+      <p>After every executed bundle, visible and remembered objects are checked. A task-relevant object triggers a correction if its requirement is still unmet; an irrelevant one only if it occupies a placement area that a pending action needs. Objects already covered by a pending action, or acknowledged as needing nothing, do not call the planner.</p></div>
+    <div class="card reveal" style="--c:var(--when)"><span class="badge">WHEN</span><h4>Concurrent planning and execution</h4>
+      <p>While the planner is queried, bundles that cannot interfere with the correction keep executing: anything touching the triggering objects, their goal regions, obstructed placement areas, lids or the staging area is held back, together with the bundles that depend on it.</p></div>
+    <div class="card reveal" style="--c:var(--where)"><span class="badge">WHERE</span><h4>Urgency-based insertion</h4>
+      <p>The planner returns corrective blocks with an urgency and an insertion point. Urgent blocks enter at the front of the remaining plan; deferred blocks follow a named pending action or go to the end. Pending actions keep their order and identifiers.</p></div>
+  </div>
+</section>
+
+<section class="block" id="corrections">
+  <div class="sec-hd"><h2>Corrections in action</h2><div class="sub">urgent and deferred blocks during execution</div>
+    <div class="right"><button class="pill-btn" data-replay="corrections">REPLAY</button></div></div>
+  <div class="anim-box reveal" data-anim="corrections" data-src="static/anim/corrections.html" data-w="1920" data-h="1124" data-top="-22" data-crop="0">
+    <div class="anim-scaler"></div><div class="anim-progress"></div>
+  </div>
+  <p class="note" style="margin-top:10px">Independent actions continue while the planner works on a correction. An obstructing phone is cleared right after the replan (urgent); a grocery that is not in the way is appended after the remaining plan (deferred).</p>
+</section>
+
+<section class="block" id="decide">
+  <div class="sec-hd"><h2>Decide like the planner</h2><div class="sub">seven discoveries, one decision each</div></div>
+  <div class="game reveal" id="game">
+    <div class="game-hd">
+      <div><div class="game-kicker">Interactive</div><div class="game-title">Does this discovery need a correction, and how soon?</div></div>
+      <div class="game-score" id="game-score">Score 0 / 0</div>
+    </div>
+    <div class="game-body">
+      <div>
+        <div class="game-scene" id="game-scene"><img class="before" alt=""><img class="after" alt=""><span class="vlabel"></span></div>
+        <p class="note" style="margin-top:8px" id="game-imgnote">Initial scene. The answer reveals the end of ROBUST-TAMP's run.</p>
+      </div>
+      <div class="game-q">
+        <div class="step" id="game-step"></div>
+        <div class="disc" id="game-disc"></div>
+        <div class="ask" id="game-ask"></div>
+        <div class="opts" id="game-opts"></div>
+        <div class="feedback" id="game-fb"></div>
+        <div class="game-nav">
+          <button class="pill-btn" id="game-next" disabled>NEXT</button>
+          <button class="pill-btn" id="game-watch" disabled>WATCH ALL FIVE METHODS</button>
+          <div class="dots" id="game-dots"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="variants">
+  <div class="sec-hd"><h2>Scene variants</h2><div class="sub">14 variants, 10 trials each</div></div>
+  <div class="prose reveal">
+    <p>The kitchen task places groceries in a cupboard and mugs inside a lidded box; the grill task cooks raw meat and serves cooked meat on a plate in the serving area. Objects hidden in the box or under the grill lid become observable only when it is opened, and their information is withheld from the planner until then. Hover a card to see the final state of ROBUST-TAMP's run; click it to watch all five methods.</p>
+  </div>
+  <div id="vcat"></div>
+</section>
+
+<section class="block" id="comparison">
+  <div class="sec-hd"><h2>Method comparison</h2><div class="sub">all five methods, same variant, side by side</div></div>
+  <div class="cmp-bar">
+    <div class="vchips" id="vchips"></div>
+    <div class="cmp-ctrl">
+      <button class="ibtn" id="cmp-prev" title="Previous variant"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+      <button class="ibtn" id="cmp-play" title="Play / pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+      <button class="ibtn" id="cmp-replay" title="Replay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+      <button class="ibtn" id="cmp-next" title="Next variant"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
+      <select class="speed" id="cmp-speed" title="Playback rate"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      <label class="toggle"><input type="checkbox" id="cmp-auto" checked> Auto-advance</label>
+    </div>
+  </div>
+  <div class="cmp-grid" id="cmp-grid"></div>
+  <p class="note" style="margin-top:12px">Each clip replays the recorded planner answers of that method's best evaluation trial on the variant (success first, then highest partial goal completion, then fewest planner calls) and shows the whole execution sped up; the time spent waiting for the planner is not shown. All five clips of a variant share one speed-up. Kitchen uses zero-shot prompts, grill the in-context examples.</p>
+
+  <h3 class="h3">Outcomes at a glance</h3>
+  <div class="scroll-x reveal"><table class="score" id="scoreboard"></table></div>
+  <p class="note">Click a cell to play that variant. Success as scored in the paper: every final object&ndash;region relation and cooking condition met.</p>
+</section>
+
+<section class="block" id="results">
+  <div class="sec-hd"><h2>Results</h2><div class="sub">baselines, variants, ablations, planners, failures</div></div>
+
+  <h3 class="h3" style="margin-top:6px">Comparison with external baselines</h3>
+  <div class="chart-grid">
+    <div class="reveal">
+      <div class="bars" id="sr-bars"></div>
+      <div class="legend"><span><i style="background:#9a9992;opacity:.45"></i>zero-shot</span><span><i style="background:#9a9992"></i>with in-context examples (grill)</span></div>
+    </div>
+    <div class="prose reveal">
+      <p>All methods share the robot, executor, action checks, variants, seeds, evaluator, planner model (Qwen3-VL-8B-Thinking) and GPU. With in-context examples ROBUST-TAMP completes <b>92.1%</b> of all 140 trials, against 45.0% for the strongest baseline. The examples matter most for the grill's cooking procedure: its grill success rises from 22.0% to 88.0%.</p>
+      <p class="note">EPoG's goal graph encodes final object&ndash;region relations only and cannot represent cooking.</p>
+    </div>
+  </div>
+  <div class="scroll-x reveal" style="margin-top:22px"><table class="data" id="tbl-baselines"></table></div>
+  <p class="tbl-note">SR<sub>K</sub>/SR<sub>G</sub>: kitchen/grill success (%). PGC: partial goal completion (%). Calls: FM calls per trial. Plan./Time: mean planning/total time per trial; Lat.: median FM-call latency (s). In-context examples reach only grill prompts, so kitchen results are shared.</p>
+
+  <h3 class="h3">Per-variant results</h3>
+  <div class="scroll-x reveal"><table class="data" id="tbl-main"></table></div>
+  <p class="tbl-note">Rel.: task relevance; Ovl.: placement-area overlap; Exp.: expected correction (U urgent, D deferred). Ceil.: oracle-planner success with the same executor. Idle: mean waiting per discovery-triggered replanning episode (s). Urg.: share of trigger objects given the correct urgency on the first attempt (%).</p>
+
+  <h3 class="h3">Ablations</h3>
+  <div class="scroll-x reveal"><table class="data" id="tbl-abl"></table></div>
+  <p class="tbl-note">Seven core variants (K1&ndash;K4 zero-shot, G1&ndash;G3 with examples). &minus;Memory: current observations only; &minus;IF: replan for every newly visible object; &minus;WHERE: suspend execution and regenerate the remaining plan; Fixed front/end: fixed insertion; &minus;WHEN: suspend execution during replanning; LLM planner: text-only Qwen3-8B.</p>
+
+  <h3 class="h3">Planner study</h3>
+  <div class="chart-grid">
+    <div class="reveal"><svg class="chart" id="dumbbell" viewBox="0 0 560 400" width="100%"></svg></div>
+    <div class="prose reveal">
+      <p>Across the Qwen3 family, in-context examples raise success for every size and modality, from +5 to +24 points, mostly by fixing the grill's multi-step cooking procedure, and they shorten planning time. The 8B vision-language model with examples is the strongest configuration; larger models do not consistently do better.</p>
+    </div>
+  </div>
+  <details class="more reveal"><summary>Full planner tables: scale, modality and prompting; 8B-class models</summary>
+    <div class="inner scroll-x"><table class="data" id="tbl-plannerA"></table><div style="height:18px"></div><table class="data" id="tbl-plannerB"></table>
+    <p class="tbl-note">K/G/All: kitchen, grill, all variants. Gray kitchen values in ICL rows are shared with zero-shot. Plan.: mean planning time per trial (s).</p></div>
+  </details>
+
+  <h3 class="h3">What validation and recovery caught</h3>
+  <div class="chart-grid">
+    <div class="donut-wrap reveal"><svg class="chart" id="donut" viewBox="0 0 260 260" width="250" height="250"></svg>
+      <div><div class="kpi">ROBUST-TAMP, 140 trials</div>
+        <div class="legend" style="flex-direction:column;gap:6px"><span><i style="background:#d9d7d1"></i>no failure (44)</span><span><i style="background:#2b78d4"></i>replanned, task completed (85)</span><span><i style="background:#ef6a32"></i>task not completed (11)</span></div></div></div>
+    <div class="reveal"><div class="bars" id="fail-bars"></div>
+      <div class="legend"><span><i style="background:#2b78d4"></i>trial completed</span><span><i style="background:#ef6a32"></i>not completed</span></div></div>
+  </div>
+  <p class="tbl-note">Failures caught during the 140 trials: rejected plans (plan check) and failed actions (execution), by trial outcome. Many successful trials depend on validation and recovery.</p>
+</section>
+
+<section class="block" id="realworld">
+  <div class="sec-hd"><h2>Real-world execution</h2><div class="sub">same interface, memory and decisions</div></div>
+  <div class="prose reveal">
+    <p>The physical system uses an xArm manipulator and three depth cameras. SAM2.1 provides object segmentation masks, observed objects are associated with predefined placement regions, and these object&ndash;region observations update the same memory layer used in simulation. Point clouds from the cameras support grasp generation. The planning interface and the IF, WHEN and WHERE mechanisms are shared with simulation.</p>
+  </div>
+  <div class="settings reveal" id="settings"></div>
+  <p class="note" style="margin-top:10px">Real-world videos of the five settings will be added here.</p>
+</section>
+
+<section class="block" id="bibtex">
+  <div class="sec-hd"><h2>BibTeX</h2></div>
+  <div class="bib reveal">
+<pre id="bibtext">@misc{robusttamp2027,
+  title  = {Deciding If, When, and Where to Replan for Robust Manipulation},
+  author = {Anonymous},
+  year   = {2027},
+  note   = {Under double-blind review}
+}</pre>
+    <button class="pill-btn copy" id="bibcopy">COPY</button>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">This page is anonymized for double-blind review. Simulation videos replay recorded evaluation trials.</div>
+</footer>
+
+<script src="static/js/data.js"></script>
+<script src="static/js/main.js"></script>
+</body>
+</html>
