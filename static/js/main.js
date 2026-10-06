@@ -53,61 +53,21 @@
   }), { threshold: 0.4 });
   $$('.stats').forEach(s => countObs.observe(s));
 
-  /* ---------------- embedded animations (same-origin iframes driven by the page clock) ---------------- */
-  const EMBED_CSS = 'html,body{background:#fff!important}svg[data-om-exportable-video-with-duration-secs]{box-shadow:none!important}' +
-    'div:has(> div > svg[data-om-exportable-video-with-duration-secs]){background:#fff!important}' +
-    'div:has(> div > svg[data-om-exportable-video-with-duration-secs]) > :last-child{display:none!important}[data-om-unknown-cues]{display:none!important}';
+  /* ---------------- animations (pre-rendered videos: play when scrolled into view) ---------------- */
   const anims = {};
   $$('.anim-box').forEach(box => {
-    const W = +box.dataset.w, H = +box.dataset.h, TOP = +box.dataset.top || 0, CROP = +box.dataset.crop || 0;
-    const visH = H + TOP - CROP;
-    const scaler = $('.anim-scaler', box), bar = $('.anim-progress', box);
-    scaler.style.width = W + 'px'; scaler.style.height = visH + 'px';
-    const fit = () => { const s = box.clientWidth / W; scaler.style.transform = `scale(${s})`; box.style.height = (visH * s) + 'px'; };
-    fit(); window.addEventListener('resize', fit);
-    const A = { box, t: 0, dur: 0, svg: null, visible: false, playing: false, last: null, iframe: null };
-    anims[box.dataset.anim] = A;
-    const load = () => {
-      if (A.iframe) return;
-      const f = h('iframe', { src: box.dataset.src, title: box.dataset.anim + ' animation', loading: 'lazy',
-        style: `top:${TOP}px;width:${W}px;height:${H}px` });
-      scaler.append(f); A.iframe = f;
-      const poll = setInterval(() => {
-        let doc; try { doc = f.contentDocument; } catch (e) { clearInterval(poll); return; }   // cross-origin: own player
-        const svg = doc && doc.querySelector('svg[data-om-exportable-video-with-duration-secs]');
-        if (!svg) return;
-        clearInterval(poll);
-        if (!doc.getElementById('rt-embed-css')) { const st = doc.createElement('style'); st.id = 'rt-embed-css'; st.textContent = EMBED_CSS; doc.head.appendChild(st); }
-        A.svg = svg; A.dur = +svg.getAttribute('data-om-exportable-video-with-duration-secs') || 0;
-        A.t = 0; A.playing = A.visible; seek(A);
-      }, 150);
-    };
+    const v = $('video', box), bar = $('.anim-progress', box); v.muted = true;
+    const A = anims[box.dataset.anim] = { v, started: false, visible: false };
     new IntersectionObserver(es => es.forEach(e => {
-      if (e.isIntersecting) load();
       A.visible = e.intersectionRatio > 0.35;
-      if (A.svg) { if (A.visible && A.t < A.dur) A.playing = true; else A.playing = false; }
-    }), { threshold: [0, 0.35], rootMargin: '300px 0px' }).observe(box);
+      if (A.visible && !v.ended) { if (!A.started) { A.started = true; v.currentTime = 0; } const p = v.play(); if (p) p.catch(() => {}); }
+      else if (!A.visible) v.pause();
+    }), { threshold: [0, 0.35] }).observe(box);
+    (function tick() { requestAnimationFrame(tick); if (v.duration) bar.style.width = (100 * v.currentTime / v.duration) + '%'; })();
   });
-  function seek(A) {
-    if (!A.svg) return;
-    A.svg.dispatchEvent(new CustomEvent('data-om-seek-to-time-frame', { detail: { time: A.t, playing: A.playing } }));
-    $('.anim-progress', A.box).style.width = (A.dur ? 100 * A.t / A.dur : 0) + '%';
-  }
-  const animLoop = now => {
-    requestAnimationFrame(animLoop);
-    for (const A of Object.values(anims)) {
-      const dt = A.last == null ? 0 : Math.min(0.1, (now - A.last) / 1000); A.last = now;
-      if (!A.svg || !A.playing) continue;
-      A.t = Math.min(A.dur, A.t + dt);
-      if (A.t >= A.dur) A.playing = false;
-      seek(A);
-    }
-  };
-  requestAnimationFrame(animLoop);
   $$('[data-replay]').forEach(b => b.addEventListener('click', () => {
     const A = anims[b.dataset.replay]; if (!A) return;
-    if (A.svg) { A.t = 0; A.playing = true; seek(A); }
-    else if (A.iframe) { A.iframe.src = A.iframe.src; }
+    A.started = true; A.v.currentTime = 0; const p = A.v.play(); if (p) p.catch(() => {});
   }));
 
   /* ---------------- speed tags in the teaser ---------------- */
