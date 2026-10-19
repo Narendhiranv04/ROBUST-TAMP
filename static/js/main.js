@@ -474,11 +474,43 @@
   } catch (e) { console.error('[page] section failed: results: charts', e); }
 
   try {
-    /* ---------------- real-world settings ---------------- */
-    [['No discovery', 'ordinary completion'], ['Task-relevant · overlapping', 'discovered item blocks a placement'],
-     ['Task-relevant · non-overlapping', 'discovered item needs actions, blocks nothing'], ['Task-irrelevant · overlapping', 'unrelated item blocks a placement'],
-     ['Task-irrelevant · non-overlapping', 'unrelated item, no correction']].forEach(([t, d], i) =>
-      $('#settings').append(h('div', { class: 'setting' }, h('div', { class: 'n' }, 'SETTING ' + (i + 1)), h('div', { class: 't' }, t), h('div', { class: 's' }, d))));
+    /* ---------------- real-world settings and runs ---------------- */
+    const RW = [
+      ['No discovery', 'ordinary completion', ['Two cubes and two cylinders on the table; empty container', 'The same objects, another arrangement', 'A cube on the lid, one on the table; empty container']],
+      ['Task-relevant · overlapping', 'discovered item blocks a placement', ['A cube hidden where the cylinders go; a cube and a cylinder on the lid', 'A cube and a cylinder hidden; a cube on the lid', 'A cube and a cylinder hidden; clear lid']],
+      ['Task-relevant · non-overlapping', 'discovered item needs actions, blocks nothing', ['A cube and two cylinders hidden', 'A cube hidden']],
+      ['Task-irrelevant · overlapping', 'unrelated item blocks a placement', ['A cylinder hidden where the remaining cylinder goes']],
+      ['Task-irrelevant · non-overlapping', 'unrelated item, no correction', ['Two cylinders hidden, already in place; a cube on the lid', 'Two cylinders hidden, already in place']]];
+    const order = RW.flatMap((s, i) => s[2].map((_, k) => [i, k]));
+    const vid = $('#rw-video'), cards = [];
+    const st = { s: 0, k: 0, visible: false };
+    RW.forEach(([t, d, vs], i) => {
+      const c = h('button', { class: 'setting', type: 'button', onclick: () => { select(i, 0, true); } },
+        h('div', { class: 'n' }, 'SETTING ' + (i + 1)), h('div', { class: 't' }, t), h('div', { class: 's' }, d),
+        h('div', { class: 'cnt' }, vs.length + (vs.length > 1 ? ' VARIANTS' : ' VARIANT')));
+      $('#settings').append(c); cards.push(c);
+    });
+    const play = () => { if (st.visible) { const p = vid.play(); if (p) p.catch(() => {}); } };
+    function select(i, k, user) {
+      st.s = i; st.k = k;
+      cards.forEach((c, j) => c.classList.toggle('on', j === i));
+      const chips = $('#rw-vchips'); chips.textContent = '';
+      chips.append(h('span', { class: 'grp-lab' }, 'Variant'));
+      RW[i][2].forEach((desc, j) => chips.append(h('button', { class: 'vchip' + (j === k ? ' on' : ''), type: 'button', title: desc, onclick: () => select(i, j, true) }, String(j + 1))));
+      chips.append(h('span', { class: 'note', style: 'margin-left:8px' }, RW[i][2][k]));
+      const name = `real_S${i + 1}_V${k + 1}`;
+      vid.poster = `static/poster/${name}.jpg?v=1`;
+      vid.src = `static/video/${name}.mp4?v=1`;
+      if (user) st.visible = true;
+      play();
+    }
+    const step = d => { const n = order.findIndex(([i, k]) => i === st.s && k === st.k); const [i, k] = order[(n + d + order.length) % order.length]; select(i, k, true); };
+    $('#rw-prev').addEventListener('click', () => step(-1));
+    $('#rw-next').addEventListener('click', () => step(1));
+    $('#rw-replay').addEventListener('click', () => { vid.currentTime = 0; st.visible = true; play(); });
+    vid.addEventListener('ended', () => { if ($('#rw-auto').checked) step(1); });
+    new IntersectionObserver(es => es.forEach(e => { st.visible = e.isIntersecting; if (st.visible && !reduced) play(); else vid.pause(); }), { threshold: 0.35 }).observe(vid);
+    select(1, 0, false);     // open on the setting with a correction
   } catch (e) { console.error('[page] section failed: real-world settings', e); }
 
   try {
